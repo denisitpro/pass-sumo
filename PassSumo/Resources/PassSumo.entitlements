@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mandatory for Mac App Store distribution — guideline 2.4.5(i). -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- The ONLY way this build reaches any file location: the standard NSOpenPanel file/folder
+	     chooser (opening or creating a .kdbx, or picking a save location) is the sole path in a
+	     sandboxed app, and this grant is what lets the resulting file handle actually be read
+	     and written. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Pairs with the grant above: once the user has picked a .kdbx (or a save folder), the app
+	     persists that choice as a security-scoped bookmark so it can reopen the same file on the
+	     next launch without asking again. Without this entitlement the bookmark can be created
+	     but not resolved outside the picker call that produced it — the "remember the last
+	     vault" behaviour Sources/Model/VaultStore.swift needs would silently fail. -->
+	<key>com.apple.security.bookmarks.app-scope</key>
+	<true/>
+	<!-- Backs Sources/Security's Keychain storage of Touch ID-protected vault credentials
+	     (the master password/key, gated behind LocalAuthentication). Every entitlement in this
+	     file must have working functionality behind it: App Review rejected ShotSumo's build 165
+	     under Guideline 2.4.5(i) for an entitlement present with no matching functionality — see
+	     Resources/PassSumo-Debug.entitlements for the one entitlement that grant applies to here,
+	     and why it stays out of this Release file. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)app.passsumo</string>
+	</array>
+</dict>
+</plist>

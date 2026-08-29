@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>PassSumo</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>PassSumo</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>GitRevision</key>
+	<string>dev</string>
+	<!-- Export-compliance declaration. `true` is the honest answer: PassSumo implements its own
+	     confidentiality encryption for the vault contents (KDBX: AES-256 / ChaCha20 payload
+	     cipher under an Argon2-derived key), which is NOT covered by the "limited to
+	     authentication" exemption — that exemption only covers encryption used solely to
+	     authenticate the user, not to keep the user's own data confidential. This is a legal
+	     declaration that carries BIS self-classification obligations, not a build flag — it must
+	     be re-confirmed (not assumed) before the first App Store submission, tracked in docs. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
+	<!-- Required in the bundle by App Store validation (error 90242) — the primary category set
+	     in App Store Connect is a separate field and is NOT inherited by the app. The UTI must
+	     match that field (Utilities). -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 SumoApps</string>
+	<!-- Face ID counterpart LocalAuthentication expects on platforms where Face ID exists. Mac's
+	     Touch ID (Sources/Security, not yet written) does not itself require this key, but it's
+	     kept in place so the string already exists if this code is ever shared with an iOS
+	     target. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>PassSumo uses Touch ID to unlock your vault without typing the master password every time.</string>
+	<!-- There is no system-declared UTI for KDBX, so the app declares its own, conforming to
+	     public.data, and CFBundleDocumentTypes below references it by identifier. Without an
+	     app-declared UTI, Finder/Launch Services cannot associate the app with .kdbx files at
+	     all — matching on the file extension alone is not enough. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.passsumo.kdbx</string>
+			<key>UTTypeDescription</key>
+			<string>KeePass Database</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>kdbx</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>KeePass Database</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.passsumo.kdbx</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

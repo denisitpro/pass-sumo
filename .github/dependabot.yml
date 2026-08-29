@@ -1,0 +1,22 @@
+version: 2
+
+updates:
+  # GitHub Actions used by .github/workflows/ci.yml (the actions/checkout and actions/cache commit
+  # SHAs). Dependabot still opens a PR for a human to review — it does not merge anything itself —
+  # so a bump here is safe even though the SHAs in ci.yml are pinned deliberately (see the comment
+  # at the top of that file on why they're SHAs, not tags).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+# Deliberately NO "swift" (SPM) ecosystem entry here.
+#
+# PassSumo's one SPM dependency, github.com/denisitpro/KDBXKit, is pinned in project.yml to an
+# exact, unreleased git revision — not a released tag. Every upstream KDBXKit release tag carries a
+# cryptographic defect (see this repo's issue #5). Dependabot's Swift/SPM support only knows how to
+# bump to the latest released tag, so enabling it here would mean an automated PR proposing to
+# reintroduce that defect into a password manager's dependency graph. Any KDBXKit version bump
+# must stay a deliberate, reviewed PR that re-verifies the fix against issue #5 first.
+#
+# Do not add a swift/SPM entry to "fill the gap" without reading this comment and issue #5 first.

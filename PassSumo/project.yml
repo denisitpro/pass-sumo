@@ -1,0 +1,270 @@
+name: PassSumo
+
+options:
+  bundleIdPrefix: app
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "26.0"
+
+# KDBXKit is the KDBX 4.x data layer (Sources/KDBX wraps it behind `VaultCodec`). BSD-2-Clause, so
+# it is compatible with App Store distribution — unlike KeePassKit/KeePassium, which are GPLv3 and
+# therefore banned outright (see repo CLAUDE.md).
+#
+# PINNED TO AN EXACT REVISION ON PURPOSE — do NOT "tidy this up" into `from:`/`exactVersion:`.
+# Every released upstream tag (v1.3.0 and earlier) carries two defects that matter to a password
+# manager:
+#
+#   1. The inner random-stream key was not regenerated on save. Two consecutive saves of the same
+#      vault therefore XOR their protected fields (passwords, TOTP seeds) with the SAME keystream;
+#      an attacker holding both files recovers plaintext by XORing them together — no key needed.
+#   2. A negative length field in a malformed file hit an uncatchable Swift trap, i.e. a crash the
+#      app cannot defend against, on nothing worse than a corrupt download.
+#
+# Both are fixed only on the unreleased `develop` branch; this revision is a commit on it. A branch
+# pin would be non-reproducible (`branch:` re-resolves to whatever the tip is that day), so the
+# commit SHA is the pin. Moving this to an upstream tag is a regression, not an upgrade — when a
+# release that contains both fixes exists, that is the moment to revisit, and not before.
+packages:
+  KDBXKit:
+    url: https://github.com/denisitpro/KDBXKit
+    revision: e9b8839f1226b82665e1e4b7f12f13635d189deb
+
+targets:
+  PassSumo:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      # Both test suites live under Sources/ to match Sources/App, Sources/Model, etc., but must
+      # not compile into the app target — only into PassSumoUnitTests / PassSumoUITests. Every new
+      # test directory needs its own line here: an omission is silent, and ships test code (and
+      # the XCTest link) inside the App Store binary.
+      - path: Sources
+        excludes:
+          - UnitTests/**
+          - UITests/**
+      - Resources/Assets.xcassets
+      - path: THIRD-PARTY-NOTICES.md
+        buildPhase: resources
+    # Only the app target links KDBXKit. PassSumoUnitTests reaches it transitively through
+    # BUNDLE_LOADER/@testable import PassSumo, and PassSumoUITests is a black-box driver that must
+    # not link the data layer at all.
+    dependencies:
+      - package: KDBXKit
+        product: KDBXKit
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleName: PassSumo
+        CFBundleDisplayName: PassSumo
+        CFBundleIconName: AppIcon
+        LSMinimumSystemVersion: "26.0"
+        # Required in the bundle by App Store validation (error 90242) — the primary category set
+        # in App Store Connect is a separate field and is NOT inherited by the app. The UTI must
+        # match that field (Utilities).
+        LSApplicationCategoryType: public.app-category.utilities
+        # CFBundleShortVersionString / CFBundleVersion / GitRevision are placeholders. This file is
+        # the *template*: the "Stamp Info.plist from git" phase copies it and replaces these three
+        # with the current git state, and the copy is what gets processed into the app.
+        CFBundleShortVersionString: "0.0.0"
+        CFBundleVersion: "1"
+        GitRevision: "dev"
+        NSHumanReadableCopyright: "© 2026 SumoApps"
+        # Export-compliance declaration. `true` is the honest answer, unlike a typical utility
+        # app: PassSumo implements its own confidentiality encryption for the vault contents (KDBX:
+        # AES-256 / ChaCha20 payload cipher under an Argon2-derived key), which is NOT covered by
+        # the "limited to authentication" exemption — that exemption only covers encryption used
+        # solely to authenticate the user, not to keep the user's own data confidential. This is a
+        # legal declaration that carries BIS self-classification obligations (an annual self-
+        # classification report, ERN/CCATS depending on the exact algorithms), not a build flag —
+        # it must be re-confirmed (not assumed) before the first App Store submission. Tracked in
+        # docs, so the check is not left to whoever happens to be looking at this comment.
+        ITSAppUsesNonExemptEncryption: true
+        # Touch ID unlock (Sources/Security, not yet written). NSFaceIDUsageDescription is the
+        # Face ID counterpart LocalAuthentication expects on platforms where Face ID exists; kept
+        # here even though Mac's Touch ID does not itself require it, so the string is already in
+        # place if this code is ever shared with an iOS target.
+        NSFaceIDUsageDescription: "PassSumo uses Touch ID to unlock your vault without typing the master password every time."
+        # There is no system-declared UTI for KDBX, so the app declares its own conforming to
+        # public.data and references it below — the alternative (matching on the .kdbx extension
+        # with no UTI at all) does not let Finder/Launch Services associate the app with the file
+        # type at all.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: app.passsumo.kdbx
+            UTTypeDescription: KeePass Database
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - kdbx
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: KeePass Database
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - app.passsumo.kdbx
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.passsumo
+        PRODUCT_NAME: PassSumo
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2ZZ7AW39AW
+        # Required for notarization (Developer ID); most likely optional for Mac App Store
+        # distribution. Enabled anyway, deliberately, because it costs nothing and removes an open
+        # question at archive time.
+        ENABLE_HARDENED_RUNTIME: "YES"
+        # App Sandbox entitlements — see Resources/PassSumo.entitlements for the granted list and
+        # why each one is there. CODE_SIGN_ENTITLEMENTS itself is set per-configuration below, not
+        # here: Debug needs one extra grant (com.apple.security.files.downloads.read-write) so
+        # `make e2e` can share a scratch directory with the XCUITest runner
+        # (Resources/PassSumoUITests.entitlements) — that grant must never reach the archived
+        # Release binary, or App Review rejects it under Guideline 2.4.5(i) for an entitlement with
+        # no functionality behind it (this is first-hand experience from a sibling app by the
+        # same developer, not a hypothetical; see
+        # Resources/PassSumo.entitlements for the full account). So the two configurations point at
+        # two different entitlements files instead of sharing one: Debug →
+        # Resources/PassSumo-Debug.entitlements (has the grant), Release →
+        # Resources/PassSumo.entitlements (does not — this is what actually gets archived).
+        #
+        # Processed plist is the stamped copy from the pre-build phase below, not
+        # Resources/Info.plist directly — stamping post-build doesn't survive incremental builds
+        # (Xcode restores the template over it). See README.md "Versioning".
+        INFOPLIST_FILE: $(DERIVED_FILE_DIR)/Info.plist
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Resources/PassSumo-Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Resources/PassSumo.entitlements
+    # Declares the stamped plist as an output so the build graph orders it before Process
+    # Info.plist. Always out-of-date on purpose: the git state it reads can change without the
+    # template changing, so dependency analysis alone would skip it.
+    preBuildScripts:
+      - name: Stamp Info.plist from git
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(DERIVED_FILE_DIR)/Info.plist
+        script: |
+          set -eu
+          TEMPLATE="${SRCROOT}/Resources/Info.plist"
+          PLIST="${DERIVED_FILE_DIR}/Info.plist"
+          if [ ! -f "${TEMPLATE}" ]; then
+            echo "error: Info.plist template not found at ${TEMPLATE}" >&2
+            exit 1
+          fi
+          mkdir -p "${DERIVED_FILE_DIR}"
+          cp "${TEMPLATE}" "${PLIST}"
+          VERSION=$(git -C "${SRCROOT}" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)
+          if [ -z "${VERSION}" ]; then VERSION="0.0.0"; fi
+          BUILD=$(git -C "${SRCROOT}" rev-list --count HEAD 2>/dev/null || echo 1)
+          REV=$(git -C "${SRCROOT}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          if [ -n "$(git -C "${SRCROOT}" status --porcelain 2>/dev/null)" ]; then
+            REV="${REV}-dirty"
+          fi
+          if [ -z "${REV}" ]; then REV="unknown"; fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD}" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Set :GitRevision ${REV}" "${PLIST}" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :GitRevision string ${REV}" "${PLIST}"
+          echo "PassSumo version ${VERSION} (${BUILD}) rev ${REV}"
+
+  # In-process unit suite, driven by `make test`. This is the routine check: it needs no system
+  # automation grant and never touches the keyboard or the mouse, so unlike the XCUITest suite
+  # below it can be run on every change.
+  #
+  # `TEST_HOST` is the whole point of the target. A hosted unit bundle is loaded *into* a real,
+  # signed, sandboxed PassSumo process, so the tests run with the app's identity, its entitlements
+  # and its container. That removes the two-sandboxes problem the XCUITest suite has to work
+  # around — two processes with separate containers that cannot see each other's files unless the
+  # exchange goes through ~/Downloads (see Resources/PassSumoUITests.entitlements for the full
+  # account). An in-process test simply *is* the app: it writes into the app's own temporary
+  # directory and calls the production types directly.
+  #
+  # `BUNDLE_LOADER` points at the same binary so the test code can link against the app's symbols,
+  # which is what makes `@testable import PassSumo` work. No entitlements file: a loadable bundle
+  # is not a main executable, so entitlements on it would be ignored — the host's are what apply.
+  #
+  # `bundle.unit-test`, not `bundle.unit-testing`: XcodeGen takes the Xcode product type with
+  # `com.apple.product-type.` stripped, and the unit-test one is
+  # `com.apple.product-type.bundle.unit-test` while the UI-test one below really is
+  # `…bundle.ui-testing`. The near-miss fails the spec parse outright rather than silently.
+  PassSumoUnitTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      # Compilable test code, minus the fixture directory — a `.kdbx` file has no source type and
+      # would land in whatever build phase XcodeGen guessed for it.
+      - path: Sources/UnitTests
+        excludes:
+          - Fixtures/**
+      # The fixtures go in as a FOLDER REFERENCE (`type: folder`), not a group: the whole directory
+      # is copied into the test bundle with its structure intact, so tests address them as
+      # `Fixtures/<name>.kdbx` and `Fixtures/kdbxkit/<name>.kdbx`. A group would flatten every file
+      # into the bundle root — where `kdbx3-keyfile.key` and a future same-named fixture would
+      # collide — and would need a project.yml edit every time a fixture is added, which is exactly
+      # the kind of silent omission the app target's `sources` comment above warns about.
+      - path: Sources/UnitTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: PassSumo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.passsumo.unittests
+        PRODUCT_NAME: PassSumoUnitTests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2ZZ7AW39AW
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PassSumo.app/Contents/MacOS/PassSumo
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  # XCUITest e2e suite, driven by `make e2e`. Steals keyboard/mouse focus, so it's run on demand
+  # only, not as part of routine builds. See Sources/UITests/.
+  PassSumoUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/UITests
+    dependencies:
+      - target: PassSumo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.passsumo.uitests
+        PRODUCT_NAME: PassSumoUITests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2ZZ7AW39AW
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # The runner is sandboxed whether or not this line is here — with no entitlements file of
+        # its own it simply inherits the app's, container and all. Naming a file makes that
+        # explicit and adds the one grant the suite needs: read-write access to the real
+        # ~/Downloads, the only directory both processes can reach without an NSOpenPanel grant.
+        # Without it the runner cannot even create its own scratch directory (NSCocoaErrorDomain
+        # 513) — see Resources/PassSumoUITests.entitlements for the full reasoning.
+        CODE_SIGN_ENTITLEMENTS: Resources/PassSumoUITests.entitlements
+
+schemes:
+  PassSumo:
+    build:
+      targets:
+        PassSumo: all
+        PassSumoUnitTests: [test]
+        PassSumoUITests: [test]
+    run:
+      config: Debug
+    # Both suites are attached to the scheme's test action so either can be selected with
+    # `-only-testing:`, which is exactly what `make test` and `make e2e` do. A bare
+    # `xcodebuild test` on this scheme runs BOTH — including the XCUITest suite, which steals
+    # focus and needs an automation grant — so always name the suite you mean.
+    test:
+      config: Debug
+      targets:
+        - PassSumoUnitTests
+        - PassSumoUITests

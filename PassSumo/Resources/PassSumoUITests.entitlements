@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Entitlements for the XCUITest *runner* (PassSumoUITests-Runner.app), not for anything
+	     that ships. The runner is a sandboxed app in its own right — it always was, even before
+	     this file existed, because the UI-testing bundle inherits the app-under-test's
+	     entitlements when it declares none of its own. That is why it has its own container at
+	     ~/Library/Containers/app.passsumo.uitests.xctrunner, and why the suite's setUp would fail
+	     with NSCocoaErrorDomain 513 without this file (see ShotSumo issue #120).
+
+	     Left sandboxed on purpose rather than switched off. Inside every sandbox container,
+	     Data/Downloads is a symlink to the real ~/Downloads, so the test host and the app under
+	     test already name the same physical directory — the only thing missing is permission to
+	     follow that symlink, which the sandbox denies unless the process carries the grant
+	     below. Turning the sandbox off for the runner would work too, but it swaps a sandbox
+	     entitlement (an implicit, promptless grant) for a TCC decision on a protected folder,
+	     which is the kind of thing that pops a dialog in the middle of a test run. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Same entitlement the app under test holds in Debug (see PassSumo-Debug.entitlements).
+	     Both processes therefore reach the identical real ~/Downloads, which is what makes the
+	     suite's shared scratch directory mutually readable and writable. -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+</dict>
+</plist>
