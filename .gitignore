@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+## User settings
+xcuserdata/
+*.xcuserstate
+
+## Derived data / caches (e.g. default Xcode build location)
+DerivedData/
+
+## Obj-C/Swift specific
+*.hmap
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# xcodegen-generated project file — regenerate with `xcodegen generate` (see project.yml).
+# It churns on every generate/Xcode open, so keep it out of git — project.yml is the source of truth.
+ShotSumo.xcodeproj/
+
+.build/
+
+## Xcode build output (e.g. `xcodebuild ... -derivedDataPath ./build` writes here).
+## Compiled artifacts must never be committed.
+build/
+
+## Claude Code agent worktrees — tooling scratch, never part of the tree.
+.claude/worktrees/
+
+## Machine-local artifact of store-assets/tools/set-wallpaper.sh: the absolute path of the
+## wallpaper to restore. Per-machine state, never useful in another checkout.
+store-assets/.wallpaper-backup
