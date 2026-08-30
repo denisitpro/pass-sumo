@@ -129,6 +129,51 @@ final class VaultStore {
         return identifying.databaseID(of: decodedOrigin)
     }
 
+    /// The master password behind the currently-unlocked vault, or `nil` if nothing is unlocked.
+    ///
+    /// **The one legitimate reason anything outside this type reads it back:** handing it to
+    /// `BiometricUnlock.enable(masterPassword:for:)` at the exact moment the user opts into Touch
+    /// ID (see `UnlockView`/`SettingsView`). Returned as a plain `String`, not `SecureBytes` — this
+    /// type deliberately has no dependency on `Sources/Security` (see this file's own doc comment),
+    /// and `credentials.password` is already a `String` retained here for `save()`'s own sake, so
+    /// this exposes no new copy of the secret beyond what already exists in memory. The caller —
+    /// always UI-layer code, which already depends on both `Sources/Model` and `Sources/Security` —
+    /// must wrap the result in `SecureBytes` immediately and let it go out of scope as soon as
+    /// `enable(...)` returns; never retain it in `@State` or anywhere longer-lived.
+    var currentMasterPassword: String? {
+        guard case .unlocked = state else { return nil }
+        return credentials?.password
+    }
+
+    /// Assigns a stable database ID to the currently-unlocked vault if it does not already have
+    /// one, and immediately saves — see `KDBXKitCodec.assigningDatabaseID`'s doc comment on why
+    /// assignment must always be paired with a deliberate save rather than becoming a silent side
+    /// effect of some unrelated mutation. Returns the ID (existing or freshly minted), or `nil`
+    /// when nothing is unlocked, the codec has no notion of a stable identity at all
+    /// (`InMemoryVaultCodec` — the `-ui-testing 1` seam included), or the save fails.
+    ///
+    /// The one caller today is the Touch ID enrollment flow: enabling Touch ID is the first moment
+    /// a stable identity is actually needed, so it is also the first moment writing one to the
+    /// user's file is justified. Everywhere else opening/browsing a vault must stay a pure read.
+    func assignDatabaseIDIfNeeded() async -> UUID? {
+        guard case .unlocked = state, let origin = decodedOrigin,
+              let assigning = codec as? any DatabaseAssigningCodec
+        else { return nil }
+
+        if let existing = assigning.databaseID(of: origin) { return existing }
+        guard let (updated, id) = assigning.assigningDatabaseID(to: origin) else { return nil }
+
+        decodedOrigin = updated
+        await save()
+        // `save()` reports failure through `lastError`, not a thrown error — mirror that here
+        // rather than inventing a second failure channel. If the write did not succeed, the
+        // freshly-minted ID exists only in memory: handing it to the keychain layer as if it were
+        // durable would let the next launch read `Meta/CustomData` back as `nil` and permanently
+        // orphan the keychain item this ID was about to be stored under.
+        guard lastError == nil else { return nil }
+        return id
+    }
+
     /// Creates a brand-new, empty database and unlocks it in memory immediately. Nothing is
     /// written to disk here — `makeEmpty` only builds the in-memory `DecodedVault`; the first
     /// `save()` is what actually creates the file, and (per `VaultFileAccess.write`'s contract)
@@ -262,4 +307,19 @@ protocol DatabaseIdentifyingCodec: Sendable {
     func databaseID(of decoded: DecodedVault) -> UUID?
 }
 
-extension KDBXKitCodec: DatabaseIdentifyingCodec {}
+/// The one additional thing `VaultStore.assignDatabaseIDIfNeeded()` needs from a codec.
+///
+/// A *separate* protocol from `DatabaseIdentifyingCodec` (Interface Segregation), not an extra
+/// requirement bolted onto it: reading an ID and minting one are different privileges — the read
+/// is safe at any time (`VaultStore.currentDatabaseID`), the write is a mutation that must only
+/// happen at a caller's deliberate request. Keeping them separate means a future read-only
+/// caller's type signature can ask for `any DatabaseIdentifyingCodec` and be handed something that
+/// is architecturally incapable of assigning an ID, rather than merely trusted not to call it.
+protocol DatabaseAssigningCodec: DatabaseIdentifyingCodec {
+    /// Returns `decoded` with a freshly generated database ID, or unchanged if it already has one.
+    /// See `KDBXKitCodec.assigningDatabaseID`'s own doc comment for the full reasoning (in
+    /// particular: why this must never be called except in response to an explicit save).
+    func assigningDatabaseID(to decoded: DecodedVault) -> (vault: DecodedVault, id: UUID)?
+}
+
+extension KDBXKitCodec: DatabaseAssigningCodec {}
