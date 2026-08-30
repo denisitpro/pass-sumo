@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<KeePassFile>
+    <Meta><DatabaseName>TOTP Probe</DatabaseName></Meta>
+    <Root>
+        <Group>
+            <UUID>gAAAAAAAAAAAAAAAAAAAAA==</UUID>
+            <Name>Root</Name>
+            <Entry>
+                <UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <String><Key>Title</Key><Value>OtpURLStyle</Value></String>
+                <String><Key>Password</Key><Value ProtectInMemory="True">pw1</Value></String>
+                <String><Key>otp</Key><Value ProtectInMemory="True">otpauth://totp/OtpURLStyle:me?secret=JBSWY3DPEHPK3PXP&amp;issuer=Probe&amp;algorithm=SHA1&amp;digits=6&amp;period=30</Value></String>
+            </Entry>
+            <Entry>
+                <UUID>AgAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <String><Key>Title</Key><Value>SeedSettingsStyle</Value></String>
+                <String><Key>Password</Key><Value ProtectInMemory="True">pw2</Value></String>
+                <String><Key>TOTP Seed</Key><Value ProtectInMemory="True">JBSWY3DPEHPK3PXP</Value></String>
+                <String><Key>TOTP Settings</Key><Value>30;6</Value></String>
+            </Entry>
+        </Group>
+    </Root>
+</KeePassFile>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mandatory for Mac App Store distribution — guideline 2.4.5(i). -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.bookmarks.app-scope</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)app.passsumo</string>
+	</array>
+	<!-- DEBUG-ONLY, on purpose — this must never appear in a build that gets archived and
+	     submitted (see Resources/PassSumo.entitlements, which is what Release actually signs
+	     with, and project.yml's CODE_SIGN_ENTITLEMENTS split). It exists solely so `make e2e`
+	     keeps working: the XCUITest runner and the app under test are two separately-sandboxed
+	     processes that can only reach one directory in common, the real ~/Downloads (its
+	     Data/Downloads container symlink specifically), which is what they use as a shared
+	     scratch directory for e2e fixtures (a throwaway .kdbx, a command file). See
+	     Resources/PassSumoUITests.entitlements for the mechanism this pairs with. Following
+	     ShotSumo's precedent (issue #120/#166) rather than the /tmp temporary-exception route:
+	     /tmp is not shared between two sandboxed processes' containers the way ~/Downloads is,
+	     so it would not actually solve the problem. -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+</dict>
+</plist>

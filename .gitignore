@@ -17,7 +17,7 @@ playground.xcworkspace
 
 # xcodegen-generated project file — regenerate with `xcodegen generate` (see project.yml).
 # It churns on every generate/Xcode open, so keep it out of git — project.yml is the source of truth.
-ShotSumo.xcodeproj/
+PassSumo.xcodeproj/
 
 .build/
 
