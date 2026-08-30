@@ -5,9 +5,9 @@ single source of truth — there is no proprietary cloud sync; the file lives wh
 (iCloud Drive, a local disk, a third-party sync tool), the same way KeePassXC, KeePassium, and
 Strongbox already work with it.
 
-**Status: alpha.** This is early scaffolding: a placeholder window, no real vault yet. App icon
-artwork is also pending — `Resources/Assets.xcassets/AppIcon.appiconset` currently declares the
-icon slots with no images, so the build produces a blank icon.
+**Status: alpha.** This is early scaffolding: a placeholder window, no real vault yet. An app icon
+is in place — `Resources/Assets.xcassets/AppIcon.appiconset`, generated from source art in
+`design/logo/` (see `design/logo/README.md`).
 
 ## Build
 
