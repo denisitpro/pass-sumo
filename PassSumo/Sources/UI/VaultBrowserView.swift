@@ -30,6 +30,10 @@ struct VaultBrowserView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showingGenerator = false
     @State private var editingEntry: EditingEntry?
+    /// The entry a permanent delete has been requested for, held until the user confirms. Nothing
+    /// destroys an entry without passing through here first — see `requestDelete(_:)`.
+    @State private var pendingPermanentDeletion: VaultEntry?
+    @State private var isConfirmingEmptyRecycleBin = false
     /// Drives `.searchFocused` so the Focus Search command (⌘F) has something to move focus TO —
     /// `.searchable` presents the field but gives no other handle on its focus state.
     @FocusState private var isSearchFocused: Bool
@@ -76,8 +80,12 @@ struct VaultBrowserView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            GroupSidebar(vault: vault, selectedGroupID: $selectedGroupID)
-                .accessibilityIdentifier("browser.sidebar")
+            GroupSidebar(
+                vault: vault,
+                selectedGroupID: $selectedGroupID,
+                onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true }
+            )
+            .accessibilityIdentifier("browser.sidebar")
         } content: {
             EntryListView(
                 vault: vault,
@@ -96,6 +104,9 @@ struct VaultBrowserView: View {
                         entry: selectedEntry,
                         clipboard: clipboard,
                         isLocked: isLocked,
+                        // The one capability the detail view needs from the vault, handed over as
+                        // a function instead of the vault itself — see its `resolveAttachment`.
+                        resolveAttachment: { vault.bytes(for: $0) },
                         onEdit: { openForEdit(selectedEntry.id) }
                     )
                 } else {
@@ -164,8 +175,7 @@ struct VaultBrowserView: View {
 
                 Button(role: .destructive) {
                     guard let selectedEntryID else { return }
-                    store.delete(entryID: selectedEntryID)
-                    self.selectedEntryID = nil
+                    requestDelete(selectedEntryID)
                 } label: {
                     Label("Delete Entry", systemImage: "trash")
                 }
@@ -206,6 +216,43 @@ struct VaultBrowserView: View {
                 onDismiss: { editingEntry = nil }
             )
         }
+        .confirmationDialog(
+            "Delete Permanently?",
+            isPresented: Binding(
+                get: { pendingPermanentDeletion != nil },
+                set: { if !$0 { pendingPermanentDeletion = nil } }
+            ),
+            presenting: pendingPermanentDeletion
+        ) { entry in
+            Button("Delete Permanently", role: .destructive) {
+                store.permanentlyDelete(entryID: entry.id)
+                if selectedEntryID == entry.id { selectedEntryID = nil }
+                pendingPermanentDeletion = nil
+            }
+            .accessibilityIdentifier("browser.confirmPermanentDelete")
+            Button("Cancel", role: .cancel) { pendingPermanentDeletion = nil }
+        } message: { entry in
+            Text(
+                "“\(entry.title.isEmpty ? "Untitled" : entry.title)” is already in the Recycle Bin. "
+                    + "Deleting it now removes it from this database for good — there is no undo."
+            )
+        }
+        .confirmationDialog(
+            "Empty Recycle Bin?",
+            isPresented: $isConfirmingEmptyRecycleBin
+        ) {
+            Button("Empty Recycle Bin", role: .destructive) {
+                store.emptyRecycleBin()
+                selectedEntryID = nil
+            }
+            .accessibilityIdentifier("browser.confirmEmptyRecycleBin")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Everything in the Recycle Bin is removed from this database for good. "
+                    + "There is no undo."
+            )
+        }
         .sheet(isPresented: $showingGenerator) {
             // Opened from the toolbar, with no target field to fill — "Use" here just copies to
             // the clipboard and closes, same as "Copy" without the extra click. The field-filling
@@ -244,6 +291,10 @@ struct VaultBrowserView: View {
             editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
         case .editEntry(let id):
             openForEdit(id)
+        case .deleteEntry(let id):
+            requestDelete(id)
+        case .emptyRecycleBin:
+            isConfirmingEmptyRecycleBin = true
         case .focusSearch:
             isSearchFocused = true
         case .openDatabase, .newDatabase:
@@ -253,6 +304,38 @@ struct VaultBrowserView: View {
             return
         }
         appEnvironment.menuRequest = nil
+    }
+
+    /// The single entry point for deleting an entry from this screen — the toolbar button and the
+    /// ⌫ menu command both land here.
+    ///
+    /// A first delete MOVES the entry into the recycle bin: nothing is lost, the entry is still
+    /// there to drag back out, so asking would be ceremony for an undoable act. A delete of
+    /// something already in the bin is the destructive one, and that always goes through the
+    /// confirmation below — never straight to the store. `VaultStore.plannedDeletion` is what
+    /// decides which of the two this is, so the rule lives in one place rather than being
+    /// re-derived by every caller.
+    ///
+    /// The selection is deliberately NOT cleared on a recycle: the entry still exists, and leaving
+    /// it selected is what shows the user where it went.
+    private func requestDelete(_ id: UUID) {
+        switch store.plannedDeletion(forEntry: id) {
+        case .recycled:
+            store.delete(entryID: id)
+            // The entry moved into the bin, so unless the bin is what is on screen it just left
+            // the list column — and a selection pointing at a row the list no longer shows leaves
+            // the detail column displaying an entry the user cannot see selected anywhere. The
+            // existing `onChange(of: vault.entries.count)` cleanup cannot catch this: the count
+            // did not change, only the placement did.
+            let stillVisible = EntryListFilter
+                .apply(to: vault, groupID: selectedGroupID, query: searchText)
+                .contains { $0.id == id }
+            if !stillVisible { selectedEntryID = nil }
+        case .permanent:
+            pendingPermanentDeletion = vault.entries.first { $0.id == id }
+        case nil:
+            return
+        }
     }
 
     private func openForEdit(_ id: UUID) {

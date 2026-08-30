@@ -39,6 +39,11 @@ struct EntryDetailView: View {
     /// this read-only screen only ever needs to know when to snap the reveal back off; handing it
     /// the store would let it reach for things it has no business doing (upsert, delete, save).
     let isLocked: Bool
+    /// Resolves an attachment's payload bytes. A closure rather than the whole `Vault` (or its
+    /// blob pool) for the same reason `isLocked` is a bare `Bool` above: this screen needs exactly
+    /// one capability from the vault, and handing it the vault would let it reach for things a
+    /// read-only detail view has no business touching.
+    var resolveAttachment: (VaultAttachment) -> Data?
     var onEdit: () -> Void
 
     @State private var isPasswordRevealed = false
@@ -73,6 +78,10 @@ struct EntryDetailView: View {
 
                 if !entry.customFields.isEmpty {
                     customFieldsSection
+                }
+
+                if !entry.attachments.isEmpty {
+                    attachmentsSection
                 }
 
                 metadataSection
@@ -156,6 +165,95 @@ struct EntryDetailView: View {
         }
     }
 
+    /// The entry's attachments: name, size, an inline preview when the payload is an image, and a
+    /// per-attachment export.
+    ///
+    /// **Nothing here writes a payload anywhere the user did not choose.** Attachment bytes are
+    /// secret material — a scan of a passport, a screenshot of recovery codes — so the preview is
+    /// built from the in-memory `Data` via `NSImage(data:)` rather than by staging a temp file for
+    /// Quick Look (which would leave plaintext under `/tmp` outliving the lock), payloads never
+    /// reach the pasteboard, and nothing about them is logged. "Save As..." is the single egress,
+    /// and it is user-driven through `NSSavePanel` — which is also what makes the sandbox grant
+    /// that write legitimate.
+    private var attachmentsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Attachments")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(entry.attachments) { attachment in
+                attachmentRow(attachment)
+            }
+        }
+        .accessibilityIdentifier("detail.attachments")
+    }
+
+    private func attachmentRow(_ attachment: VaultAttachment) -> some View {
+        // Resolved once per row render rather than separately for the preview and the export, so
+        // there is one plaintext copy in flight instead of two.
+        let payload = resolveAttachment(attachment)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "paperclip")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(attachment.name)
+                    Text(Self.byteFormatter.string(fromByteCount: Int64(attachment.byteCount)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Spacer()
+                Button {
+                    guard let payload else { return }
+                    Self.export(payload, suggestedName: attachment.name)
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .buttonStyle(.plain)
+                .help("Save this attachment to a file")
+                .accessibilityLabel("Save attachment")
+                // Identifiers are keyed by the attachment's NAME, which KDBX already requires to
+                // be unique within one entry — the same property that makes it `VaultAttachment`'s
+                // `id`. Deliberately not keyed by the blob hash: that would put a fingerprint of
+                // secret bytes into the accessibility tree, where anything able to read the tree
+                // could then correlate the same file across vaults.
+                .accessibilityIdentifier("detail.saveAttachment.\(attachment.name)")
+                .disabled(payload == nil)
+            }
+
+            if let payload, let image = NSImage(data: payload) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 220, maxHeight: 140, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .accessibilityIdentifier("detail.attachmentPreview.\(attachment.name)")
+            }
+        }
+        .accessibilityIdentifier("detail.attachment.\(attachment.name)")
+    }
+
+    /// Writes `payload` wherever the user points the save panel.
+    ///
+    /// `runModal` rather than a sheet: this view has no window reference to attach one to, and a
+    /// modal panel also guarantees the payload does not outlive the interaction inside a captured
+    /// completion handler. A failed write is swallowed for now — the panel has already vetted the
+    /// destination, and the alternative (an alert this read-only view would have to own) is UI the
+    /// design pass in issue #3 should place, not something to improvise here.
+    private static func export(_ payload: Data, suggestedName: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? payload.write(to: url, options: [.atomic])
+    }
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
+
     private var metadataSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Metadata")
@@ -184,6 +282,7 @@ struct EntryDetailView: View {
         entry: Vault.sample.entries[0],
         clipboard: ClipboardService(),
         isLocked: false,
+        resolveAttachment: { Vault.sample.bytes(for: $0) },
         onEdit: {}
     )
     .frame(width: 480, height: 640)

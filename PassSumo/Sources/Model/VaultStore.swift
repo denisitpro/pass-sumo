@@ -219,10 +219,19 @@ final class VaultStore {
 
     /// Inserts a new entry, or replaces an existing one matched by `id`, stamping `modified` to
     /// now and marking the vault dirty. No-op when nothing is unlocked.
-    func upsert(_ entry: VaultEntry) {
+    ///
+    /// `blobs` carries the payloads of any attachment the caller just added, because
+    /// `VaultEntry.attachments` holds references only (see `VaultAttachment`) — an entry whose
+    /// blob never reached the pool would render as a named attachment with nothing behind it.
+    /// Blobs already in the pool are left alone: the id IS the content hash, so re-adding an
+    /// identical payload is a no-op by construction rather than a second copy.
+    func upsert(_ entry: VaultEntry, addingBlobs blobs: [VaultBlob] = []) {
         guard case .unlocked(var vault) = state else { return }
         var stamped = entry
         stamped.modified = Date()
+        for blob in blobs where vault.blobs[blob.id] == nil {
+            vault.blobs[blob.id] = blob
+        }
         if let index = vault.entries.firstIndex(where: { $0.id == entry.id }) {
             vault.entries[index] = stamped
         } else {
@@ -233,14 +242,73 @@ final class VaultStore {
         isDirty = true
     }
 
-    /// Removes the entry with `entryID`, if present. No-op when nothing is unlocked, or the id
-    /// doesn't match anything currently in the vault — deleting an already-gone entry is not an
-    /// error condition worth surfacing.
+    // MARK: - Deletion
+
+    /// What deleting a given entry would actually DO, so the UI can decide whether to ask first.
+    ///
+    /// Split out from `delete(entryID:)` rather than folded into it because the two outcomes carry
+    /// completely different stakes: moving an entry to the bin is undoable by dragging it back and
+    /// needs no ceremony, while a permanent delete destroys the only copy of a password and must
+    /// never happen without an explicit confirmation. A single `delete` that silently did either
+    /// depending on where the entry happened to sit would make the destructive case reachable by a
+    /// keystroke with no prompt at all.
+    enum Deletion: Equatable {
+        case recycled
+        case permanent
+    }
+
+    /// What `delete(entryID:)` would do, or `nil` when there is no such entry to delete.
+    func plannedDeletion(forEntry entryID: UUID) -> Deletion? {
+        guard case .unlocked(let vault) = state,
+              let entry = vault.entries.first(where: { $0.id == entryID })
+        else { return nil }
+        if vault.recycleBin.isEnabled, !vault.isInRecycleBin(entry) { return .recycled }
+        return .permanent
+    }
+
+    /// Deletes the entry per `plannedDeletion(forEntry:)`: moves it to the recycle bin where that
+    /// applies, otherwise removes it outright.
+    ///
+    /// **Callers MUST have confirmed with the user when `plannedDeletion` reports `.permanent`.**
+    /// This method does not prompt — it has no UI to prompt with — and will not refuse.
+    ///
+    /// No-op when nothing is unlocked, or the id doesn't match anything currently in the vault:
+    /// deleting an already-gone entry is not an error condition worth surfacing.
     func delete(entryID: UUID) {
         guard case .unlocked(var vault) = state,
-              let index = vault.entries.firstIndex(where: { $0.id == entryID })
+              vault.entries.contains(where: { $0.id == entryID })
         else { return }
-        vault.entries.remove(at: index)
+
+        if !vault.moveToRecycleBin(entryID: entryID) {
+            vault.removePermanently(entryID: entryID)
+        }
+        commit(vault)
+    }
+
+    /// Removes the entry outright regardless of where it sits, bypassing the recycle bin. Same
+    /// confirmation obligation as above — this is the one that cannot be undone.
+    func permanentlyDelete(entryID: UUID) {
+        guard case .unlocked(var vault) = state,
+              vault.entries.contains(where: { $0.id == entryID })
+        else { return }
+        vault.removePermanently(entryID: entryID)
+        commit(vault)
+    }
+
+    /// Permanently removes everything in the recycle bin. No-op when the vault has no bin, or the
+    /// bin is already empty — in which case nothing is marked dirty either, so an idle "Empty"
+    /// does not manufacture a save.
+    func emptyRecycleBin() {
+        guard case .unlocked(var vault) = state else { return }
+        let before = (vault.entries.count, vault.groups.count)
+        vault.emptyRecycleBin()
+        guard (vault.entries.count, vault.groups.count) != before else { return }
+        commit(vault)
+    }
+
+    /// Publishes an edited vault: mirrors it into the retained origin (so the next `save()` merges
+    /// against the same object the codec handed us), swaps the state, and marks dirty.
+    private func commit(_ vault: Vault) {
         decodedOrigin?.vault = vault
         state = .unlocked(vault)
         isDirty = true
