@@ -316,8 +316,10 @@ struct VaultBrowserView: View {
     /// decides which of the two this is, so the rule lives in one place rather than being
     /// re-derived by every caller.
     ///
-    /// The selection is deliberately NOT cleared on a recycle: the entry still exists, and leaving
-    /// it selected is what shows the user where it went.
+    /// The selection is dropped when the recycled entry leaves the visible list — which is the
+    /// entire visible effect of a recycle: the row disappears and the detail column empties. It is
+    /// kept when the bin itself is what is on screen, because there the entry has not gone
+    /// anywhere the user cannot see, and following it is more useful than clearing.
     private func requestDelete(_ id: UUID) {
         switch store.plannedDeletion(forEntry: id) {
         case .recycled:

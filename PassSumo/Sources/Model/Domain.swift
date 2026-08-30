@@ -80,8 +80,14 @@ struct VaultBlob: Sendable, Equatable, Identifiable {
 /// `Vault.bytes(for:)` — paid only by the two places that genuinely need payload bytes: the
 /// preview and "Save As…".
 struct VaultAttachment: Sendable, Equatable, Identifiable {
-    /// The filename the user sees. KDBX requires these to be unique WITHIN one entry (a duplicate
-    /// key is a validation warning in the format), which is what makes it usable as `id` here.
+    /// The filename the user sees, and this type's `id`.
+    ///
+    /// The FORMAT does not guarantee this is unique within one entry: a repeated `<Binary Key>` is
+    /// a validation warning, not a rejection, and KDBXKit's own `ProtectedBinary.key` is documented
+    /// as nothing more than the filename. Duplicate `Identifiable` ids make `ForEach` render wrong
+    /// and warn at runtime, so the invariant is ENFORCED ON THE WAY IN rather than assumed to hold:
+    /// `KDBXAttachments.project` suffixes a repeated name as it reads the file, and `EntryEditView`
+    /// does the same when the user picks a second file with a name already taken.
     var name: String
     /// Where the bytes are — resolve with `Vault.bytes(for:)`.
     var blobID: VaultBlobID
@@ -98,6 +104,9 @@ struct VaultAttachment: Sendable, Equatable, Identifiable {
 /// is — it is displayed directly, never unwrapped through a chain of causes.
 enum VaultAttachmentError: Error, Equatable {
     case tooLarge(name: String, byteCount: Int, limit: Int)
+    /// The whole selection was refused, not one file in it — see
+    /// `VaultAttachment.maximumBatchByteCount`.
+    case batchTooLarge(totalByteCount: Int, limit: Int)
     case unreadable(name: String)
 }
 
@@ -119,6 +128,70 @@ extension VaultAttachment {
     /// prevents shows up later, in a different screen, where it can no longer be connected to the
     /// file that caused it.
     static let maximumByteCount = 25 * 1024 * 1024
+
+    /// Ceiling on ONE add operation: 100 MB, i.e. four attachments at the per-file cap.
+    ///
+    /// The per-file cap cannot bound a multi-file pick, and the file picker allows one. ⌘A over a
+    /// folder of four hundred twenty-megabyte photos is a single gesture in which every individual
+    /// file is legal and the vault grows by roughly 8 GB — the whole-database memory and save-time
+    /// failure `maximumByteCount` exists to prevent, reached around the side.
+    ///
+    /// Four times the per-file cap, because the realistic batch is "the pages of one scanned
+    /// document" or "the screenshots of one recovery flow" — a handful of files, not hundreds.
+    /// Someone with genuinely more to attach can add them in several passes, making a deliberate
+    /// choice each time rather than discovering the cost at the next save. Like the per-file cap it
+    /// is a REFUSAL, and it refuses the whole selection rather than truncating it: attaching the
+    /// first four of a hundred files and saying nothing is how a user ends up believing a document
+    /// is in the vault when it is not.
+    static let maximumBatchByteCount = 4 * maximumByteCount
+
+    /// Screens one add operation's selection before a single byte of it is read.
+    ///
+    /// `byteCount` is what the filesystem declared for that file, or `nil` when it could not say.
+    /// **`nil` fails CLOSED.** A volume that cannot report a size — a network or FUSE mount, a
+    /// cloud placeholder that has not been materialised — is exactly where reading first and asking
+    /// afterwards hurts most, so an unknown size is a refusal rather than a zero that waves the
+    /// file straight past the check that exists for it.
+    ///
+    /// A selection over `maximumBatchByteCount` refuses EVERYTHING and accepts nothing; see that
+    /// property for why a truncation would be worse than a refusal. Every problem in the selection
+    /// is reported, not only the last one: picking three oversized files is one mistake made three
+    /// times, and naming one of them sends the user back to rediscover the other two by hand.
+    ///
+    /// Pure, and separate from the file picker that calls it, so both rules have unit tests instead
+    /// of only being reachable by driving an `NSOpenPanel`. It returns INDICES into `declaredSizes`
+    /// rather than anything file-shaped — the caller keeps its URLs; this type has no business
+    /// knowing they exist.
+    static func screenBatch(
+        declaredSizes: [(name: String, byteCount: Int?)]
+    ) -> (accepted: [Int], problems: [VaultAttachmentError]) {
+        var accepted: [Int] = []
+        var problems: [VaultAttachmentError] = []
+        var totalByteCount = 0
+
+        for (index, file) in declaredSizes.enumerated() {
+            guard let byteCount = file.byteCount else {
+                problems.append(.unreadable(name: file.name))
+                continue
+            }
+            guard byteCount <= maximumByteCount else {
+                problems.append(.tooLarge(
+                    name: file.name, byteCount: byteCount, limit: maximumByteCount
+                ))
+                continue
+            }
+            totalByteCount += byteCount
+            accepted.append(index)
+        }
+
+        guard totalByteCount <= maximumBatchByteCount else {
+            problems.append(.batchTooLarge(
+                totalByteCount: totalByteCount, limit: maximumBatchByteCount
+            ))
+            return ([], problems)
+        }
+        return (accepted, problems)
+    }
 
     /// Builds an attachment plus its pooled blob, or throws if the payload is over the limit.
     ///
@@ -286,6 +359,24 @@ extension Vault {
         return recycleBinGroupIDs.contains(groupID)
     }
 
+    /// Every entry that is NOT in the recycle bin — what "all entries" means to the user.
+    ///
+    /// The same exclusion `search(_:includingRecycleBin:)` applies, hoisted so the list column
+    /// (`EntryListFilter`) and the sidebar's "All Entries" count can share ONE definition instead
+    /// of each re-deriving it. Sharing it is the point: while the exclusion lived only inside
+    /// `search`, an empty query still listed the bin's contents, so recycling an entry left the
+    /// row in place, still selected, with the detail pane unchanged — no visible effect at all.
+    /// That reads as "the keystroke did not register" and invites a second ⌫, and the second one
+    /// is the permanent delete.
+    ///
+    /// A database with no bin group — including one whose owner switched the bin off, where
+    /// nothing was ever moved into one — yields `entries` unchanged.
+    var liveEntries: [VaultEntry] {
+        let excluded = recycleBinGroupIDs
+        guard !excluded.isEmpty else { return entries }
+        return entries.filter { $0.groupID.map(excluded.contains) != true }
+    }
+
     /// Moves `entryID` into the recycle bin, creating the bin group on first use, and returns
     /// `true` when it did.
     ///
@@ -378,10 +469,7 @@ extension Vault {
     /// the one context where showing them is right: the user has explicitly selected the bin in
     /// the sidebar and is searching *within* it (see `EntryListFilter`).
     func search(_ query: String, includingRecycleBin: Bool = false) -> [VaultEntry] {
-        let excluded = includingRecycleBin ? [] : recycleBinGroupIDs
-        let candidates = excluded.isEmpty
-            ? entries
-            : entries.filter { $0.groupID.map(excluded.contains) != true }
+        let candidates = includingRecycleBin ? entries : liveEntries
 
         let needle = query.searchNormalized
         guard !needle.isEmpty else { return candidates }

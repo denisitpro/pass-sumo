@@ -26,10 +26,22 @@ struct KDBXBinaryPool {
     /// Content hash of each slot, parallel to `contents`.
     private var blobIDs: [VaultBlobID]
 
-    /// First slot carrying a given payload. "First" matters: when the source file already contains
-    /// two byte-identical slots, every reference we mint points at the earlier one, and the later
-    /// one is left untouched for whichever entry already referenced it.
-    private var slotByBlobID: [VaultBlobID: UInt32]
+    /// What identifies a reusable slot: the payload AND its protected flag.
+    ///
+    /// Keying on the payload alone silently DOWNGRADES protection. A foreign pool can hold the
+    /// same bytes twice — slot 3 unprotected, slot 7 protected — and an entry can reference slot
+    /// 7. Re-emitting that entry's list (which happens as soon as any of its attachments change)
+    /// would look the payload up, find slot 3 because it comes first, and write the payload out
+    /// unprotected, in direct contradiction of what `VaultAttachment.isProtected` promises.
+    private struct SlotKey: Hashable {
+        var blobID: VaultBlobID
+        var isProtected: Bool
+    }
+
+    /// First slot carrying a given payload at a given protection level. "First" matters: when the
+    /// source file already contains two identical slots, every reference we mint points at the
+    /// earlier one, and the later one is left untouched for whichever entry already referenced it.
+    private var slotByPayload: [SlotKey: UInt32]
 
     /// Hashes every payload once. Linear in total attachment bytes (SHA-256 runs at GB/s, so a
     /// vault with tens of megabytes of attachments costs milliseconds), and it happens inside the
@@ -37,9 +49,10 @@ struct KDBXBinaryPool {
     init(_ contents: [InnerHeader.BinaryContent]) {
         self.contents = contents
         blobIDs = contents.map { VaultBlobID(hashing: $0.data) }
-        slotByBlobID = [:]
-        for (index, id) in blobIDs.enumerated() where slotByBlobID[id] == nil {
-            slotByBlobID[id] = UInt32(index)
+        slotByPayload = [:]
+        for (index, id) in blobIDs.enumerated() {
+            let key = SlotKey(blobID: id, isProtected: contents[index].shouldBeProtected)
+            if slotByPayload[key] == nil { slotByPayload[key] = UInt32(index) }
         }
     }
 
@@ -57,16 +70,32 @@ struct KDBXBinaryPool {
         return (blobIDs[position], contents[position].data.count, contents[position].shouldBeProtected)
     }
 
-    /// The slot holding `blob`, appending a new one if the payload is not pooled yet.
+    /// The slot holding `blob` AT `isProtected`, appending a new one if there isn't one yet.
     ///
-    /// `isProtected` is applied only to a freshly appended slot: an existing slot's flag belongs to
-    /// whichever client wrote it, and flipping it would rewrite a payload other entries share.
+    /// An existing slot's flag is never flipped: it belongs to whichever client wrote it, and
+    /// rewriting it would change how a payload other entries share is written. So the flag is part
+    /// of what makes a slot reusable rather than something applied on top of a match. Both
+    /// directions matter and both are refusals to reuse:
+    ///
+    /// - a protected reference must not be satisfied by an unprotected slot (the downgrade this
+    ///   keying exists to stop);
+    /// - an unprotected reference must not be satisfied by a protected slot either, which would
+    ///   quietly upgrade another client's binary and change the bytes it reads back.
+    ///
+    /// The earlier code deliberately let a NEW attachment asking for protection settle for an
+    /// existing unprotected slot, to avoid a second copy of the payload. That trade is no longer
+    /// worth taking: it is the same downgrade, differing only in whether the protected reference
+    /// came from the file or from this session, and every new attachment defaults to protected
+    /// (`VaultAttachment.make`), so the case is common rather than exotic. The cost is one
+    /// duplicated payload in the pool in the rare file that already stored it both ways — bounded,
+    /// append-only, and invisible to every client, unlike a secret written out in the clear.
     mutating func slot(for blob: VaultBlob, isProtected: Bool) -> UInt32 {
-        if let existing = slotByBlobID[blob.id] { return existing }
+        let key = SlotKey(blobID: blob.id, isProtected: isProtected)
+        if let existing = slotByPayload[key] { return existing }
         let index = UInt32(contents.count)
         contents.append(InnerHeader.BinaryContent(shouldBeProtected: isProtected, data: blob.bytes))
         blobIDs.append(blob.id)
-        slotByBlobID[blob.id] = index
+        slotByPayload[key] = index
         return index
     }
 }
@@ -90,13 +119,15 @@ enum KDBXAttachments {
     ) -> (attachments: [VaultAttachment], inlineBlobs: [VaultBlob]) {
         var attachments: [VaultAttachment] = []
         var inlineBlobs: [VaultBlob] = []
+        var takenNames: Set<String> = []
 
         for binary in binaries {
+            let name = disambiguate(binary.key, against: &takenNames)
             switch binary.value {
             case .ref(let index):
                 guard let slot = pool.slot(at: index) else { continue }
                 attachments.append(VaultAttachment(
-                    name: binary.key,
+                    name: name,
                     blobID: slot.blobID,
                     byteCount: slot.byteCount,
                     isProtected: slot.isProtected
@@ -105,7 +136,7 @@ enum KDBXAttachments {
                 let blob = VaultBlob(bytes: data)
                 inlineBlobs.append(blob)
                 attachments.append(VaultAttachment(
-                    name: binary.key,
+                    name: name,
                     blobID: blob.id,
                     byteCount: data.count,
                     isProtected: isProtected
@@ -114,6 +145,38 @@ enum KDBXAttachments {
         }
 
         return (attachments, inlineBlobs)
+    }
+
+    /// Makes `name` unique within the entry being projected, suffixing a repeat the same way
+    /// `EntryEditView` does when the user adds a file whose name is already taken.
+    ///
+    /// The format does not guarantee uniqueness — a duplicate `<Binary Key>` is a validation
+    /// warning, not a rejection — but `VaultAttachment.id` is the name, and duplicate
+    /// `Identifiable` ids make `ForEach` render the wrong rows and warn at runtime. Renaming here
+    /// rather than at every consumer means the domain model has the property its `id` claims,
+    /// whatever another client wrote.
+    ///
+    /// This costs nothing for the overwhelmingly normal file: no repeats means no renames, so
+    /// `merge`'s "did the list change" comparison still sees the entry's attachments as identical
+    /// to what `project` produces, and the entry's binaries are re-emitted byte-identically. Only
+    /// a file that already had the duplicate — and could not be displayed correctly anyway — sees
+    /// the second copy written back under a suffixed key, and then only if the user edits it.
+    private static func disambiguate(_ name: String, against taken: inout Set<String>) -> String {
+        func claim(_ candidate: String) -> String {
+            taken.insert(candidate)
+            return candidate
+        }
+
+        guard taken.contains(name) else { return claim(name) }
+
+        let url = URL(fileURLWithPath: name)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        for suffix in 2 ... 999 {
+            let candidate = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+            if !taken.contains(candidate) { return claim(candidate) }
+        }
+        return claim("\(stem) \(UUID().uuidString)")
     }
 
     /// Rewrites one entry's `<Binary>` list from `attachments`.
@@ -128,8 +191,20 @@ enum KDBXAttachments {
     /// When it did change, every attachment is emitted as a pool reference — the 4.x shape, which
     /// is the only shape this codec writes anyway (`KDBXKitCodec` always writes 4.1). An
     /// attachment whose blob is missing from `blobs` is dropped rather than emitted as a dangling
-    /// ref, which KDBXKit's writer would refuse outright; that can only happen for a `Vault`
-    /// assembled by hand, never for one this codec projected.
+    /// ref, which KDBXKit's writer would refuse outright.
+    ///
+    /// **The unchanged path drops a dangling ref too**, which is why it filters `base` rather than
+    /// returning it verbatim. A `<Binary Ref>` past the end of the pool — a real thing a buggy
+    /// writer leaves behind — is skipped by `project`, so the projected list can equal the entry's
+    /// list while `base` still carries the bad ref. Returning it untouched made the whole database
+    /// unsaveable (the writer throws `danglingBinaryRef`) with no way for the user to find the
+    /// cause, because the same skip hides that attachment from the UI. Dropping it costs nothing:
+    /// it named a payload that does not exist.
+    ///
+    /// That filter does NOT weaken the byte-identical guarantee. It removes only binaries the pool
+    /// cannot resolve, of which a well-formed file has none, so for every such file it returns an
+    /// array equal to `base` — which is what `testUneditedDatabaseRoundTripsWithAnIdenticalBinaryPool`
+    /// and `testRoundTripPreservesAttachmentHistoryAndCustomData` assert against real fixtures.
     static func merge(
         _ attachments: [VaultAttachment],
         into base: [KDBX.ProtectedBinary],
@@ -137,12 +212,21 @@ enum KDBXAttachments {
         pool: inout KDBXBinaryPool
     ) -> [KDBX.ProtectedBinary] {
         let projected = project(base, pool: pool).attachments
-        guard attachments != projected else { return base }
+        guard attachments != projected else {
+            return base.filter { isResolvable($0, in: pool) }
+        }
 
         return attachments.compactMap { attachment in
             guard let blob = blobs[attachment.blobID] else { return nil }
             let slot = pool.slot(for: blob, isProtected: attachment.isProtected)
             return KDBX.ProtectedBinary(key: attachment.name, value: .ref(slot))
         }
+    }
+
+    /// Whether the pool can actually resolve this binary. Inline payloads carry their own bytes and
+    /// always can; a `ref` past the end of the pool never can.
+    private static func isResolvable(_ binary: KDBX.ProtectedBinary, in pool: KDBXBinaryPool) -> Bool {
+        guard case .ref(let index) = binary.value else { return true }
+        return pool.slot(at: index) != nil
     }
 }

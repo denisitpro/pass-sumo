@@ -198,7 +198,12 @@ enum KDBXContentMerge {
         if meta.recycleBinUUID != binID {
             meta.recycleBinUUID = binID
         }
-        if meta.recycleBinEnabled != true {
+        // `!= true` would also fire on ABSENT, and absent is not a different value: the format's
+        // default is enabled, which is exactly what `RecycleBinConfiguration` projects it to. A
+        // database with `<RecycleBinUUID>` but no `<RecycleBinEnabled>` element would get the
+        // element written — and `Meta`'s `didSet` would stamp `SettingsChanged` — on a save that
+        // changed nothing. Only a present-and-false element is a real difference worth writing.
+        if meta.recycleBinEnabled == false {
             meta.recycleBinEnabled = true
         }
     }

@@ -256,6 +256,222 @@ final class KDBXAttachmentTests: XCTestCase {
         XCTAssertEqual(made.attachment.byteCount, VaultAttachment.maximumByteCount)
     }
 
+    // MARK: - The batch guard
+
+    /// The per-file cap cannot bound a multi-file pick, and `NSOpenPanel` allows one. ⌘A over a
+    /// folder of legally-sized photos is a single gesture; without this the vault absorbs all of it.
+    func testAnOverBudgetSelectionIsRefusedWholesaleRatherThanTruncated() {
+        let twentyMB = 20 * 1024 * 1024
+        let picked = (0 ..< 400).map { (name: "photo-\($0).jpg", byteCount: Optional(twentyMB)) }
+
+        let screened = VaultAttachment.screenBatch(declaredSizes: picked)
+
+        XCTAssertTrue(
+            screened.accepted.isEmpty,
+            "nothing may be taken in: attaching a prefix would be a silent truncation the user "
+                + "has no way to notice"
+        )
+        XCTAssertEqual(
+            screened.problems,
+            [.batchTooLarge(
+                totalByteCount: 400 * twentyMB,
+                limit: VaultAttachment.maximumBatchByteCount
+            )]
+        )
+    }
+
+    func testASelectionInsideTheBatchBudgetIsAcceptedWhole() {
+        let each = VaultAttachment.maximumBatchByteCount / 4
+        let picked = (0 ..< 4).map { (name: "page-\($0).pdf", byteCount: Optional(each)) }
+
+        let screened = VaultAttachment.screenBatch(declaredSizes: picked)
+
+        XCTAssertEqual(screened.accepted, [0, 1, 2, 3], "the boundary is inclusive")
+        XCTAssertTrue(screened.problems.isEmpty)
+    }
+
+    /// An unknown declared size used to fall back to `0`, which disabled the pre-read check exactly
+    /// where it matters most — a network or FUSE volume, or an unmaterialised cloud placeholder.
+    func testAFileWhoseSizeCannotBeReadIsRefusedRatherThanWavedThrough() {
+        let screened = VaultAttachment.screenBatch(declaredSizes: [
+            (name: "on-a-network-share.bin", byteCount: nil),
+            (name: "ordinary.png", byteCount: 1024),
+        ])
+
+        XCTAssertEqual(screened.accepted, [1], "only the file whose size the filesystem confirmed")
+        XCTAssertEqual(screened.problems, [.unreadable(name: "on-a-network-share.bin")])
+    }
+
+    /// Reporting only the LAST failure told a user who picked three oversized files about one of
+    /// them, sending them back to rediscover the other two by hand.
+    func testEveryFailureInASelectionIsReportedNotJustTheLast() {
+        let tooBig = VaultAttachment.maximumByteCount + 1
+        let screened = VaultAttachment.screenBatch(declaredSizes: [
+            (name: "a.mov", byteCount: tooBig),
+            (name: "b.mov", byteCount: tooBig),
+            (name: "c.mov", byteCount: tooBig),
+        ])
+
+        XCTAssertTrue(screened.accepted.isEmpty)
+        XCTAssertEqual(screened.problems.count, 3)
+        XCTAssertEqual(
+            screened.problems,
+            ["a.mov", "b.mov", "c.mov"].map {
+                VaultAttachmentError.tooLarge(
+                    name: $0, byteCount: tooBig, limit: VaultAttachment.maximumByteCount
+                )
+            }
+        )
+    }
+
+    // MARK: - Protection is never downgraded
+
+    /// The downgrade this pool's slot key exists to prevent.
+    ///
+    /// A foreign database can hold the same payload twice — once unprotected, once protected — and
+    /// an entry can reference the protected copy. Removing a DIFFERENT attachment from that entry
+    /// re-emits its whole `<Binary>` list, and a pool keyed on the payload alone would satisfy the
+    /// survivor from the first (unprotected) slot: the secret would be written out in the clear,
+    /// exactly what `VaultAttachment.isProtected`'s doc comment promises cannot happen.
+    func testAProtectedReferenceIsNeverSatisfiedByAnUnprotectedSlot() throws {
+        let shared = Self.payload(0x7C)
+        var pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: false, data: Self.payload(0x01)),
+            InnerHeader.BinaryContent(shouldBeProtected: false, data: shared),
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: shared),
+        ])
+        let base: [KDBX.ProtectedBinary] = [
+            KDBX.ProtectedBinary(key: "id-scan.png", value: .ref(2)),
+            KDBX.ProtectedBinary(key: "notes.txt", value: .ref(0)),
+        ]
+
+        var attachments = KDBXAttachments.project(base, pool: pool).attachments
+        XCTAssertEqual(attachments.map(\.name), ["id-scan.png", "notes.txt"])
+        XCTAssertTrue(attachments[0].isProtected, "fixture precondition: slot 2 is the protected copy")
+        // The user removes the OTHER attachment, which is what re-emits the survivor's ref.
+        attachments.removeAll { $0.name == "notes.txt" }
+
+        var blobs: [VaultBlobID: VaultBlob] = [:]
+        for blob in pool.blobs { blobs[blob.id] = blob }
+        let merged = KDBXAttachments.merge(attachments, into: base, blobs: blobs, pool: &pool)
+
+        let survivor = try XCTUnwrap(merged.first)
+        guard case .ref(let index) = survivor.value else {
+            return XCTFail("the rewrite path always emits pool references")
+        }
+        XCTAssertEqual(pool.contents[Int(index)].data, shared, "still the same payload")
+        XCTAssertTrue(
+            pool.contents[Int(index)].shouldBeProtected,
+            "the surviving attachment was repointed at the UNPROTECTED copy of its payload"
+        )
+        XCTAssertEqual(pool.contents.count, 3, "both copies were already pooled; nothing to append")
+    }
+
+    /// The reverse direction, decided the same way: a new attachment asking for protection appends
+    /// its own slot rather than settling for an existing unprotected one holding the same bytes.
+    /// One duplicated payload in a pool that is append-only anyway, versus a secret written in the
+    /// clear — the trade is not close.
+    func testANewProtectedAttachmentDoesNotSettleForAnUnprotectedSlot() {
+        let bytes = Self.payload(0x3E)
+        var pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: false, data: bytes)
+        ])
+
+        let slot = pool.slot(for: VaultBlob(bytes: bytes), isProtected: true)
+
+        XCTAssertEqual(slot, 1)
+        XCTAssertEqual(pool.contents.count, 2)
+        XCTAssertTrue(pool.contents[1].shouldBeProtected)
+    }
+
+    /// Deduplication itself is untouched: the same payload at the same protection level still
+    /// costs one slot, which is the whole point of the pool.
+    func testTheSamePayloadAtTheSameProtectionStillReusesItsSlot() {
+        let bytes = Self.payload(0x4D)
+        var pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: bytes)
+        ])
+
+        XCTAssertEqual(pool.slot(for: VaultBlob(bytes: bytes), isProtected: true), 0)
+        XCTAssertEqual(pool.contents.count, 1)
+    }
+
+    // MARK: - Malformed input from other clients
+
+    /// A `<Binary Ref>` past the end of the pool is something a buggy writer genuinely leaves
+    /// behind. `project` skips it, so the projected list can equal the entry's list and the merge
+    /// takes its "nothing changed" path — which used to hand the bad ref straight back. KDBXKit's
+    /// writer then refuses the whole database (`danglingBinaryRef`), so the vault could not be
+    /// saved at all, while the same skip kept the offending attachment invisible in the UI.
+    func testADanglingRefIsDroppedEvenWhenTheAttachmentListDidNotChange() {
+        var pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: Self.payload(0xA1)),
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: Self.payload(0xA2)),
+        ])
+        let base: [KDBX.ProtectedBinary] = [
+            KDBX.ProtectedBinary(key: "a.bin", value: .ref(0)),
+            KDBX.ProtectedBinary(key: "b.bin", value: .ref(99)),
+            KDBX.ProtectedBinary(key: "c.bin", value: .ref(1)),
+        ]
+
+        let attachments = KDBXAttachments.project(base, pool: pool).attachments
+        XCTAssertEqual(attachments.map(\.name), ["a.bin", "c.bin"], "the bad ref is not projected")
+
+        var blobs: [VaultBlobID: VaultBlob] = [:]
+        for blob in pool.blobs { blobs[blob.id] = blob }
+        let merged = KDBXAttachments.merge(attachments, into: base, blobs: blobs, pool: &pool)
+
+        XCTAssertEqual(
+            merged, [base[0], base[2]],
+            "the resolvable binaries must come back verbatim and the unsatisfiable one must go"
+        )
+        XCTAssertEqual(pool.contents.count, 2, "dropping a ref must not disturb the pool")
+    }
+
+    /// Two `<Binary>` children sharing a `Key` is a validation warning in the format, not a
+    /// rejection, so another client can write one. `VaultAttachment.id` is the name, and duplicate
+    /// `Identifiable` ids make `ForEach` render the wrong rows and warn at runtime — so uniqueness
+    /// is enforced as the file is read rather than assumed.
+    func testDuplicateBinaryKeysAreDisambiguatedOnProjection() {
+        let pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: Self.payload(0xB1)),
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: Self.payload(0xB2)),
+        ])
+        let base: [KDBX.ProtectedBinary] = [
+            KDBX.ProtectedBinary(key: "id.png", value: .ref(0)),
+            KDBX.ProtectedBinary(key: "id.png", value: .ref(1)),
+        ]
+
+        let attachments = KDBXAttachments.project(base, pool: pool).attachments
+
+        XCTAssertEqual(attachments.map(\.name), ["id.png", "id 2.png"])
+        XCTAssertEqual(Set(attachments.map(\.id)).count, 2, "the ids ForEach uses must be distinct")
+        XCTAssertNotEqual(attachments[0].blobID, attachments[1].blobID, "both payloads survive")
+    }
+
+    /// And the rename costs the normal file nothing: no repeated key means no rename, so the
+    /// merge's "did this change" comparison still sees the list as untouched and returns the
+    /// entry's binaries verbatim.
+    func testDisambiguationDoesNotDisturbAnEntryWithoutDuplicateKeys() {
+        var pool = KDBXBinaryPool([
+            InnerHeader.BinaryContent(shouldBeProtected: true, data: Self.payload(0xC1)),
+            InnerHeader.BinaryContent(shouldBeProtected: false, data: Self.payload(0xC2)),
+        ])
+        let base: [KDBX.ProtectedBinary] = [
+            KDBX.ProtectedBinary(key: "one.png", value: .ref(0)),
+            KDBX.ProtectedBinary(key: "two.txt", value: .ref(1)),
+        ]
+
+        let attachments = KDBXAttachments.project(base, pool: pool).attachments
+        var blobs: [VaultBlobID: VaultBlob] = [:]
+        for blob in pool.blobs { blobs[blob.id] = blob }
+
+        XCTAssertEqual(
+            KDBXAttachments.merge(attachments, into: base, blobs: blobs, pool: &pool), base
+        )
+        XCTAssertEqual(pool.contents.count, 2)
+    }
+
     // MARK: - Helpers
 
     /// Every entry's `<Binary>` list in the file, keyed by entry UUID, so two files can be compared

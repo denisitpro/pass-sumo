@@ -225,11 +225,16 @@ struct EntryEditView: View {
 
     /// Picks one or more files and takes them in as attachments.
     ///
-    /// **The size check happens before the read, not after.** Asking the filesystem for the size
-    /// first means a 4 GB file picked by accident is refused with a sentence, instead of being
-    /// pulled into memory in full and only then rejected — which is the hang the limit exists to
-    /// prevent in the first place. See `VaultAttachment.maximumByteCount` for the number and the
-    /// reasoning behind it.
+    /// **Sizes are checked before anything is read, and the WHOLE selection is sized before the
+    /// first read.** Asking the filesystem for a size first means a 4 GB file picked by accident is
+    /// refused with a sentence instead of being pulled into memory in full and only then rejected —
+    /// the hang the limit exists to prevent. Sizing the whole selection first is the same argument
+    /// one level up: this panel allows multiple selection, so a per-file cap on its own lets one ⌘A
+    /// over a photo folder put an unbounded total into the vault, every file individually legal.
+    /// `VaultAttachment.screenBatch` holds both rules, and its doc comment the reasoning.
+    ///
+    /// What is left here is only what needs the filesystem: asking for each declared size, and
+    /// reading the files that survived the screen.
     private func addAttachments() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -238,17 +243,23 @@ struct EntryEditView: View {
         guard panel.runModal() == .OK else { return }
 
         attachmentError = nil
-        for url in panel.urls {
+        let picked = panel.urls
+        // The names here are the files as picked, not the de-duplicated ones: these messages are
+        // about files on disk, and nothing has been taken in yet for them to collide with.
+        let screened = VaultAttachment.screenBatch(
+            declaredSizes: picked.map { url in
+                (
+                    name: url.lastPathComponent,
+                    byteCount: try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                )
+            }
+        )
+        var problems = screened.problems.map(Self.message(for:))
+
+        for index in screened.accepted {
+            let url = picked[index]
             let name = uniqueAttachmentName(for: url.lastPathComponent)
             do {
-                let declaredSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                guard declaredSize <= VaultAttachment.maximumByteCount else {
-                    throw VaultAttachmentError.tooLarge(
-                        name: name,
-                        byteCount: declaredSize,
-                        limit: VaultAttachment.maximumByteCount
-                    )
-                }
                 guard let bytes = try? Data(contentsOf: url) else {
                     throw VaultAttachmentError.unreadable(name: name)
                 }
@@ -258,15 +269,20 @@ struct EntryEditView: View {
                 let made = try VaultAttachment.make(name: name, bytes: bytes)
                 attachments.append(AttachmentDraft(attachment: made.attachment, addedBlob: made.blob))
             } catch let error as VaultAttachmentError {
-                attachmentError = Self.message(for: error)
+                problems.append(Self.message(for: error))
             } catch {
-                attachmentError = "\(name) could not be attached."
+                problems.append("\(name) could not be attached.")
             }
         }
+
+        attachmentError = problems.isEmpty ? nil : problems.joined(separator: "\n")
     }
 
-    /// KDBX requires an entry's attachment names to be unique, so a second `Screenshot.png` gets a
-    /// numeric suffix rather than silently replacing (or colliding with) the first.
+    /// Gives a second `Screenshot.png` a numeric suffix rather than letting it silently replace (or
+    /// collide with) the first. The format does not enforce the uniqueness — see
+    /// `VaultAttachment.name` — but `VaultAttachment.id` is the name, so this app does, on both
+    /// ways in: here for a file the user picks, and in `KDBXAttachments.project` for one another
+    /// client wrote.
     private func uniqueAttachmentName(for name: String) -> String {
         let taken = Set(attachments.map(\.attachment.name))
         guard taken.contains(name) else { return name }
@@ -288,6 +304,11 @@ struct EntryEditView: View {
             let cap = byteFormatter.string(fromByteCount: Int64(limit))
             return "\(name) is \(actual). Attachments are limited to \(cap) — the whole database "
                 + "is held in memory while unlocked and rewritten on every save."
+        case let .batchTooLarge(totalByteCount, limit):
+            let actual = byteFormatter.string(fromByteCount: Int64(totalByteCount))
+            let cap = byteFormatter.string(fromByteCount: Int64(limit))
+            return "That selection is \(actual) in total. One batch of attachments is limited to "
+                + "\(cap), so nothing was attached — add them a few files at a time."
         case let .unreadable(name):
             return "\(name) could not be read."
         }

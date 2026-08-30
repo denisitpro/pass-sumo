@@ -359,6 +359,54 @@ final class RecycleBinTests: XCTestCase {
         XCTAssertTrue(content.database.root.deletedObjects.contains { $0.uuid == victim.id })
     }
 
+    /// A database whose `<RecycleBinEnabled>` element is ABSENT but whose `<RecycleBinUUID>` points
+    /// at a real group must not have the element written on a save that changed nothing.
+    ///
+    /// Absent is not a different value: the format's default is enabled, and that is exactly what
+    /// `RecycleBinConfiguration` projects it to. Writing `true` over it therefore changes nothing
+    /// the user can see, while `Meta`'s `didSet` stamps `SettingsChanged` — telling every merge tool
+    /// downstream that this replica's settings are newer, on a save that touched nothing.
+    func testAnAbsentRecycleBinEnabledElementIsNotWrittenOnASaveThatChangedNothing() throws {
+        let creds = kdbxCredentials()
+        let decoded = try codec.decode(fileData: try fixture("kpxc-rich"), credentials: creds)
+
+        // Give the database a real bin pointer first — the guard under test only runs for one.
+        var vault = decoded.vault
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: try XCTUnwrap(vault.entries.first).id))
+        let saved = try codec.encode(vault, credentials: creds, origin: decoded)
+        let reopened = try codec.decode(fileData: saved, credentials: creds)
+
+        // Then reshape it into the case under test: pointer present, element absent — what a client
+        // that simply never emits `<RecycleBinEnabled>` leaves behind. This edit stamps
+        // `SettingsChanged` itself, and that stamp is the baseline the next save must not move.
+        var content = try XCTUnwrap(Self.content(of: reopened))
+        content.database.meta.recycleBinEnabled = nil
+        // The reshaping edit stamps `SettingsChanged` itself. Overwrite that stamp with a fixed,
+        // whole-second value: KDBX serialises times to whole seconds, so a freshly created `Date`
+        // would come back a fraction different and the comparison below would fail on that alone.
+        let baseline = Date(timeIntervalSince1970: 1_600_000_000)
+        content.database.meta.settingsChanged = baseline
+        let origin = DecodedVault(vault: reopened.vault, opaque: KDBXOrigin(content: content))
+
+        let resaved = try codec.encode(origin.vault, credentials: creds, origin: origin)
+        let after = try XCTUnwrap(Self.content(of: try codec.decode(fileData: resaved, credentials: creds)))
+
+        XCTAssertEqual(
+            after.database.meta.settingsChanged, baseline,
+            "a save that changed nothing stamped SettingsChanged"
+        )
+        XCTAssertNil(
+            after.database.meta.recycleBinEnabled,
+            "the element was absent and means enabled; writing it back is a value-preserving no-op "
+                + "the round trip must not perform"
+        )
+        XCTAssertTrue(after.database.meta.recycleBinUUID != nil, "the pointer itself still stands")
+        XCTAssertTrue(
+            try XCTUnwrap(codec.decode(fileData: resaved, credentials: creds).vault.recycleBin.isEnabled),
+            "absent still projects as enabled"
+        )
+    }
+
     /// KDBX spells "no bin yet" as an all-zeroes `RecycleBinUUID`. Reading that as a real group id
     /// would send deleted entries into a group that cannot exist.
     func testAnAllZeroesRecycleBinUUIDReadsAsNoBin() throws {

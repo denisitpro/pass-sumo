@@ -21,6 +21,63 @@ enum RevealPolicy {
     }
 }
 
+/// Decides whether an attachment's bytes may be handed to an image decoder for an inline preview.
+///
+/// **A security-posture decision, not a formatting one.** The payload comes out of a `.kdbx` file
+/// that may have been received from someone else, and ImageIO's format parsers are one of the most
+/// productive memory-corruption surfaces on the platform. `NSImage(data:)` sniffs the bytes itself
+/// and will reach for whatever codec the system has — TIFF, BMP, ICNS, PDF, raw camera formats —
+/// so handing it every payload turns "select an entry" into "run an unbounded set of decoders over
+/// attacker-chosen bytes". For an app whose positioning is deliberate attack-surface minimisation
+/// (no AutoFill, no browser extension, both excluded on exactly this reasoning — see repo
+/// CLAUDE.md), that is an expansion nobody signed off on.
+///
+/// A preview therefore requires all three of:
+///
+/// 1. an extension on a short allow-list — what the file claims to be;
+/// 2. a magic number that AGREES with that extension — what the bytes claim. Both must say the
+///    same thing, so neither a renamed payload nor a mislabelled one reaches a decoder that was
+///    not vetted for it;
+/// 3. a payload no larger than `maximumPreviewByteCount`.
+///
+/// PNG and JPEG only. They are the formats this feature was designed around (screenshots, and
+/// photographed or scanned documents), they are the best-exercised decoders of the set, and each
+/// has one unambiguous signature. Anything else simply gets no thumbnail — it is still listed,
+/// sized, and exportable, so nothing is lost but the picture. Adding a format here is a deliberate
+/// act: an extension, its signature, and a reason.
+enum AttachmentPreviewPolicy {
+    /// Payload ceiling for a preview: 8 MB.
+    ///
+    /// Not one of the security checks — a memory one. A decoded bitmap costs width × height × 4
+    /// bytes however well the file compressed, so a PNG at the 25 MB per-attachment cap can expand
+    /// into hundreds of megabytes of pixels on the main thread to draw a 220×140 thumbnail. 8 MB
+    /// covers the screenshots and document scans this is for with room to spare.
+    static let maximumPreviewByteCount = 8 * 1024 * 1024
+
+    /// Allowed extension → the byte signature that must be present as well.
+    private static let signaturesByExtension: [String: [UInt8]] = [
+        "png": [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+        "jpg": [0xFF, 0xD8, 0xFF],
+        "jpeg": [0xFF, 0xD8, 0xFF],
+    ]
+
+    static func allowsPreview(name: String, bytes: Data) -> Bool {
+        guard bytes.count <= maximumPreviewByteCount else { return false }
+        let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
+        guard let signature = signaturesByExtension[ext] else { return false }
+        return bytes.starts(with: signature)
+    }
+}
+
+/// Everything one attachment row needs that depends on the payload, resolved once per attachment
+/// list rather than once per render. See `EntryDetailView.rebuildAttachmentRows()`.
+private struct AttachmentRowState {
+    /// Whether the blob pool could resolve the payload at all — drives the export button.
+    var isResolvable: Bool
+    /// The inline preview, when `AttachmentPreviewPolicy` allows one and the decode succeeded.
+    var preview: Image?
+}
+
 /// Read-only presentation of the selected entry — every field visible at once, per the product
 /// brief: this is the densest screen and the one that matters most, so nothing here is progressive
 /// disclosure except the password itself (see below).
@@ -48,6 +105,12 @@ struct EntryDetailView: View {
 
     @State private var isPasswordRevealed = false
     @State private var lastSeenEntryID: UUID?
+    /// Payload-derived row state, keyed by `VaultAttachment.id`. Rebuilt only when the attachment
+    /// list itself changes — never inside `body`; see `rebuildAttachmentRows()`.
+    @State private var attachmentRows: [String: AttachmentRowState] = [:]
+    /// Set when a "Save As…" write fails, cleared on selection change. A failed export used to be
+    /// invisible; see `export(_:suggestedName:)`.
+    @State private var exportError: String?
 
     var body: some View {
         ScrollView {
@@ -89,7 +152,12 @@ struct EntryDetailView: View {
             .padding(20)
         }
         .onAppear { lastSeenEntryID = entry.id }
+        // `initial: true` so the first render is the build, not a render that decodes. Keyed on
+        // the attachment LIST rather than on `entry.id`: an edit that adds or removes one keeps
+        // the same entry id, and nothing else about an entry can change what these rows show.
+        .onChange(of: entry.attachments, initial: true) { _, _ in rebuildAttachmentRows() }
         .onChange(of: entry.id) { oldValue, newValue in
+            exportError = nil
             isPasswordRevealed = RevealPolicy.revealAfterSelectionChange(
                 wasRevealed: isPasswordRevealed,
                 previousEntryID: oldValue,
@@ -165,16 +233,18 @@ struct EntryDetailView: View {
         }
     }
 
-    /// The entry's attachments: name, size, an inline preview when the payload is an image, and a
-    /// per-attachment export.
+    /// The entry's attachments: name, size, an inline preview for a payload that is allowed one,
+    /// and a per-attachment export.
     ///
     /// **Nothing here writes a payload anywhere the user did not choose.** Attachment bytes are
     /// secret material — a scan of a passport, a screenshot of recovery codes — so the preview is
-    /// built from the in-memory `Data` via `NSImage(data:)` rather than by staging a temp file for
-    /// Quick Look (which would leave plaintext under `/tmp` outliving the lock), payloads never
-    /// reach the pasteboard, and nothing about them is logged. "Save As..." is the single egress,
-    /// and it is user-driven through `NSSavePanel` — which is also what makes the sandbox grant
-    /// that write legitimate.
+    /// built from the in-memory `Data` rather than by staging a temp file for Quick Look (which
+    /// would leave plaintext under `/tmp` outliving the lock), payloads never reach the pasteboard,
+    /// and nothing about them is logged. "Save As..." is the single egress, and it is user-driven
+    /// through `NSSavePanel` — which is also what makes the sandbox grant that write legitimate.
+    ///
+    /// Which payloads get decoded at all is `AttachmentPreviewPolicy`'s decision; read it before
+    /// widening anything here.
     private var attachmentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Attachments")
@@ -183,14 +253,45 @@ struct EntryDetailView: View {
             ForEach(entry.attachments) { attachment in
                 attachmentRow(attachment)
             }
+            if let exportError {
+                Label(exportError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("detail.exportError")
+            }
         }
         .accessibilityIdentifier("detail.attachments")
     }
 
+    /// Resolves each attachment's payload once per attachment list and keeps only what the row
+    /// needs: whether it resolved, and its preview image.
+    ///
+    /// Deliberately NOT done inside `body`. `resolveAttachment` is a closure, which SwiftUI's
+    /// structural comparison cannot diff, so this view re-evaluates whenever its parent does — and
+    /// `VaultBrowserView.body` re-evaluates on every keystroke in the search field. Decoding in
+    /// `body` meant one image rebuilt per attachment per typed character, on the main thread.
+    private func rebuildAttachmentRows() {
+        var rows: [String: AttachmentRowState] = [:]
+        for attachment in entry.attachments {
+            guard let payload = resolveAttachment(attachment) else {
+                rows[attachment.id] = AttachmentRowState(isResolvable: false, preview: nil)
+                continue
+            }
+            var preview: Image?
+            if AttachmentPreviewPolicy.allowsPreview(name: attachment.name, bytes: payload),
+               let image = NSImage(data: payload) {
+                preview = Image(nsImage: image)
+            }
+            rows[attachment.id] = AttachmentRowState(isResolvable: true, preview: preview)
+        }
+        attachmentRows = rows
+    }
+
     private func attachmentRow(_ attachment: VaultAttachment) -> some View {
-        // Resolved once per row render rather than separately for the preview and the export, so
-        // there is one plaintext copy in flight instead of two.
-        let payload = resolveAttachment(attachment)
+        // Everything payload-dependent is read from state built by `rebuildAttachmentRows()`; this
+        // function must not touch `resolveAttachment` itself. Absent state means the rebuild has
+        // not run yet, which reads as "not resolvable" for one frame and then corrects itself.
+        let state = attachmentRows[attachment.id]
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "paperclip")
@@ -204,8 +305,10 @@ struct EntryDetailView: View {
                 }
                 Spacer()
                 Button {
-                    guard let payload else { return }
-                    Self.export(payload, suggestedName: attachment.name)
+                    // Resolved at the moment of export rather than held on the row: one plaintext
+                    // copy, alive only for the duration of the write.
+                    guard let payload = resolveAttachment(attachment) else { return }
+                    exportError = Self.export(payload, suggestedName: attachment.name)
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
@@ -218,11 +321,11 @@ struct EntryDetailView: View {
                 // secret bytes into the accessibility tree, where anything able to read the tree
                 // could then correlate the same file across vaults.
                 .accessibilityIdentifier("detail.saveAttachment.\(attachment.name)")
-                .disabled(payload == nil)
+                .disabled(state?.isResolvable != true)
             }
 
-            if let payload, let image = NSImage(data: payload) {
-                Image(nsImage: image)
+            if let preview = state?.preview {
+                preview
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: 220, maxHeight: 140, alignment: .leading)
@@ -233,19 +336,30 @@ struct EntryDetailView: View {
         .accessibilityIdentifier("detail.attachment.\(attachment.name)")
     }
 
-    /// Writes `payload` wherever the user points the save panel.
+    /// Writes `payload` wherever the user points the save panel, returning a message to show when
+    /// the write fails and `nil` otherwise.
     ///
     /// `runModal` rather than a sheet: this view has no window reference to attach one to, and a
     /// modal panel also guarantees the payload does not outlive the interaction inside a captured
-    /// completion handler. A failed write is swallowed for now — the panel has already vetted the
-    /// destination, and the alternative (an alert this read-only view would have to own) is UI the
-    /// design pass in issue #3 should place, not something to improvise here.
-    private static func export(_ payload: Data, suggestedName: String) {
+    /// completion handler.
+    ///
+    /// A failed write used to be swallowed, which is the worst outcome available here: the user
+    /// watched a save panel accept a destination and leaves believing their passport scan is on
+    /// disk when nothing is there. It is not theoretical either — `.atomic` writes a sibling temp
+    /// file in the destination directory first, which a powerbox-granted URL can plausibly refuse.
+    /// Surfacing the error is the fix; changing the write strategy on that guess is not. The
+    /// message carries the filename and the system's own reason, never any payload bytes.
+    private static func export(_ payload: Data, suggestedName: String) -> String? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? payload.write(to: url, options: [.atomic])
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        do {
+            try payload.write(to: url, options: [.atomic])
+            return nil
+        } catch {
+            return "\(suggestedName) could not be saved: \(error.localizedDescription)"
+        }
     }
 
     private static let byteFormatter: ByteCountFormatter = {

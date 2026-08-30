@@ -11,26 +11,28 @@ enum EntryListFilter {
         // the two `nil`s intentionally diverge.
         let candidates = groupID.map(vault.entries(inGroup:)) ?? vault.entries
 
-        // Searching normally hides the recycle bin (see `Vault.search`). The one exception is a
-        // user who has selected the bin — or a folder inside it — in the sidebar and is searching
-        // within it: the group filter has already scoped the result to the bin, so hiding it again
-        // would make that column silently return nothing no matter what was typed.
+        // This list normally hides the recycle bin (see `Vault.liveEntries`). The one exception is
+        // a user who has selected the bin — or a folder inside it — in the sidebar: the group
+        // filter has already scoped the result to the bin, so hiding it again would make that
+        // column silently return nothing, whether or not anything was typed.
         let isScopedToRecycleBin = groupID.map(vault.recycleBinGroupIDs.contains) == true
 
-        let filtered: [VaultEntry]
-        if query.isEmpty {
-            filtered = candidates
-        } else {
-            // `Vault.search` deliberately matches across the WHOLE vault, including the password
-            // field itself (see `Domain.swift`'s doc comment on `search(_:)` — a differentiator
-            // from KeePassium, which doesn't search passwords at all). Intersecting its result
-            // with `candidates` keeps that same search behavior while still honoring whichever
-            // group is selected, rather than re-implementing a scoped, weaker search here.
-            let matched = Set(
-                vault.search(query, includingRecycleBin: isScopedToRecycleBin).map(\.id)
-            )
-            filtered = candidates.filter { matched.contains($0.id) }
-        }
+        // `Vault.search` deliberately matches across the WHOLE vault, including the password field
+        // itself (see `Domain.swift`'s doc comment on `search(_:)` — a differentiator from
+        // KeePassium, which doesn't search passwords at all). Intersecting its result with
+        // `candidates` keeps that same search behavior while still honoring whichever group is
+        // selected, rather than re-implementing a scoped, weaker search here.
+        //
+        // The EMPTY query goes through it as well rather than short-circuiting to `candidates`.
+        // An empty query there already means "no filter" (it returns `liveEntries`), and routing
+        // both cases through the one function that knows what excluding the bin means is what
+        // keeps them from drifting — which is what had happened: the exclusion existed only on the
+        // searching path, so an empty search field listed the bin's contents among the live ones
+        // and a delete had no visible effect whatsoever.
+        let visible = Set(
+            vault.search(query, includingRecycleBin: isScopedToRecycleBin).map(\.id)
+        )
+        let filtered = candidates.filter { visible.contains($0.id) }
 
         // Alphabetical by title, case-insensitively, tie-broken by id for a deterministic order
         // when two entries share a title — the target user has hundreds of entries (repo

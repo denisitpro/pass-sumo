@@ -90,7 +90,11 @@ struct GroupSidebar: View {
             HStack {
                 Label("All Entries", systemImage: "tray.full")
                 Spacer()
-                Text("\(vault.entries.count)")
+                // Recycled entries are excluded, so this number always equals what selecting this
+                // row actually reveals (`EntryListFilter` hides them too). Counting them would
+                // leave the count unchanged when an entry is deleted — the same "nothing
+                // happened" signal that makes a user press ⌫ a second time.
+                Text("\(vault.liveEntries.count)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }

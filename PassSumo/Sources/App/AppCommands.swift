@@ -138,10 +138,15 @@ struct AppCommands: Commands {
     /// Whether the open database has anything in its recycle bin. Drives the enablement of
     /// "Empty Recycle Bin…" so the item is not offered for a database that has no bin, or a bin
     /// that is already empty.
+    ///
+    /// "Anything" means folders as well as entries. `recycleBinGroupIDs` includes the bin group
+    /// itself, so more than one id means a nested folder was deleted — and `Vault.emptyRecycleBin`
+    /// removes those, so a menu item disabled for them would refuse work the command can do.
     var hasRecycleBinContent: Bool {
         guard case .unlocked(let vault) = environment.store.state else { return false }
         let binIDs = vault.recycleBinGroupIDs
         guard !binIDs.isEmpty else { return false }
+        if binIDs.count > 1 { return true }
         return vault.entries.contains { $0.groupID.map(binIDs.contains) == true }
     }
 
