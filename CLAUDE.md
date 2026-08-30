@@ -1,6 +1,6 @@
 # pass-sumo — repo context for AI agents
 
-> Status: living · Last verified: 2026-08-29 · [AI - claude-sonnet-5]
+> Status: living · Last verified: 2026-08-30 · [AI - claude-sonnet-5]
 
 ## What this is
 
@@ -53,6 +53,8 @@ Everything else stays at the repo root and must never leak into `PassSumo/`:
   handover sheets), English.
 - `thinks/` — private planning/research notes, never published.
 - `thinks/prompts/` — prompts written for other AIs.
+- `design/` — the design system, design tokens, UX guidelines, mockups, reference screenshots,
+  and logo/icon source art (see `design/README.md`).
 - `claude-memory/` — per-repo AI memory (see Working rules below).
 - `AGENTS.md` — symlink to `CLAUDE.md`.
 
@@ -127,9 +129,10 @@ reasoning, the fork's fix list, and licensing verification: issue #5.
   implements its own confidentiality encryption (KDBX's AES-256/ChaCha20 payload cipher under an
   Argon2-derived key), which is not covered by the "authentication-only" exemption. This is a
   legal declaration with downstream self-classification obligations; see issue #4.
-- `PassSumo/LICENSE` does not exist yet — deliberately. ShotSumo's license (PolyForm
-  Noncommercial) is not permissive, so it was not copied blindly. The license choice for
-  `PassSumo/` is an open decision for the owner.
+- `PassSumo/LICENSE` (decided 2026-08-30): PolyForm Noncommercial License 1.0.0, same as the
+  sibling app ShotSumo. Source-available, not OSI open source. Permissive third-party components
+  (KDBXKit and its transitive dependencies, see `THIRD-PARTY-NOTICES.md`) remain shippable inside
+  it, provided their own copyright notices and license texts are retained.
 
 ## Open issues
 
