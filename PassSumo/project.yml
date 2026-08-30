@@ -10,9 +10,16 @@ options:
 # it is compatible with App Store distribution — unlike KeePassKit/KeePassium, which are GPLv3 and
 # therefore banned outright (see repo CLAUDE.md).
 #
-# PINNED TO AN EXACT REVISION ON PURPOSE — do NOT "tidy this up" into `from:`/`exactVersion:`.
-# Every released upstream tag (v1.3.0 and earlier) carries two defects that matter to a password
-# manager:
+# VENDORED, NOT FETCHED. `Vendor/KDBXKit` is a `git subtree` copy of
+# github.com/shadone/KDBXKit at revision e9b8839f1226b82665e1e4b7f12f13635d189deb, committed into
+# this repo. It is a LOCAL package path on purpose — do NOT "tidy this up" back into a remote
+# `url:` + `revision:` pin. The library is still being debugged, and vendoring keeps our
+# in-progress patches private and reviewable in this repo's own diffs instead of forcing a public
+# fork. Vendor/KDBXKit-VENDORING.md documents how to pull upstream changes in and how to split the
+# tree back out into its own publishable repo.
+#
+# The pinned revision is a commit on upstream's unreleased `develop` branch, NEVER a released tag.
+# Every tag up to and including v1.3.0 carries two defects that matter to a password manager:
 #
 #   1. The inner random-stream key was not regenerated on save. Two consecutive saves of the same
 #      vault therefore XOR their protected fields (passwords, TOTP seeds) with the SAME keystream;
@@ -20,14 +27,12 @@ options:
 #   2. A negative length field in a malformed file hit an uncatchable Swift trap, i.e. a crash the
 #      app cannot defend against, on nothing worse than a corrupt download.
 #
-# Both are fixed only on the unreleased `develop` branch; this revision is a commit on it. A branch
-# pin would be non-reproducible (`branch:` re-resolves to whatever the tip is that day), so the
-# commit SHA is the pin. Moving this to an upstream tag is a regression, not an upgrade — when a
-# release that contains both fixes exists, that is the moment to revisit, and not before.
+# Both are fixed only on `develop`. Moving this back to an upstream tag is a regression, not an
+# upgrade — when a release that contains both fixes exists, that is the moment to revisit.
 packages:
   KDBXKit:
-    url: https://github.com/denisitpro/KDBXKit
-    revision: e9b8839f1226b82665e1e4b7f12f13635d189deb
+    # Relative to this file's directory, i.e. PassSumo/Vendor/KDBXKit.
+    path: Vendor/KDBXKit
 
 targets:
   PassSumo:
