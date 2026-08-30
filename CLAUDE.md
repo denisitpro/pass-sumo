@@ -1,6 +1,6 @@
 # pass-sumo — repo context for AI agents
 
-> Status: living · Last verified: 2026-08-30 · [AI - claude-sonnet-5]
+> Status: living · Last verified: 2026-08-30 · [AI - claude-opus-5]
 
 ## What this is
 
@@ -8,8 +8,9 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 195 tests (1 skipped, 0 failures), verified by running it
-in this repo. The single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
+issue #3). `make test` currently passes 217 tests (1 skipped, 0 failures) and `make durability`
+22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
+single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
 unattended. The v1 feature scope lives in GitHub issue #1.
 
@@ -78,6 +79,20 @@ committed. `make help` lists every target; the ones that matter day to day:
   automation grant, no focus steal. Run this on every change.
 - `make test-signed` — same suite, signed; only needed for Keychain/Touch ID behavior, which
   requires a real sandbox container and entitlements.
+- `make durability` — the crash-safety suite (`PassSumoDurabilityTests`, issue #22): it spawns a
+  helper executable that saves a database through the real `VaultStore`/codec/file-access stack,
+  `SIGKILL`s it at controlled points (during the KDF, during the backup copy, inside the atomic
+  write), and reopens whatever is on disk. Also covers KDBX 4.1 header conformance, inner
+  random-stream key regeneration, and hostile input. Deliberately NOT part of `make test` — not
+  mainly for its ~28 s, but because it kills subprocesses and depends on `keepassxc-cli` and
+  `sandbox-exec`. Run it on any change to the save path, the codec, or `SandboxedVaultFileAccess`.
+  What it does and does not prove — in particular the unsigned/no-sandbox caveat — is documented in
+  `PassSumo/Sources/DurabilityTests/README.md`, which also records the two real defects it found.
+- `make durability-signed` — the same suite with signing, so the real-App-Sandbox-container test
+  stops skipping (22 tests, 4 skipped). Most kill tests still work — the helper carries no
+  entitlements and stays unsandboxed — but four cases skip, because a sandboxed host cannot launch
+  `sandbox-exec` (no nesting) and cannot poll a directory fast enough to catch the atomic write's
+  temporary file. Neither run is a superset of the other.
 - `make e2e` — the XCUITest suite (`PassSumoUITests`). Steals keyboard/mouse focus and needs a
   one-time system automation grant. Run only when asked, never as part of a routine edit loop.
 - `make remove-app` / `make remove` — uninstall the built app, optionally wiping all persisted
@@ -136,6 +151,19 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
 
 ## Gotchas worth recording
 
+- **Two open durability defects, found by `make durability` (issue #22), reported not fixed.**
+  (1) `VaultStore.save()` has no mutual exclusion — it is `@MainActor` but its body is an awaited
+  `Task.detached`, so two `save()` calls encode and write concurrently (measured overlap: 2). The
+  file is never torn (each write is atomic, one rename wins) but the loser's edits are silently
+  discarded while its `save()` reports success. (2) Under a sandbox grant covering only the vault
+  FILE, the save fails — at the pre-save backup, which creates `<name>.kdbx.bak-<stamp>` in a
+  directory the app was never granted. `Data.write(options: [.atomic])` itself is fine there:
+  Foundation falls back to a temporary file outside the directory and still replaces by rename.
+  Details and evidence in `PassSumo/Sources/DurabilityTests/README.md`.
+- `FileManager.copyItem` on APFS issues `clonefile(2)` (1 GiB in ~2 ms, measured), so the pre-save
+  backup is complete the instant it exists and cannot be observed half-written. That guarantee is
+  the filesystem's, not ours — on a volume where `copyfile` falls back to a byte copy (network
+  share, exFAT, disk image) a crash mid-copy would leave a truncated `.bak-` file.
 - KDBX binary-pool slots are **append-only — never removed, never renumbered**. Entry *history*
   snapshots hold positional references into that pool, so compacting it would repoint them at the
   wrong payload or past the end. Consequence: removing the last reference to an attachment leaves
@@ -170,6 +198,8 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   obligations, before first App Store submission.
 - #5 — the KDBXKit vendoring decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
   wiring, Twofish decision, and others).
+- #22 — the durability suite (`make durability`). Built; the two defects it found are listed under
+  "Gotchas worth recording" above and are NOT fixed — each is its own decision.
 
 ## Acceptance criteria (owner's definition)
 

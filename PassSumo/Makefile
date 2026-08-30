@@ -13,7 +13,7 @@ DERIVED_DIR ?= $(HOME)/Library/Caches/PassSumo/DerivedData
 # database happens to rebuild on its own schedule.
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-.PHONY: help generate debug release local remove-app remove run test test-signed e2e
+.PHONY: help generate debug release local remove-app remove run test test-signed durability durability-signed e2e
 
 help:
 	@echo "Targets:"
@@ -27,6 +27,9 @@ help:
 	@echo "  run        - open the project in Xcode; day-to-day dev workflow is Run (Debug) via ⌘R"
 	@echo "  test       - fast unit suite (PassSumoUnitTests), signing off; no automation grant, no focus steal — run this"
 	@echo "  test-signed- same unit suite WITH signing; needed only for Keychain/Touch ID behaviour"
+	@echo "  durability - crash-safety suite: SIGKILLs a real save mid-flight and checks the file survives."
+	@echo "               Deliberately NOT part of 'test'. See Sources/DurabilityTests/README.md"
+	@echo "  durability-signed - same suite WITH signing, so its App Sandbox checks stop skipping"
 	@echo "  e2e        - regenerate + run the XCUITest UI suite; steals focus/mouse, run only when asked"
 
 generate:
@@ -153,6 +156,36 @@ test: generate
 test-signed: generate
 	xcodebuild -project PassSumo.xcodeproj -scheme PassSumo -configuration Debug \
 	  -destination 'platform=macOS' -only-testing:PassSumoUnitTests test \
+	  -allowProvisioningUpdates
+
+# Durability / crash-safety suite: what the database file looks like when the process dies in the
+# middle of a save. It spawns PassSumoDurabilityHelper — a separate executable that drives the real
+# VaultStore/codec/file-access stack — and SIGKILLs it at controlled points, then reopens whatever
+# is on disk with the real codec.
+#
+# NOT part of `make test`, on purpose — and not mainly because of the ~26s it adds (the unit suite
+# is ~24s), but because it is a different kind of test: it spawns subprocesses and SIGKILLs them,
+# writes and copies 8 MB files, and two cases depend on tools that may be absent (keepassxc-cli) or
+# disallowed (sandbox-exec). None of that belongs in the check run on every edit. Run this one on
+# any change to the save path, the codec, or SandboxedVaultFileAccess.
+#
+# Signing off, like `test`: an unsigned host runs anywhere, and — importantly — an unsigned host is
+# NOT sandboxed, which is what lets these tests spawn a subprocess at all. The cost is that the
+# App Sandbox assertions skip; `durability-signed` below is the run that exercises those.
+durability: generate
+	xcodebuild -project PassSumo.xcodeproj -scheme PassSumo -configuration Debug \
+	  -destination 'platform=macOS' -only-testing:PassSumoDurabilityTests test \
+	  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+# Same suite, signed, so the test host really is sandboxed and
+# testAtomicWriteWorksInsideTheRealAppSandboxContainer stops skipping. Most kill tests still work —
+# the helper deliberately has no entitlements file, so it stays unsandboxed and can still reach the
+# host's temporary directory — but four cases skip here, because a sandboxed host cannot launch
+# sandbox-exec (no nesting) and cannot poll a directory fast enough to catch the atomic write's
+# temporary file. Measured: 22 tests, 4 skipped. Run BOTH; neither is a superset of the other.
+durability-signed: generate
+	xcodebuild -project PassSumo.xcodeproj -scheme PassSumo -configuration Debug \
+	  -destination 'platform=macOS' -only-testing:PassSumoDurabilityTests test \
 	  -allowProvisioningUpdates
 
 # The XCUITest suite steals focus/mouse and needs a system automation grant a human has to give —
