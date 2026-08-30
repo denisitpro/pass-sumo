@@ -1,0 +1,8 @@
+// Copyright (c) 2025, Denis Dzyubenko <denis@ddenis.info>
+//
+// SPDX-License-Identifier: BSD-2-Clause
+module CZlib [system] {
+    header "shim.h"
+    link "z"
+    export *
+}
