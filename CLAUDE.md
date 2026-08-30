@@ -1,6 +1,6 @@
 # pass-sumo — repo context for AI agents
 
-> Status: living · Last verified: 2026-08-29 · [AI - claude-sonnet-5]
+> Status: living · Last verified: 2026-08-30 · [AI - claude-sonnet-5]
 
 ## What this is
 
@@ -8,8 +8,10 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 156 of 156 unit tests (1 skipped), verified by running it
-in this repo. The v1 feature scope lives in GitHub issue #1.
+issue #3). `make test` currently passes 195 tests (1 skipped, 0 failures), verified by running it
+in this repo. The single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
+a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
+unattended. The v1 feature scope lives in GitHub issue #1.
 
 ## Positioning
 
@@ -53,6 +55,8 @@ Everything else stays at the repo root and must never leak into `PassSumo/`:
   handover sheets), English.
 - `thinks/` — private planning/research notes, never published.
 - `thinks/prompts/` — prompts written for other AIs.
+- `design/` — the design system, design tokens, UX guidelines, mockups, reference screenshots,
+  and logo/icon source art (see `design/README.md`).
 - `claude-memory/` — per-repo AI memory (see Working rules below).
 - `AGENTS.md` — symlink to `CLAUDE.md`.
 
@@ -87,12 +91,22 @@ copied into the test bundle as a folder reference).
 
 ## Architecture
 
-- `Sources/Model` — domain types, the `VaultCodec` protocol, `VaultStore`, an in-memory fake
-  codec for tests/previews.
-- `Sources/KDBX` — the real `VaultCodec` implementation, wrapping KDBXKit.
+- `Sources/Model` — domain types, the `VaultCodec` protocol, `VaultStore` (also owns Recycle Bin
+  moves/empty and Touch ID database-ID assignment), an in-memory fake codec for tests/previews.
+- `Sources/KDBX` — the real `VaultCodec` implementation, wrapping KDBXKit, including attachment
+  handling (`KDBXAttachments.swift`).
 - `Sources/Security` — password generator, TOTP, clipboard handling, auto-lock, Keychain/Touch ID.
 - `Sources/App` — composition root, menu commands.
 - `Sources/UI` — SwiftUI views.
+
+Entry attachments (view/add/export/remove) are backed by a vault-wide payload pool keyed by the
+SHA-256 of the bytes, with entries carrying metadata references and a 25 MB per-attachment limit
+checked against the declared file size before the bytes are read. Deleting an item moves it to a
+lazily-created Recycle Bin group (the standard `Meta/RecycleBinEnabled` + `Meta/RecycleBinUUID` +
+`Meta/RecycleBinChanged` convention); deleting again inside the bin is permanent; auto-purge is
+deliberately not implemented (tracked as its own issue). Touch ID unlock now has an enrollment path
+— a "Remember with Touch ID" opt-in on the unlock screen plus a Settings toggle — where previously
+the unlock code existed but nothing stored a secret, so the feature was unreachable.
 
 Dependency-inversion rule: the app depends on protocols (`VaultCodec`, `VaultFileAccess`,
 `SecretStore`), never on their concrete implementations. That is what lets the whole UI run
@@ -104,17 +118,32 @@ The app supports a `-ui-testing 1` launch argument seam (checked in `Sources/App
 
 ## Data-layer decision
 
-The KDBX 4.x codec is built on **our fork**, `github.com/denisitpro/KDBXKit`, pinned in
-`project.yml` to the exact revision `e9b8839f1226b82665e1e4b7f12f13635d189deb` (a commit on
-upstream `shadone/KDBXKit`'s unreleased `develop` branch) — never an upstream tag. Every released
-tag (v1.3.0 and earlier) carries a real cryptographic defect (the inner random-stream key is not
-regenerated on save, so two saves of the same vault XOR protected fields with the same keystream)
-plus an uncatchable process trap on a malformed/corrupt file; both are fixed only on `develop`.
-**Never move this pin to an upstream tag** — that would be a regression, not an upgrade. Full
-reasoning, the fork's fix list, and licensing verification: issue #5.
+The KDBX 4.x codec is built on **KDBXKit, vendored into this repository** at
+`PassSumo/Vendor/KDBXKit` via `git subtree`, from upstream `https://github.com/shadone/KDBXKit.git`
+at revision `e9b8839f1226b82665e1e4b7f12f13635d189deb` (a commit on upstream's unreleased `develop`
+branch) — never an upstream tag. `project.yml` consumes it as a local package (`path:
+Vendor/KDBXKit`), not a remote SwiftPM pin. It is vendored rather than a remote fork so the library
+can stay private and be patched in-tree while it is still being debugged; the intent is to publish
+it as its own repo once it stabilises. Full mechanics — pulling upstream changes in
+(`git subtree pull`), splitting the tree back out for publication (`git subtree split`), and the
+local-patches log — live in `PassSumo/Vendor/KDBXKit-VENDORING.md`.
+
+Every released tag (v1.3.0 and earlier) carries a real cryptographic defect (the inner
+random-stream key is not regenerated on save, so two saves of the same vault XOR protected fields
+with the same keystream) plus an uncatchable process trap on a malformed/corrupt file; both are
+fixed only on `develop`. **Never move this pin to an upstream tag** — that would be a regression,
+not an upgrade. Full reasoning and licensing verification: issue #5.
 
 ## Gotchas worth recording
 
+- KDBX binary-pool slots are **append-only — never removed, never renumbered**. Entry *history*
+  snapshots hold positional references into that pool, so compacting it would repoint them at the
+  wrong payload or past the end. Consequence: removing the last reference to an attachment leaves
+  an orphan payload in the pool — deliberate, and matches what KeePass and KeePassXC do.
+- Enabling Touch ID **writes to the user's database file**: it has to assign the stable database
+  UUID in `Meta/CustomData` under `PassSumo/DatabaseID`, because the identifier cannot come from
+  the file path or from the KDBX master seed (the master seed is regenerated on every save by
+  design — see below).
 - `keepassxc-cli` 2.7.12 cannot create KDBX 4.x databases at all — it has no KDF/cipher/format
   flags, and every database it creates is KDBX 3.1 / AES-KDF / AES-256. It proves interop in the
   WRITE direction only (it reads KDBX 4 fine); it cannot produce KDBX 4 read fixtures.
@@ -127,9 +156,10 @@ reasoning, the fork's fix list, and licensing verification: issue #5.
   implements its own confidentiality encryption (KDBX's AES-256/ChaCha20 payload cipher under an
   Argon2-derived key), which is not covered by the "authentication-only" exemption. This is a
   legal declaration with downstream self-classification obligations; see issue #4.
-- `PassSumo/LICENSE` does not exist yet — deliberately. ShotSumo's license (PolyForm
-  Noncommercial) is not permissive, so it was not copied blindly. The license choice for
-  `PassSumo/` is an open decision for the owner.
+- `PassSumo/LICENSE` (decided 2026-08-30): PolyForm Noncommercial License 1.0.0, same as the
+  sibling app ShotSumo. Source-available, not OSI open source. Permissive third-party components
+  (KDBXKit and its transitive dependencies, see `THIRD-PARTY-NOTICES.md`) remain shippable inside
+  it, provided their own copyright notices and license texts are retained.
 
 ## Open issues
 
@@ -138,7 +168,7 @@ reasoning, the fork's fix list, and licensing verification: issue #5.
   scope) before the beta UI pass.
 - #4 — export-compliance confirmation for `ITSAppUsesNonExemptEncryption = true` and its
   obligations, before first App Store submission.
-- #5 — the KDBXKit fork decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
+- #5 — the KDBXKit vendoring decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
   wiring, Twofish decision, and others).
 
 ## Acceptance criteria (owner's definition)

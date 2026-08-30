@@ -5,9 +5,9 @@ single source of truth — there is no proprietary cloud sync; the file lives wh
 (iCloud Drive, a local disk, a third-party sync tool), the same way KeePassXC, KeePassium, and
 Strongbox already work with it.
 
-**Status: alpha.** This is early scaffolding: a placeholder window, no real vault yet. App icon
-artwork is also pending — `Resources/Assets.xcassets/AppIcon.appiconset` currently declares the
-icon slots with no images, so the build produces a blank icon.
+**Status: alpha.** This is early scaffolding: a placeholder window, no real vault yet. An app icon
+is in place — `Resources/Assets.xcassets/AppIcon.appiconset`, generated from source art in
+`design/logo/` (see `design/logo/README.md`).
 
 ## Build
 
@@ -88,11 +88,16 @@ KeePassium/Strongbox and vice versa.
 
 ## License
 
-No license has been chosen for this code yet.
+`PassSumo/` is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — the same
+license as the sibling app ShotSumo. This is **source-available, not OSI open source**:
+noncommercial use is a permitted purpose; commercial use is not licensed.
 
-Third-party components (none at the time of writing) are listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Policy: no GPL/AGPL-licensed code, ever — only
-MIT/BSD/Apache-2.0/CC0 dependencies are acceptable, since GPL is incompatible with App Store
-distribution.
+Third-party components are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) — currently KDBXKit (BSD-2-Clause) and its
+transitive Swift package dependencies. Policy: no GPL/AGPL-licensed code, ever — only permissive
+(MIT/BSD/Apache-2.0/CC0/Zlib) dependencies are acceptable, since GPL is incompatible with App
+Store distribution and because permissive licenses can be redistributed under our noncommercial
+license without conflict, so long as each component's copyright notice and license text is
+retained (which THIRD-PARTY-NOTICES.md exists to do).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.

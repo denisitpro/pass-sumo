@@ -182,6 +182,165 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertEqual(result.map(\.title), ["Apple", "mango", "zebra"])
     }
 
+    // MARK: - EntryListFilter and the recycle bin
+
+    /// The bug this exists for: the bin exclusion lived only on the SEARCH path, so with an empty
+    /// search field — the default — a recycled entry stayed in the list, in the same alphabetical
+    /// position, still selected, with the detail pane unchanged. A delete had no visible effect at
+    /// all, which reads as "the keystroke did not register" and invites a second ⌫ — and the second
+    /// one is the permanent delete, whose confirmation dialog puts the destructive button first.
+    func testEntryListFilterHidesRecycledEntriesFromTheUnfilteredList() {
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000060", group: nil, title: "Live"),
+                makeEntry("00000000-0000-0000-0000-000000000061", group: nil, title: "Deleted"),
+            ]
+        )
+        let recycledID = vault.entries[1].id
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: recycledID))
+
+        let result = EntryListFilter.apply(to: vault, groupID: nil, query: "")
+        XCTAssertEqual(result.map(\.title), ["Live"], "a recycled entry must leave the list")
+    }
+
+    /// The sidebar's "All Entries" badge has to agree with the list beside it, or the count is the
+    /// one thing on screen that still refuses to move when an entry is deleted.
+    func testAllEntriesCountExcludesTheRecycleBin() {
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000062", group: nil, title: "Live"),
+                makeEntry("00000000-0000-0000-0000-000000000063", group: nil, title: "Deleted"),
+            ]
+        )
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: vault.entries[1].id))
+
+        XCTAssertEqual(vault.liveEntries.count, 1, "the count GroupSidebar shows for All Entries")
+        XCTAssertEqual(vault.entries.count, 2, "the recycled entry is still IN the vault, just not live")
+        XCTAssertEqual(
+            vault.liveEntries.count,
+            EntryListFilter.apply(to: vault, groupID: nil, query: "").count,
+            "the badge and the list it labels must never disagree"
+        )
+    }
+
+    /// Selecting the bin is the one context where its contents must show — otherwise that column
+    /// silently returns nothing and the user cannot reach what they deleted.
+    func testEntryListFilterShowsTheBinsContentsWhenTheBinIsSelected() throws {
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000064", group: nil, title: "Live"),
+                makeEntry("00000000-0000-0000-0000-000000000065", group: nil, title: "Deleted"),
+            ]
+        )
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: vault.entries[1].id))
+        let binID = try XCTUnwrap(vault.recycleBin.groupID)
+
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, groupID: binID, query: "").map(\.title), ["Deleted"]
+        )
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, groupID: binID, query: "delet").map(\.title), ["Deleted"],
+            "searching WITHIN the selected bin must still reach its contents"
+        )
+    }
+
+    /// A database that never had anything deleted has no bin group, and must behave exactly as it
+    /// did before the exclusion existed — nothing hidden, nothing reordered.
+    func testEntryListFilterIsUnchangedForADatabaseWithNoRecycleBin() {
+        let vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000066", group: nil, title: "Beta"),
+                makeEntry("00000000-0000-0000-0000-000000000067", group: nil, title: "Alpha"),
+            ]
+        )
+        XCTAssertTrue(vault.recycleBinGroupIDs.isEmpty, "fixture precondition: no bin group")
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, groupID: nil, query: "").map(\.title),
+            ["Alpha", "Beta"]
+        )
+        XCTAssertEqual(vault.liveEntries.count, 2)
+    }
+
+    /// Same for a database whose owner switched the bin off in another client: nothing was ever
+    /// moved into a bin, so there is nothing to hide.
+    func testEntryListFilterIsUnchangedForADatabaseWithTheBinDisabled() {
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [makeEntry("00000000-0000-0000-0000-000000000068", group: nil, title: "Only")]
+        )
+        vault.recycleBin.isEnabled = false
+        XCTAssertFalse(vault.moveToRecycleBin(entryID: vault.entries[0].id))
+
+        XCTAssertEqual(EntryListFilter.apply(to: vault, groupID: nil, query: "").map(\.title), ["Only"])
+        XCTAssertEqual(vault.liveEntries.count, 1)
+    }
+
+    /// `VaultBrowserView.requestDelete` decides whether to clear the selection by asking this
+    /// filter whether the entry is still visible. That is the feedback the user gets, so the answer
+    /// has to be "no" for an ordinary delete and "yes" while the bin itself is on screen.
+    func testARecycledEntryStopsBeingVisibleWhichIsWhatClearsTheSelection() throws {
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [makeEntry("00000000-0000-0000-0000-000000000069", group: nil, title: "Doomed")]
+        )
+        let id = vault.entries[0].id
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: id))
+        let binID = try XCTUnwrap(vault.recycleBin.groupID)
+
+        XCTAssertFalse(
+            EntryListFilter.apply(to: vault, groupID: nil, query: "").contains { $0.id == id },
+            "All Entries: the row must go, which is what drops the selection"
+        )
+        XCTAssertTrue(
+            EntryListFilter.apply(to: vault, groupID: binID, query: "").contains { $0.id == id },
+            "the bin itself: the entry is right there, so the selection follows it"
+        )
+    }
+
+    // MARK: - AttachmentPreviewPolicy
+
+    /// The allow-list decision, not a formatting one — see the type's doc comment. These cases pin
+    /// down that the filename and the bytes must AGREE before any decoder sees the payload.
+    func testAttachmentPreviewAllowsAPNGWhoseBytesAgreeWithItsName() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + [UInt8](repeating: 0, count: 32))
+        XCTAssertTrue(AttachmentPreviewPolicy.allowsPreview(name: "recovery.png", bytes: png))
+        XCTAssertTrue(AttachmentPreviewPolicy.allowsPreview(name: "RECOVERY.PNG", bytes: png))
+    }
+
+    func testAttachmentPreviewRefusesBytesThatDoNotMatchTheExtension() {
+        // A payload renamed to `.png`. Handing this to `NSImage(data:)` is how an unvetted decoder
+        // gets reached: it sniffs the bytes itself and ignores the name entirely.
+        let notAnImage = Data([0x25, 0x50, 0x44, 0x46, 0x2D] + [UInt8](repeating: 0, count: 32))
+        XCTAssertFalse(AttachmentPreviewPolicy.allowsPreview(name: "invoice.png", bytes: notAnImage))
+    }
+
+    func testAttachmentPreviewRefusesAFormatOutsideTheAllowList() {
+        // A real, valid GIF — refused because GIF is not on the list, not because it is malformed.
+        let gif = Data(Array("GIF89a".utf8) + [UInt8](repeating: 0, count: 32))
+        XCTAssertFalse(AttachmentPreviewPolicy.allowsPreview(name: "animation.gif", bytes: gif))
+    }
+
+    func testAttachmentPreviewRefusesAPayloadOverThePreviewCap() {
+        var oversized = Data([0xFF, 0xD8, 0xFF])
+        oversized.append(Data(count: AttachmentPreviewPolicy.maximumPreviewByteCount))
+        XCTAssertFalse(AttachmentPreviewPolicy.allowsPreview(name: "scan.jpg", bytes: oversized))
+    }
+
+    func testAttachmentPreviewRefusesAnExtensionlessPayload() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        XCTAssertFalse(AttachmentPreviewPolicy.allowsPreview(name: "screenshot", bytes: png))
+    }
+
     // MARK: - TOTPView.grouped
 
     func testTOTPGroupingSplitsSixDigitsInHalf() {

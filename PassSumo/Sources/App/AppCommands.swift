@@ -14,6 +14,15 @@ enum MenuRequest: Equatable {
     case newDatabase
     case newEntry
     case editEntry(UUID)
+    /// Delete goes through this channel even though `VaultStore.delete` needs nothing from a view,
+    /// because deciding whether to delete at all can. `VaultStore.plannedDeletion` reports that
+    /// deleting an entry ALREADY in the recycle bin is permanent, and a permanent delete must be
+    /// confirmed — and the confirmation dialog belongs to `VaultBrowserView`, not to a `Commands`
+    /// body that has no view to present from.
+    case deleteEntry(UUID)
+    /// Same reasoning as `deleteEntry`: emptying the bin destroys entries outright, so it has to
+    /// pass through the view that owns the confirmation.
+    case emptyRecycleBin
     case focusSearch
 }
 
@@ -74,12 +83,27 @@ struct AppCommands: Commands {
             .keyboardShortcut("e", modifiers: .command)
             .disabled(selectedEntry == nil)
             Button("Delete Entry") {
-                if let id = environment.selectedEntryID { environment.store.delete(entryID: id) }
+                if let id = environment.selectedEntryID { environment.menuRequest = .deleteEntry(id) }
             }
             // Bare ⌫, matching the brief and Finder/Mail's own convention for "delete the selection"
             // — no ⌘ modifier, since this needs no muscle-memory bridge to another app.
+            //
+            // A bare ⌫ menu item is a known hazard: AppKit evaluates menu key equivalents BEFORE
+            // the responder chain, so a Backspace typed into the search field can fire this instead
+            // of editing the text. That is filed separately and is not made worse here — but note
+            // what this binding now does. It used to call `store.delete` straight through, which
+            // erased the entry. It now raises `.deleteEntry`, and `VaultBrowserView` moves the entry
+            // to the recycle bin (undoable, no data lost) or, if it is already in the bin, asks
+            // before destroying it. Whichever way the hazard is eventually fixed, the keystroke can
+            // no longer silently take a password with it.
             .keyboardShortcut(.delete, modifiers: [])
             .disabled(selectedEntry == nil)
+            Divider()
+            // Deliberately without a keyboard shortcut. The sidebar's context menu on the bin is
+            // the discoverable path; this exists so the action is reachable without knowing to
+            // right-click, and an unassigned destructive command cannot be hit by accident.
+            Button("Empty Recycle Bin…") { environment.menuRequest = .emptyRecycleBin }
+                .disabled(!hasRecycleBinContent)
         }
 
         CommandGroup(after: .toolbar) {
@@ -109,6 +133,21 @@ struct AppCommands: Commands {
     var canStartNewOrOpen: Bool {
         if case .empty = environment.store.state { return true }
         return false
+    }
+
+    /// Whether the open database has anything in its recycle bin. Drives the enablement of
+    /// "Empty Recycle Bin…" so the item is not offered for a database that has no bin, or a bin
+    /// that is already empty.
+    ///
+    /// "Anything" means folders as well as entries. `recycleBinGroupIDs` includes the bin group
+    /// itself, so more than one id means a nested folder was deleted — and `Vault.emptyRecycleBin`
+    /// removes those, so a menu item disabled for them would refuse work the command can do.
+    var hasRecycleBinContent: Bool {
+        guard case .unlocked(let vault) = environment.store.state else { return false }
+        let binIDs = vault.recycleBinGroupIDs
+        guard !binIDs.isEmpty else { return false }
+        if binIDs.count > 1 { return true }
+        return vault.entries.contains { $0.groupID.map(binIDs.contains) == true }
     }
 
     var selectedEntry: VaultEntry? {

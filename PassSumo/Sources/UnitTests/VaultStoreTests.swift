@@ -54,6 +54,68 @@ final class VaultStoreTests: XCTestCase {
         )
     }
 
+    /// Round-trip state for `FakeAssigningVaultCodec` below — just enough to carry a database ID
+    /// across `decode`/`encode`, the one thing `InMemoryVaultCodec` cannot do (it has no notion of
+    /// `DatabaseAssigningCodec` at all).
+    private struct FakeOrigin: VaultCodecState {
+        var databaseID: UUID?
+    }
+
+    /// A `DatabaseAssigningCodec`-conforming fake, built for these tests specifically to exercise
+    /// `VaultStore.assignDatabaseIDIfNeeded()` without paying for a real Argon2 round trip through
+    /// `KDBXKitCodec` — this suite budgets under 2s (see `TestClock`'s doc comment above), and the
+    /// KDBX layer's OWN guarantee that the id survives a save with a regenerated master seed is
+    /// already covered by `KDBXCodecTests.testDatabaseIDIsAbsentUntilExplicitlyAssignedAndThenSurvivesASave`.
+    /// This fake only needs to prove `VaultStore`'s new orchestration (assign → save → persist) is
+    /// wired correctly; it does not need to model KDBX's cryptography to do that.
+    private final class FakeAssigningVaultCodec: VaultCodec, DatabaseAssigningCodec, @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [String: (vault: Vault, databaseID: UUID?)] = [:]   // keyed by password
+
+        init() {}
+
+        func decode(fileData: Data, credentials: VaultCredentials) throws -> DecodedVault {
+            guard let handle = String(data: fileData, encoding: .utf8) else { throw VaultError.notAKDBXFile }
+            lock.lock(); defer { lock.unlock() }
+            guard handle == credentials.password, let entry = storage[handle] else {
+                throw VaultError.wrongCredentials
+            }
+            return DecodedVault(vault: entry.vault, opaque: FakeOrigin(databaseID: entry.databaseID))
+        }
+
+        func encode(_ vault: Vault, credentials: VaultCredentials, origin: DecodedVault?) throws -> Data {
+            let databaseID = (origin?.opaque as? FakeOrigin)?.databaseID
+            lock.lock()
+            storage[credentials.password] = (vault, databaseID)
+            lock.unlock()
+            guard let data = credentials.password.data(using: .utf8) else {
+                throw VaultError.io("password is not representable as UTF-8")
+            }
+            return data
+        }
+
+        func makeEmpty(name: String, credentials: VaultCredentials) throws -> DecodedVault {
+            let empty = Vault(name: name, groups: [], entries: [])
+            lock.lock()
+            storage[credentials.password] = (empty, nil)
+            lock.unlock()
+            return DecodedVault(vault: empty, opaque: FakeOrigin(databaseID: nil))
+        }
+
+        func databaseID(of decoded: DecodedVault) -> UUID? {
+            (decoded.opaque as? FakeOrigin)?.databaseID
+        }
+
+        func assigningDatabaseID(to decoded: DecodedVault) -> (vault: DecodedVault, id: UUID)? {
+            guard let origin = decoded.opaque as? FakeOrigin else { return nil }
+            if let existing = origin.databaseID { return (decoded, existing) }
+            let id = UUID()
+            var updated = decoded
+            updated.opaque = FakeOrigin(databaseID: id)
+            return (updated, id)
+        }
+    }
+
     private func makeEntry(title: String) -> VaultEntry {
         VaultEntry(
             id: UUID(), groupID: nil, title: title, username: "", password: "",
@@ -229,5 +291,74 @@ final class VaultStoreTests: XCTestCase {
         let contents = try! FileManager.default.contentsOfDirectory(at: tempDirectory, includingPropertiesForKeys: nil)
         let backups = contents.filter { $0.lastPathComponent.hasPrefix("rotate.kdbx.bak-") }
         XCTAssertEqual(backups.count, 10)
+    }
+
+    // MARK: - assignDatabaseIDIfNeeded() (Touch ID enrollment support)
+
+    /// The core Touch ID enrollment orchestration: assigning an id is a write, it happens at most
+    /// once, and — the part that actually matters for a keychain item keyed on this value — it
+    /// survives further saves of the same database. (The KDBX layer's own guarantee that the id
+    /// specifically survives a REGENERATED MASTER SEED is `KDBXCodecTests`'s job, already covered
+    /// there; see `FakeAssigningVaultCodec`'s doc comment.)
+    func testAssignDatabaseIDIfNeededAssignsOnceAndPersistsAcrossSaves() async {
+        let vaultURL = tempDirectory.appendingPathComponent("assign.kdbx")
+        let codec = FakeAssigningVaultCodec()
+        let store = VaultStore(codec: codec, fileAccess: makeFileAccess())
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        XCTAssertNil(store.currentDatabaseID, "createNew must not assign an id as a side effect")
+
+        let id = await store.assignDatabaseIDIfNeeded()
+        XCTAssertNotNil(id)
+        XCTAssertEqual(store.currentDatabaseID, id)
+        XCTAssertNil(store.lastError)
+
+        // Idempotent: asking again must not mint a second id.
+        let again = await store.assignDatabaseIDIfNeeded()
+        XCTAssertEqual(again, id)
+
+        // A further, unrelated save (e.g. the user editing an entry afterwards) must not disturb
+        // the id that Touch ID was enrolled under.
+        store.upsert(makeEntry(title: "After Enrollment"))
+        await store.save()
+        XCTAssertEqual(store.currentDatabaseID, id)
+
+        // A SECOND, independent store proves the id actually reached disk, not just this store's
+        // in-memory `decodedOrigin`.
+        let reader = VaultStore(codec: codec, fileAccess: makeFileAccess())
+        await reader.open(url: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        XCTAssertEqual(reader.currentDatabaseID, id, "the id must survive being written to disk and reopened")
+    }
+
+    /// Mirrors the `-ui-testing 1` seam: `InMemoryVaultCodec` does not conform to
+    /// `DatabaseAssigningCodec`, so the enrollment flow must decline silently rather than crash or
+    /// hang — see `UnlockView.enrollBiometrics`'s doc comment.
+    func testAssignDatabaseIDIfNeededIsNilForACodecWithNoNotionOfOne() async {
+        let vaultURL = tempDirectory.appendingPathComponent("noassign.kdbx")
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: makeFileAccess())
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+
+        let id = await store.assignDatabaseIDIfNeeded()
+        XCTAssertNil(id)
+        XCTAssertNil(store.lastError, "declining is not a failure")
+    }
+
+    func testAssignDatabaseIDIfNeededIsNilWhenNothingIsUnlocked() async {
+        let store = VaultStore(codec: FakeAssigningVaultCodec(), fileAccess: makeFileAccess())
+        let id = await store.assignDatabaseIDIfNeeded()
+        XCTAssertNil(id)
+    }
+
+    // MARK: - currentMasterPassword
+
+    func testCurrentMasterPasswordReflectsUnlockedState() async {
+        let vaultURL = tempDirectory.appendingPathComponent("password.kdbx")
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: makeFileAccess())
+        XCTAssertNil(store.currentMasterPassword, "nothing is unlocked yet")
+
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "hunter2", keyFile: nil))
+        XCTAssertEqual(store.currentMasterPassword, "hunter2")
+
+        store.lock()
+        XCTAssertNil(store.currentMasterPassword, "a locked vault must not still hand back the master password")
     }
 }

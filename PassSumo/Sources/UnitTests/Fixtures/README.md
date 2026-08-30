@@ -214,8 +214,8 @@ file at all, and KDBX 4 is pass-sumo's primary format.
 ## Provenance and license
 
 These two files are copied verbatim from the test resources of **KDBXKit**
-(<https://github.com/denisitpro/KDBXKit>, our fork of `shadone/KDBXKit`), at the exact revision
-this app pins, `e9b8839f1226b82665e1e4b7f12f13635d189deb`:
+(`PassSumo/Vendor/KDBXKit`, vendored from upstream `shadone/KDBXKit` via `git subtree`), at the
+exact revision this app pins, `e9b8839f1226b82665e1e4b7f12f13635d189deb`:
 
     Tests/KDBXKitTests/Resources/{simple-argon2id-aes256,kpxc-rich}.kdbx
 

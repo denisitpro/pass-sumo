@@ -1,4 +1,19 @@
+import AppKit
 import SwiftUI
+
+/// One attachment being edited.
+///
+/// Mirrors `CustomFieldDraft` below and exists for the same `ForEach` identity reason, plus one of
+/// its own: `addedBlob` is the payload of a file picked in THIS session, which has to travel to
+/// `VaultStore.upsert` alongside the entry because `VaultAttachment` carries only a reference (see
+/// its doc comment). It is `nil` for an attachment that was already in the vault — that payload is
+/// already pooled, and re-carrying it here would put a second plaintext copy of it in memory for
+/// as long as the sheet stays open.
+private struct AttachmentDraft: Identifiable {
+    let id = UUID()
+    var attachment: VaultAttachment
+    var addedBlob: VaultBlob?
+}
 
 /// One name/value pair being edited. A local, `Identifiable` draft type (NOT `VaultEntry`'s own
 /// `[String: String]`) purely so `ForEach` has a stable identity per row while the user is
@@ -40,6 +55,11 @@ struct EntryEditView: View {
     @State private var notes: String
     @State private var otpAuthURLText: String
     @State private var customFields: [CustomFieldDraft]
+    @State private var attachments: [AttachmentDraft]
+    /// Set when a picked file was refused (too large, unreadable) and shown inline. A string
+    /// rather than the `VaultAttachmentError` itself: the view needs the sentence, and keeping the
+    /// mapping at the point of failure is what lets the message name the specific file.
+    @State private var attachmentError: String?
     @State private var groupID: UUID?
     @State private var created: Date
 
@@ -72,6 +92,7 @@ struct EntryEditView: View {
         _customFields = State(initialValue: entry.customFields
             .sorted { $0.key < $1.key }
             .map { CustomFieldDraft(name: $0.key, value: $0.value) })
+        _attachments = State(initialValue: entry.attachments.map { AttachmentDraft(attachment: $0) })
         _groupID = State(initialValue: entry.groupID)
         _created = State(initialValue: entry.created)
     }
@@ -134,6 +155,8 @@ struct EntryEditView: View {
                 }
                 .accessibilityIdentifier("edit.addField")
             }
+
+            attachmentsSection
         }
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 480)
@@ -161,6 +184,141 @@ struct EntryEditView: View {
             GeneratorSheet(generator: generator, clipboard: clipboard, onUse: { password = $0 })
         }
     }
+
+    /// Add / remove attachments. Viewing, previewing and exporting them lives in
+    /// `EntryDetailView` — this sheet is only the mutation surface, which is why there is no
+    /// preview here: rendering the payload would put a second copy of secret bytes on screen in a
+    /// context where nobody asked to look at it.
+    private var attachmentsSection: some View {
+        Section("Attachments") {
+            ForEach($attachments) { $draft in
+                HStack(spacing: 8) {
+                    Image(systemName: "paperclip")
+                        .foregroundStyle(.secondary)
+                    Text(draft.attachment.name)
+                    Spacer()
+                    Text(Self.byteFormatter.string(fromByteCount: Int64(draft.attachment.byteCount)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Button(role: .destructive) {
+                        attachments.removeAll { $0.id == draft.id }
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove attachment")
+                    .accessibilityIdentifier("edit.removeAttachment.\(draft.attachment.name)")
+                }
+            }
+
+            Button("Add File...") { addAttachments() }
+                .accessibilityIdentifier("edit.addAttachment")
+
+            if let attachmentError {
+                Label(attachmentError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("edit.attachmentError")
+            }
+        }
+    }
+
+    /// Picks one or more files and takes them in as attachments.
+    ///
+    /// **Sizes are checked before anything is read, and the WHOLE selection is sized before the
+    /// first read.** Asking the filesystem for a size first means a 4 GB file picked by accident is
+    /// refused with a sentence instead of being pulled into memory in full and only then rejected —
+    /// the hang the limit exists to prevent. Sizing the whole selection first is the same argument
+    /// one level up: this panel allows multiple selection, so a per-file cap on its own lets one ⌘A
+    /// over a photo folder put an unbounded total into the vault, every file individually legal.
+    /// `VaultAttachment.screenBatch` holds both rules, and its doc comment the reasoning.
+    ///
+    /// What is left here is only what needs the filesystem: asking for each declared size, and
+    /// reading the files that survived the screen.
+    private func addAttachments() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK else { return }
+
+        attachmentError = nil
+        let picked = panel.urls
+        // The names here are the files as picked, not the de-duplicated ones: these messages are
+        // about files on disk, and nothing has been taken in yet for them to collide with.
+        let screened = VaultAttachment.screenBatch(
+            declaredSizes: picked.map { url in
+                (
+                    name: url.lastPathComponent,
+                    byteCount: try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                )
+            }
+        )
+        var problems = screened.problems.map(Self.message(for:))
+
+        for index in screened.accepted {
+            let url = picked[index]
+            let name = uniqueAttachmentName(for: url.lastPathComponent)
+            do {
+                guard let bytes = try? Data(contentsOf: url) else {
+                    throw VaultAttachmentError.unreadable(name: name)
+                }
+                // Re-checked against the bytes actually read: `fileSizeKey` is a snapshot of a file
+                // that can change between the two calls, and the limit has to hold on what we are
+                // really about to put in the vault.
+                let made = try VaultAttachment.make(name: name, bytes: bytes)
+                attachments.append(AttachmentDraft(attachment: made.attachment, addedBlob: made.blob))
+            } catch let error as VaultAttachmentError {
+                problems.append(Self.message(for: error))
+            } catch {
+                problems.append("\(name) could not be attached.")
+            }
+        }
+
+        attachmentError = problems.isEmpty ? nil : problems.joined(separator: "\n")
+    }
+
+    /// Gives a second `Screenshot.png` a numeric suffix rather than letting it silently replace (or
+    /// collide with) the first. The format does not enforce the uniqueness — see
+    /// `VaultAttachment.name` — but `VaultAttachment.id` is the name, so this app does, on both
+    /// ways in: here for a file the user picks, and in `KDBXAttachments.project` for one another
+    /// client wrote.
+    private func uniqueAttachmentName(for name: String) -> String {
+        let taken = Set(attachments.map(\.attachment.name))
+        guard taken.contains(name) else { return name }
+
+        let url = URL(fileURLWithPath: name)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        for suffix in 2 ... 999 {
+            let candidate = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+            if !taken.contains(candidate) { return candidate }
+        }
+        return "\(stem) \(UUID().uuidString)"
+    }
+
+    private static func message(for error: VaultAttachmentError) -> String {
+        switch error {
+        case let .tooLarge(name, byteCount, limit):
+            let actual = byteFormatter.string(fromByteCount: Int64(byteCount))
+            let cap = byteFormatter.string(fromByteCount: Int64(limit))
+            return "\(name) is \(actual). Attachments are limited to \(cap) — the whole database "
+                + "is held in memory while unlocked and rewritten on every save."
+        case let .batchTooLarge(totalByteCount, limit):
+            let actual = byteFormatter.string(fromByteCount: Int64(totalByteCount))
+            let cap = byteFormatter.string(fromByteCount: Int64(limit))
+            return "That selection is \(actual) in total. One batch of attachments is limited to "
+                + "\(cap), so nothing was attached — add them a few files at a time."
+        case let .unreadable(name):
+            return "\(name) could not be read."
+        }
+    }
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
 
     @ViewBuilder
     private var passwordField: some View {
@@ -229,12 +387,15 @@ struct EntryEditView: View {
             notes: notes,
             otpAuthURL: otpAuthURLText.isEmpty ? nil : otpAuthURLText,
             customFields: fields,
+            attachments: attachments.map(\.attachment),
             created: created,
             // `VaultStore.upsert` stamps its own `modified` to `Date()` regardless of what's
             // passed here — this value only needs to be a valid placeholder, never the real one.
             modified: created
         )
-        store.upsert(entry)
+        // Only the payloads picked in this session travel with the entry: everything else is
+        // already in the vault's pool, and `upsert` ignores a blob it already holds anyway.
+        store.upsert(entry, addingBlobs: attachments.compactMap(\.addedBlob))
         onSave(entry)
         onDismiss()
     }

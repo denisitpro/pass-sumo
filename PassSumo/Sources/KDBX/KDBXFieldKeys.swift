@@ -77,3 +77,28 @@ extension Optional where Wrapped == KDBX.MemoryProtectionConfig {
         }
     }
 }
+
+// MARK: - Recycle bin
+
+/// The KDBX-side constants for the recycle bin. The pointer itself (`Meta/RecycleBinUUID`,
+/// `Meta/RecycleBinEnabled`, `Meta/RecycleBinChanged`) is already modelled by KDBXKit as three
+/// `Meta` properties; what is left over is the folder's own presentation, which the format does
+/// not derive from the pointer and every client sets by hand.
+enum KDBXRecycleBin {
+    /// KeePass's built-in icon index for the recycle-bin folder. Not cosmetic: a bin folder
+    /// carrying the default folder icon shows up in KeePass/KeePassXC as an ordinary folder that
+    /// merely happens to be named by `Meta`, which is exactly the ambiguity the feature exists to
+    /// remove.
+    static let iconID: UInt32 = 43
+}
+
+extension UUID {
+    /// KDBX's "not set" sentinel for a UUID-valued `Meta` field: all sixteen bytes zero.
+    ///
+    /// Spelled out here rather than reached for in KDBXKit because the library's own equivalent
+    /// (`UUID.isZero`) is internal to that module. A one-line predicate is a smaller liability
+    /// than widening someone else's API surface for it.
+    var isAllZeroes: Bool {
+        withUnsafeBytes(of: uuid) { bytes in bytes.allSatisfy { $0 == 0 } }
+    }
+}

@@ -72,17 +72,29 @@ enum GroupTreeBuilder {
 struct GroupSidebar: View {
     let vault: Vault
     @Binding var selectedGroupID: UUID?
+    /// Asks the owner to empty the recycle bin. A closure rather than a `VaultStore` reference
+    /// because emptying is destructive and needs a confirmation, and the confirmation belongs
+    /// where the rest of this screen's alerts live (`VaultBrowserView`) — a sidebar that could
+    /// call `store.emptyRecycleBin()` directly is one refactor away from doing it without asking.
+    var onEmptyRecycleBin: () -> Void
 
     private var nodes: [GroupTreeNode] {
         GroupTreeBuilder.build(from: vault.groups)
     }
+
+    /// The bin group's id, or `nil` when this database has never had anything deleted.
+    private var recycleBinID: UUID? { vault.recycleBin.groupID }
 
     var body: some View {
         List(selection: $selectedGroupID) {
             HStack {
                 Label("All Entries", systemImage: "tray.full")
                 Spacer()
-                Text("\(vault.entries.count)")
+                // Recycled entries are excluded, so this number always equals what selecting this
+                // row actually reveals (`EntryListFilter` hides them too). Counting them would
+                // leave the count unchanged when an entry is deleted — the same "nothing
+                // happened" signal that makes a user press ⌫ a second time.
+                Text("\(vault.liveEntries.count)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -90,29 +102,49 @@ struct GroupSidebar: View {
             .accessibilityIdentifier("sidebar.allEntries")
 
             OutlineGroup(nodes, children: \.children) { node in
-                HStack {
-                    Label(node.group.name, systemImage: "folder")
-                    Spacer()
-                    // Direct membership only (not descendants) — matches `entries(inGroup:)`,
-                    // which `EntryListView` uses for the same group filter, so the number shown
-                    // here always equals what selecting this row actually reveals.
-                    Text("\(vault.entries(inGroup: node.group.id).count)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                .tag(Optional(node.group.id))
-                .accessibilityIdentifier("sidebar.group.\(node.group.id)")
+                row(for: node)
             }
         }
         .listStyle(.sidebar)
         .navigationTitle(vault.name.isEmpty ? "PassSumo" : vault.name)
+    }
+
+    /// One folder row. The recycle bin is deliberately NOT styled like the folders around it: it
+    /// is the one group where the entries inside are not live credentials, and a user who cannot
+    /// tell it apart at a glance is exactly the user who copies a password out of it. It gets the
+    /// trash icon (matching the icon id we write into the file for other clients — see
+    /// `KDBXRecycleBin`), a de-emphasised label, and the only place "Empty Recycle Bin" is offered.
+    @ViewBuilder
+    private func row(for node: GroupTreeNode) -> some View {
+        let isRecycleBin = node.group.id == recycleBinID
+        HStack {
+            Label(node.group.name, systemImage: isRecycleBin ? "trash" : "folder")
+                .foregroundStyle(isRecycleBin ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            Spacer()
+            // Direct membership only (not descendants) — matches `entries(inGroup:)`, which
+            // `EntryListView` uses for the same group filter, so the number shown here always
+            // equals what selecting this row actually reveals.
+            Text("\(vault.entries(inGroup: node.group.id).count)")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .tag(Optional(node.group.id))
+        .accessibilityIdentifier(
+            isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"
+        )
+        .contextMenu {
+            if isRecycleBin {
+                Button("Empty Recycle Bin", role: .destructive, action: onEmptyRecycleBin)
+                    .accessibilityIdentifier("sidebar.emptyRecycleBin")
+            }
+        }
     }
 }
 
 #Preview {
     @Previewable @State var selection: UUID?
     return NavigationSplitView {
-        GroupSidebar(vault: .sample, selectedGroupID: $selection)
+        GroupSidebar(vault: .sample, selectedGroupID: $selection, onEmptyRecycleBin: {})
     } detail: {
         Text("Detail")
     }
