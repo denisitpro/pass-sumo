@@ -48,6 +48,11 @@ targets:
         excludes:
           - UnitTests/**
           - UITests/**
+          - DurabilityTests/**
+          # The durability helper is a separate executable (see the PassSumoDurabilityHelper target
+          # below). It carries an `@main` entry point of its own, which would collide with the app's
+          # SwiftUI `@main` if it were compiled in here.
+          - DurabilityHelper/**
       - Resources/Assets.xcassets
       - path: THIRD-PARTY-NOTICES.md
         buildPhase: resources
@@ -228,6 +233,79 @@ targets:
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/PassSumo.app/Contents/MacOS/PassSumo
         BUNDLE_LOADER: $(TEST_HOST)
 
+  # Standalone executable that opens, edits and saves a database through the REAL file-access stack,
+  # so `make durability` can kill it mid-save with a SIGKILL and inspect what is left on disk.
+  #
+  # It is a separate process because nothing in-process can answer the question: a test that kills
+  # its own host kills the test runner, and XCUITest cannot SIGKILL its target at a chosen instant
+  # (nor has that suite ever run on this machine — issue #6). It compiles Sources/Model and
+  # Sources/KDBX — the same files the app target builds, not a copy — so the save it performs is the
+  # production `VaultStore` + `KDBXKitCodec` + `SandboxedVaultFileAccess` path, with only a
+  # `VaultFileAccess` decorator added on top to announce which phase it is in.
+  #
+  # Deliberately has NO entitlements file and therefore no App Sandbox, even under
+  # `make durability-signed`: the kill tests need it to reach the test host's temporary directory,
+  # and two sandboxed processes have separate containers (the problem the XCUITest suite works
+  # around via ~/Downloads). What the sandbox does or does not permit is covered by the in-process
+  # tests in AtomicWriteTests.swift instead — see Sources/DurabilityTests/README.md.
+  PassSumoDurabilityHelper:
+    type: tool
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/DurabilityHelper
+      - Sources/Model
+      - Sources/KDBX
+    dependencies:
+      - package: KDBXKit
+        product: KDBXKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.passsumo.durabilityhelper
+        PRODUCT_NAME: PassSumoDurabilityHelper
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2ZZ7AW39AW
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+  # Durability / crash-safety suite, driven by `make durability`. Kept out of `make test` because it
+  # is a different kind of test, not merely a slower one: it spawns subprocesses and SIGKILLs them,
+  # writes and copies 8 MB files, and depends on tools that may be absent (keepassxc-cli) or
+  # disallowed (sandbox-exec). Hosted by the app for the same reason PassSumoUnitTests is —
+  # `@testable import PassSumo` for the in-process half of the suite — and it spawns
+  # PassSumoDurabilityHelper for the half that has to die mid-save.
+  PassSumoDurabilityTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/DurabilityTests
+        excludes:
+          - README.md
+      # Same folder reference as PassSumoUnitTests uses, and for the same reason: the hostile-input
+      # and conformance tests read real `.kdbx` files by `Fixtures/<name>.kdbx`.
+      - path: Sources/UnitTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: PassSumo
+      # Builds the helper before the suite runs. `embed: false`: a command-line tool is not an
+      # embeddable product, and the tests locate it in BUILT_PRODUCTS_DIR by path.
+      - target: PassSumoDurabilityHelper
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.passsumo.durabilitytests
+        PRODUCT_NAME: PassSumoDurabilityTests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2ZZ7AW39AW
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PassSumo.app/Contents/MacOS/PassSumo
+        BUNDLE_LOADER: $(TEST_HOST)
+
   # XCUITest e2e suite, driven by `make e2e`. Steals keyboard/mouse focus, so it's run on demand
   # only, not as part of routine builds. See Sources/UITests/.
   PassSumoUITests:
@@ -262,14 +340,18 @@ schemes:
         PassSumo: all
         PassSumoUnitTests: [test]
         PassSumoUITests: [test]
+        PassSumoDurabilityTests: [test]
+        PassSumoDurabilityHelper: [test]
     run:
       config: Debug
-    # Both suites are attached to the scheme's test action so either can be selected with
-    # `-only-testing:`, which is exactly what `make test` and `make e2e` do. A bare
-    # `xcodebuild test` on this scheme runs BOTH — including the XCUITest suite, which steals
-    # focus and needs an automation grant — so always name the suite you mean.
+    # All three suites are attached to the scheme's test action so any one can be selected with
+    # `-only-testing:`, which is exactly what `make test`, `make durability` and `make e2e` do. A
+    # bare `xcodebuild test` on this scheme runs ALL of them — including the XCUITest suite, which
+    # steals focus and needs an automation grant, and the durability suite, which takes minutes — so
+    # always name the suite you mean.
     test:
       config: Debug
       targets:
         - PassSumoUnitTests
+        - PassSumoDurabilityTests
         - PassSumoUITests

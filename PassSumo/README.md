@@ -49,12 +49,12 @@ container, so the next launch behaves like a fresh install.
 
 ### Tests
 
-There are two suites, and the difference between them is what they cost to run — not what they
-cover.
+There are three suites, and what separates them is mostly what they cost to run.
 
 ```sh
-make test     # unit suite (PassSumoUnitTests) — run this on every change
-make e2e      # UI suite (PassSumoUITests) — on demand only, see the warning below
+make test        # unit suite (PassSumoUnitTests) — run this on every change
+make durability  # crash-safety suite (PassSumoDurabilityTests) — on save-path changes
+make e2e         # UI suite (PassSumoUITests) — on demand only, see the warning below
 ```
 
 `make test` is the routine check. It is a **hosted** unit target: the test bundle is loaded into a
@@ -62,14 +62,22 @@ real PassSumo process, so it runs with the app's identity, entitlements, and con
 the production types directly. It needs no special permission and never touches your keyboard or
 mouse.
 
+`make durability` answers a question no unit test can: what does the `.kdbx` file look like when the
+process dies mid-save? It spawns a helper executable that saves a database through the real
+`VaultStore` / codec / file-access stack, `SIGKILL`s it at controlled points, and reopens whatever
+is on disk. It also covers KDBX 4.1 conformance and hostile input. Like `make test` it needs no
+special permission — but it spawns and kills subprocesses, so it is a separate target rather than
+part of the routine check. See [`Sources/DurabilityTests/README.md`](Sources/DurabilityTests/README.md)
+for what it proves and, importantly, what it does not.
+
 `make e2e` is different in kind. XCUITest drives another process's UI, which macOS gates behind a
 **system automation grant only a human can give** — expect a permission prompt the first time —
 and it **takes over the keyboard and mouse** for the length of the run. Run it deliberately, not
 as part of a normal edit-build loop.
 
-Both are attached to the same scheme's test action, so a bare `xcodebuild test` runs *both* —
-including the one that steals your input. `make test` and `make e2e` each pass `-only-testing:`
-for exactly that reason; prefer them over calling `xcodebuild` directly.
+All three are attached to the same scheme's test action, so a bare `xcodebuild test` runs *all* of
+them — including the one that steals your input. Each `make` target passes `-only-testing:` for
+exactly that reason; prefer them over calling `xcodebuild` directly.
 
 ### Versioning
 
