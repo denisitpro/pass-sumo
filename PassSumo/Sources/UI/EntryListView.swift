@@ -11,6 +11,12 @@ enum EntryListFilter {
         // the two `nil`s intentionally diverge.
         let candidates = groupID.map(vault.entries(inGroup:)) ?? vault.entries
 
+        // Searching normally hides the recycle bin (see `Vault.search`). The one exception is a
+        // user who has selected the bin — or a folder inside it — in the sidebar and is searching
+        // within it: the group filter has already scoped the result to the bin, so hiding it again
+        // would make that column silently return nothing no matter what was typed.
+        let isScopedToRecycleBin = groupID.map(vault.recycleBinGroupIDs.contains) == true
+
         let filtered: [VaultEntry]
         if query.isEmpty {
             filtered = candidates
@@ -20,7 +26,9 @@ enum EntryListFilter {
             // from KeePassium, which doesn't search passwords at all). Intersecting its result
             // with `candidates` keeps that same search behavior while still honoring whichever
             // group is selected, rather than re-implementing a scoped, weaker search here.
-            let matched = Set(vault.search(query).map(\.id))
+            let matched = Set(
+                vault.search(query, includingRecycleBin: isScopedToRecycleBin).map(\.id)
+            )
             filtered = candidates.filter { matched.contains($0.id) }
         }
 
