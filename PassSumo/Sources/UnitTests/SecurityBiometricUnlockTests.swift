@@ -102,6 +102,45 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertFalse(BiometricUnlock(store: store).isEnabled(for: vaultA))
     }
 
+    /// `.invalidatedByBiometryChange` must produce a recovery, never a crash: `BiometricUnlockRecovery`
+    /// (`UnlockView.swift`) is the pure decision of whether the stale item should be cleared out,
+    /// and this is the one case it says yes to (see that type's own doc comment for why the item is
+    /// invalidated-but-still-present rather than gone, and why every other error leaves it alone).
+    func testInvalidatedByBiometryChangeProducesTheRecoveryPathNotACrash() throws {
+        let store = FakeSecretStore()
+        let unlock = BiometricUnlock(store: store)
+        try unlock.enable(masterPassword: SecureBytes(string: "master"), for: vaultA)
+
+        store.nextError = .invalidatedByBiometryChange
+        XCTAssertThrowsError(try unlock.unlock(vaultA, reason: "")) {
+            let error = $0 as? BiometricUnlockError
+            XCTAssertEqual(error, .invalidatedByBiometryChange)
+            XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: error!))
+        }
+
+        // The recovery path itself: disabling the stale item must not throw a second time, and
+        // must actually remove it so `isEnabled` — and therefore the "Remember with Touch ID"
+        // offer — comes back next time.
+        XCTAssertNoThrow(try unlock.disable(for: vaultA))
+        XCTAssertFalse(unlock.isEnabled(for: vaultA))
+    }
+
+    /// Every OTHER error must leave the stored item alone — it says something about this one
+    /// attempt (cancelled, wrong finger, locked out), not about whether the item is still good.
+    func testOnlyBiometryChangeTriggersRecovery() {
+        let others: [BiometricUnlockError] = [
+            .biometricsUnavailable, .biometricsNotEnrolled, .biometricsLockedOut, .userCancelled,
+            .authenticationFailed, .notEnrolledForThisVault, .keychain(errSecItemNotFound)
+        ]
+        for error in others {
+            XCTAssertFalse(
+                BiometricUnlockRecovery.shouldClearEnrollment(after: error),
+                "\(error) must not clear an otherwise-valid enrollment"
+            )
+        }
+        XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
+    }
+
     func testUnlockPropagatesStoreErrors() throws {
         let store = FakeSecretStore()
         let unlock = BiometricUnlock(store: store)

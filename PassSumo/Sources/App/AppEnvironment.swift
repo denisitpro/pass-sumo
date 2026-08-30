@@ -210,19 +210,69 @@ final class AppEnvironment {
     /// tracking a file across renames/moves inside the sandbox grant — weaker than the in-file ID,
     /// but far better than a bare path (see `VaultKeyIdentifier.derived(from:)`'s own caveat).
     ///
-    /// **Known limitation, stated plainly:** at `UnlockView`'s call site the vault is by definition
-    /// still locked, so `currentDatabaseID` is `nil` there and the bookmark hash is what gets used
-    /// in practice today. Reading the in-file ID requires decrypting the file, so a pre-unlock
-    /// lookup can only reach it through a cached url→UUID map written when the user enrolls. That
-    /// map does not exist yet because nothing enrolls a secret yet — no call site anywhere stores
-    /// one — so there is no inconsistency to be had today; the branch below is what a Touch ID
-    /// enrollment flow will key off once it lands.
+    /// At `UnlockView`'s call site the vault is by definition still locked, so `currentDatabaseID`
+    /// is `nil` there and reading the in-file UUID directly is not an option — that requires the
+    /// Argon2-derived key. So a pre-unlock lookup instead consults
+    /// `enrolledDatabaseIDsByBookmarkHash`, a small persisted map from the bookmark-hash identifier
+    /// (the best pre-decrypt stand-in for identity) to the real in-file UUID, written once by
+    /// `rememberBiometricsEnrollment(_:for:)` at the moment the user enables Touch ID. Without that
+    /// map, this method would answer two different questions before and after unlock — bookmark
+    /// hash pre-unlock, in-file UUID post-unlock — and the keychain item enrolled under the latter
+    /// would never be found by a pre-unlock lookup asking the former, so "Unlock with Touch ID"
+    /// would never reappear after the very first enrollment. The map closes that gap.
     func biometricsIdentifier(for url: URL) -> VaultKeyIdentifier? {
         if let databaseID = store.currentDatabaseID {
             return VaultKeyIdentifier(databaseID.uuidString)
         }
         guard let bookmark = try? fileAccess.bookmark(for: url) else { return nil }
-        return .derived(from: bookmark)
+        let bookmarkIdentifier = VaultKeyIdentifier.derived(from: bookmark)
+        if let mappedUUID = enrolledDatabaseIDsByBookmarkHash[bookmarkIdentifier.rawValue] {
+            return VaultKeyIdentifier(mappedUUID)
+        }
+        return bookmarkIdentifier
+    }
+
+    private static let enrolledDatabaseIDsDefaultsKey = "biometrics.enrolledDatabaseIDsByBookmarkHash"
+
+    /// Persisted map from a pre-unlock bookmark-hash identifier to the database's own stable
+    /// `Meta/CustomData` UUID — see `biometricsIdentifier(for:)`'s doc comment for why this exists.
+    ///
+    /// This is **not** secret — a UUID association, never the master password itself — so
+    /// `UserDefaults` is an appropriate place for it, same reasoning as `recentDatabaseBookmarks`
+    /// just below. Keyed by the bookmark-hash's raw hex string rather than `VaultKeyIdentifier`
+    /// itself, since `UserDefaults` needs a plist-representable dictionary.
+    private var enrolledDatabaseIDsByBookmarkHash: [String: String] {
+        get { (UserDefaults.standard.dictionary(forKey: Self.enrolledDatabaseIDsDefaultsKey) as? [String: String]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.enrolledDatabaseIDsDefaultsKey) }
+    }
+
+    /// Records that `databaseID` is the identifier Touch ID was enrolled under for the database at
+    /// `url`, so a later pre-unlock `biometricsIdentifier(for:)` call can still resolve to it (see
+    /// that method's doc comment). Called once, right after `VaultStore.assignDatabaseIDIfNeeded()`
+    /// and `BiometricUnlock.enable` both succeed.
+    ///
+    /// Best-effort and silent on failure, same reasoning as `rememberRecentDatabase(_:)`: by the
+    /// time this runs the keychain item already exists, and a lookup that fails to fast-path
+    /// through the map merely falls back to decrypting normally next time — not a correctness bug,
+    /// just a missed convenience. Guarded by `!isUITesting` for the same reason
+    /// `rememberRecentDatabase(_:)` is: an e2e run must never write into the developer's real
+    /// `UserDefaults.standard` domain.
+    func rememberBiometricsEnrollment(_ databaseID: UUID, for url: URL) {
+        guard !isUITesting, let bookmark = try? fileAccess.bookmark(for: url) else { return }
+        var map = enrolledDatabaseIDsByBookmarkHash
+        map[VaultKeyIdentifier.derived(from: bookmark).rawValue] = databaseID.uuidString
+        enrolledDatabaseIDsByBookmarkHash = map
+    }
+
+    /// Removes whatever `rememberBiometricsEnrollment(_:for:)` recorded for `url`. Called when the
+    /// user turns Touch ID off (`SettingsView`) and when a stale, invalidated-by-biometry-change
+    /// keychain item is cleared out (`UnlockView`) — in both cases the mapping must not keep
+    /// pointing an `isEnabled` check at a secret that no longer exists.
+    func forgetBiometricsEnrollment(for url: URL) {
+        guard !isUITesting, let bookmark = try? fileAccess.bookmark(for: url) else { return }
+        var map = enrolledDatabaseIDsByBookmarkHash
+        map.removeValue(forKey: VaultKeyIdentifier.derived(from: bookmark).rawValue)
+        enrolledDatabaseIDsByBookmarkHash = map
     }
 
     /// Resolves a bookmark minted by `rememberRecentDatabase(_:)`, for `WelcomeView`'s recent-

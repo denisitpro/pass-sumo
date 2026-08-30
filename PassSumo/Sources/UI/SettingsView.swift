@@ -102,8 +102,17 @@ final class AppSettings {
 struct SettingsView: View {
     @Bindable var environment: AppEnvironment
 
+    /// Local, transient UI state for the Touch ID toggle below — neither persisted (that's what
+    /// `BiometricUnlock`/the keychain are for) nor observed by anything outside this view.
+    @State private var isTouchIDBusy = false
+    @State private var touchIDError: String?
+
     var body: some View {
         Form {
+            Section("Touch ID") {
+                touchIDContent
+            }
+
             Section("Locking") {
                 Stepper(
                     "Auto-lock after \(Int(environment.settings.autoLockTimeout))s of inactivity",
@@ -157,6 +166,98 @@ struct SettingsView: View {
         }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in
             environment.clipboard.clearInterval = newValue
+        }
+    }
+
+    // MARK: - Touch ID
+
+    /// Three mutually exclusive states, in order of precedence: no database open, hardware
+    /// unavailable, or the real toggle. Each of the first two explains itself rather than silently
+    /// doing nothing — the brief's explicit requirement for "no database open."
+    @ViewBuilder
+    private var touchIDContent: some View {
+        if case .unlocked = environment.store.state {
+            if let unavailable = BiometricUnlock.availabilityError() {
+                Text(unavailable.userMessage)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.touchID.unavailable")
+            } else {
+                Toggle("Unlock with Touch ID", isOn: touchIDBinding)
+                    .disabled(isTouchIDBusy)
+                    .accessibilityIdentifier("settings.touchID.toggle")
+                if isTouchIDBusy {
+                    ProgressView().controlSize(.small)
+                }
+                if let touchIDError {
+                    Text(touchIDError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("settings.touchID.error")
+                }
+            }
+        } else {
+            Text("Open a database to set up Touch ID unlock.")
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("settings.touchID.noDatabase")
+        }
+    }
+
+    /// `get` never prompts (`isEnabled` is `hasSecret`, not `retrieve` — see `BiometricUnlock`'s own
+    /// doc comment), so reading this on every `body` re-evaluation is cheap and safe. `set` kicks off
+    /// the actual enable/disable asynchronously; a `Binding` cannot itself be `async`.
+    private var touchIDBinding: Binding<Bool> {
+        Binding(
+            get: {
+                guard let id = environment.store.currentDatabaseID else { return false }
+                return environment.biometrics.isEnabled(for: VaultKeyIdentifier(id.uuidString))
+            },
+            set: { newValue in
+                Task { await setTouchIDEnabled(newValue) }
+            }
+        )
+    }
+
+    private func setTouchIDEnabled(_ enabled: Bool) async {
+        touchIDError = nil
+        isTouchIDBusy = true
+        defer { isTouchIDBusy = false }
+
+        guard enabled else {
+            // Turning off is a pure keychain deletion — `currentDatabaseID` is only a read here, so
+            // this path never touches the vault file.
+            guard let id = environment.store.currentDatabaseID, let url = environment.store.currentURL else { return }
+            do {
+                try environment.biometrics.disable(for: VaultKeyIdentifier(id.uuidString))
+                environment.forgetBiometricsEnrollment(for: url)
+            } catch let error as BiometricUnlockError {
+                touchIDError = error.userMessage
+            } catch {
+                touchIDError = error.localizedDescription
+            }
+            return
+        }
+
+        // Turning on: be honest that this is not a no-op. If this database has never had a stable
+        // ID assigned, `assignDatabaseIDIfNeeded()` mints one and immediately saves the vault file
+        // — see that method's own doc comment. `currentMasterPassword` and `currentURL` are only
+        // `nil` if nothing is unlocked, which the `touchIDContent` gating above already excludes.
+        guard let url = environment.store.currentURL,
+              let masterPassword = environment.store.currentMasterPassword
+        else { return }
+
+        guard let id = await environment.store.assignDatabaseIDIfNeeded() else {
+            touchIDError = environment.store.lastError?.displayMessage
+                ?? "Couldn't prepare this database for Touch ID."
+            return
+        }
+
+        do {
+            try environment.biometrics.enable(masterPassword: SecureBytes(string: masterPassword), for: VaultKeyIdentifier(id.uuidString))
+            environment.rememberBiometricsEnrollment(id, for: url)
+        } catch let error as BiometricUnlockError {
+            touchIDError = error.userMessage
+        } catch {
+            touchIDError = error.localizedDescription
         }
     }
 }
