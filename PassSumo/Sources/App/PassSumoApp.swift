@@ -12,6 +12,20 @@ struct PassSumoApp: App {
         ? AppEnvironment.uiTesting()
         : AppEnvironment.live()
 
+    /// Forces the window's color scheme from an environment variable
+    /// (`PASSSUMO_PREFERRED_COLOR_SCHEME=dark`/`light`) — unset on every normal launch, including
+    /// under `-ui-testing 1`, so this never changes what a user or the XCUITest suite sees. It
+    /// exists only so a visual-verification pass can check dark-appearance rendering for a change
+    /// without flipping the Mac's actual system appearance, which would repaint every other app's
+    /// window on the same screen, not just this one.
+    private var forcedColorScheme: ColorScheme? {
+        switch ProcessInfo.processInfo.environment["PASSSUMO_PREFERRED_COLOR_SCHEME"] {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(environment: environment)
@@ -19,6 +33,7 @@ struct PassSumoApp: App {
                 // state once a vault is open, not the Welcome/Unlock screens, which are small and
                 // simply centre themselves in whatever size this establishes.
                 .frame(minWidth: 900, minHeight: 560)
+                .preferredColorScheme(forcedColorScheme)
                 // Finishes what `AppEnvironment.uiTesting()` can only start synchronously — see that
                 // method's doc comment for why the actual `store.open` has to happen from an `async`
                 // context. A no-op under a real launch and a no-op on every render after the first
