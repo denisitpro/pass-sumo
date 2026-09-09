@@ -8,7 +8,7 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 233 tests (1 skipped, 0 failures) and `make durability`
+issue #3). `make test` currently passes 241 tests (1 skipped, 0 failures) and `make durability`
 22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
 single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
@@ -201,6 +201,23 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   sibling app ShotSumo. Source-available, not OSI open source. Permissive third-party components
   (KDBXKit and its transitive dependencies, see `THIRD-PARTY-NOTICES.md`) remain shippable inside
   it, provided their own copyright notices and license texts are retained.
+- **The vendored tree is no longer identical to upstream.** `PassSumo/Vendor/KDBXKit-VENDORING.md`
+  has a "Local patches" table; every edit under `Vendor/KDBXKit/` must be appended to it, and each
+  entry is a thing to report upstream to `shadone/KDBXKit`. Do not open an upstream PR as a side
+  effect of a local fix.
+- **A length the spec only recommends is not a length a reader may require.** The inner
+  random-stream key `K` is hashed before use (`SHA-512(K)` for ChaCha20, `SHA-256(K)` for Salsa20),
+  so any non-empty length works; the 64/32 bytes are what writers emit. Enforcing them made a real,
+  intact database unopenable (issue #30). The writer still emits the conventional length. Before
+  adding any `count == N` guard on parsed bytes, check whether the value is hashed or used raw —
+  raw (cipher nonces, the AES-KDF seed) is a genuine constraint, hashed is not.
+- **A `VaultError` message must not name a cause the error does not carry.** `KDBXErrorMapping`
+  reports the stage that failed, never a guessed why: `corruptedInnerHeader` was mapped to "the
+  database's attachment table is damaged" and told the owner his attachments were broken when the
+  file was fine. The KDBX 4 inner header holds the attachment pool *and* the inner random-stream
+  parameters. `.corrupted` therefore carries two payloads — the human sentence and a `diagnostic:`
+  for the library's raw text, which `UnlockView` shows separately and selectably. Library enum text
+  never goes in the first line.
 
 ## Open issues
 

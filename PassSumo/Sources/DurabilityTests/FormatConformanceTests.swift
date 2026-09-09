@@ -112,8 +112,10 @@ final class FormatConformanceTests: DurabilityTestCase {
     /// the same comparison DOES find repeated ciphertext. If this test ever stops failing to find
     /// repeats, the detector above has gone blind and its green result means nothing.
     ///
-    /// `regenerateSalts: false` appears here and nowhere else in this repository. It must never be
-    /// used on a real save; see `KDBXKitCodec.serialize`.
+    /// `regenerateSalts: false` appears in exactly two tests — here, and in `KDBXCodecTests`'s
+    /// inner-stream-key-length fixture builder, which needs it for the same reason: it is the only
+    /// way to put chosen inner-header bytes on disk. It must never be used on a real save; see
+    /// `KDBXKitCodec.serialize`.
     func testTheInnerStreamCheckWouldActuallyCatchAReusedKey() throws {
         let credentials = VaultCredentials(password: Self.fixturePassword, keyFile: nil)
         let original = try fixture("simple-argon2id-aes256", subdirectory: "Fixtures/kdbxkit")

@@ -566,7 +566,194 @@ final class KDBXCodecTests: XCTestCase {
         XCTAssertTrue(code.allSatisfy(\.isNumber), "expected digits, got \(code)")
     }
 
+    // MARK: - Inner random-stream key length (issue #30)
+
+    /// The inner random-stream key `K` is HASHED before it becomes a cipher key — `SHA-512(K)` for
+    /// ChaCha20, `SHA-256(K)` for Salsa20 — so any non-empty `K` yields a valid key. 64 and 32
+    /// bytes are what writers emit by convention, not a length a reader may require.
+    ///
+    /// This is not a hypothetical: a real 5.7 MB database was completely unopenable because its
+    /// `K` was 32 bytes and the reader insisted on 64. The password was right, the HMAC passed, the
+    /// payload decrypted — and we refused to show the user their own data. That is the worst
+    /// failure mode a password manager has, so the length tolerance is asserted, not assumed.
+    func testOpensChaCha20DatabaseWhoseInnerStreamKeyIsNot64Bytes() throws {
+        let password = "inner-key-32-chacha20"
+        let file = try writeDatabaseWithInnerStreamKey(
+            algorithm: .ChaCha20,
+            keyLength: 32,
+            password: password
+        )
+
+        let decoded = try codec.decode(fileData: file, credentials: credentials(password))
+
+        // The fixture must actually be the thing under test: assert the on-disk `K` length, or a
+        // regression that quietly normalised it back to 64 would leave this test still green.
+        let content = try XCTUnwrap(Self.kdbxContent(of: decoded))
+        XCTAssertEqual(content.innerHeader.encryptionKey.count, 32)
+        XCTAssertEqual(content.innerHeader.encryptionAlgorithm, .ChaCha20)
+
+        let entry = try XCTUnwrap(decoded.vault.entries.first { $0.title == Self.probeTitle })
+        XCTAssertEqual(entry.password, Self.probePassword, "the protected field did not decrypt")
+        XCTAssertEqual(entry.username, Self.probeUsername)
+    }
+
+    /// Same argument for Salsa20, whose derivation is `SHA-256(K)` and is likewise length-agnostic.
+    /// 20 bytes here is deliberately neither of the two conventional lengths, so the test cannot
+    /// pass by accident on an off-by-one in a length table.
+    func testOpensSalsa20DatabaseWhoseInnerStreamKeyIsNot32Bytes() throws {
+        let password = "inner-key-20-salsa20"
+        let file = try writeDatabaseWithInnerStreamKey(
+            algorithm: .Salsa20,
+            keyLength: 20,
+            password: password
+        )
+
+        let decoded = try codec.decode(fileData: file, credentials: credentials(password))
+
+        let content = try XCTUnwrap(Self.kdbxContent(of: decoded))
+        XCTAssertEqual(content.innerHeader.encryptionKey.count, 20)
+        XCTAssertEqual(content.innerHeader.encryptionAlgorithm, .Salsa20)
+
+        let entry = try XCTUnwrap(decoded.vault.entries.first { $0.title == Self.probeTitle })
+        XCTAssertEqual(entry.password, Self.probePassword, "the protected field did not decrypt")
+    }
+
+    /// An empty `K` is the one length that really is broken — there is no key material to hash —
+    /// and it must stay a thrown error rather than becoming a silently keyless inner stream.
+    func testEmptyInnerStreamKeyIsRejectedRatherThanUsed() throws {
+        XCTAssertThrowsError(
+            try writeDatabaseWithInnerStreamKey(
+                algorithm: .ChaCha20,
+                keyLength: 0,
+                password: "empty-inner-key"
+            ),
+            "a database with no inner random-stream key was encrypted anyway"
+        )
+    }
+
+    /// The reader got tolerant; the writer must NOT drift. Emitting an unconventional `K` would
+    /// work everywhere in theory and be the one client doing something odd in practice — and this
+    /// bug is the proof that other implementations' readers cannot be trusted to be tolerant.
+    func testOurWriterStillEmitsTheConventionalInnerStreamKeyLength() throws {
+        let password = "conventional-inner-key"
+        let creds = credentials(password)
+
+        // ChaCha20 is what `makeEmpty` picks, so a plain create-and-save covers the default path.
+        let created = try codec.makeEmpty(name: "Conventional", credentials: creds)
+        let saved = try codec.encode(created.vault, credentials: creds, origin: created)
+        let chaCha = try XCTUnwrap(
+            Self.kdbxContent(of: try codec.decode(fileData: saved, credentials: creds))
+        )
+        XCTAssertEqual(chaCha.innerHeader.encryptionAlgorithm, .ChaCha20)
+        XCTAssertEqual(chaCha.innerHeader.encryptionKey.count, 64)
+
+        // A database that arrives with Salsa20 keeps Salsa20, and gets 32 fresh bytes.
+        let salsaFile = try writeDatabaseWithInnerStreamKey(
+            algorithm: .Salsa20,
+            keyLength: 20,
+            password: password
+        )
+        let salsaOrigin = try codec.decode(fileData: salsaFile, credentials: creds)
+        let resaved = try codec.encode(salsaOrigin.vault, credentials: creds, origin: salsaOrigin)
+        let salsa = try XCTUnwrap(
+            Self.kdbxContent(of: try codec.decode(fileData: resaved, credentials: creds))
+        )
+        XCTAssertEqual(salsa.innerHeader.encryptionAlgorithm, .Salsa20)
+        XCTAssertEqual(
+            salsa.innerHeader.encryptionKey.count, 32,
+            "the writer must re-emit the conventional length, not preserve the odd one it read"
+        )
+    }
+
+    /// The cross-check that makes the two tests above mean something.
+    ///
+    /// They only prove this codec agrees with itself: if our derivation from a 32-byte `K` were
+    /// wrong, we would encrypt and decrypt with the same wrong keystream and never notice. So the
+    /// file goes to `keepassxc-cli` — an independent implementation — and it is asked to print the
+    /// protected field back. If KeePassXC recovers the plaintext, our `SHA-512(K)` derivation is
+    /// the same one everyone else runs, whatever the length of `K`.
+    func testFileWithShortInnerStreamKeyIsReadableByKeePassXC() throws {
+        let cli = try Self.keePassXCCLIOrSkip()
+
+        let password = "interop-short-inner-key"
+        let file = try writeDatabaseWithInnerStreamKey(
+            algorithm: .ChaCha20,
+            keyLength: 32,
+            password: password
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("passsumo-innerkey-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("short-inner-key.kdbx")
+        try file.write(to: path)
+
+        // `-s` reveals protected attributes; `-a Password` prints just that one, one per line.
+        let shown = try Self.run(
+            cli,
+            ["show", "-q", "-s", "-a", "Password", path.path, "/" + Self.probeTitle],
+            stdin: password + "\n"
+        )
+        XCTAssertEqual(shown.status, 0, "keepassxc-cli could not read the entry")
+        // Compared, never echoed: a failure message must not carry the field it failed to match.
+        XCTAssertEqual(
+            shown.output.trimmingCharacters(in: .whitespacesAndNewlines),
+            Self.probePassword,
+            "keepassxc-cli read a DIFFERENT value out of the protected field than we wrote, so our "
+                + "inner-stream key derivation for a 32-byte K does not match KeePassXC's"
+        )
+    }
+
     // MARK: - Helpers
+
+    // A published probe entry, written into the inner-key fixtures. Not a real credential.
+    private static let probeTitle = "InnerStreamProbe"
+    private static let probeUsername = "probe-user"
+    private static let probePassword = "probe-value-40e0c1"
+
+    /// Writes a real KDBX 4.1 file whose inner random-stream key is exactly `keyLength` bytes.
+    ///
+    /// It has to bypass `codec.encode`, because that path regenerates the inner key at the
+    /// conventional length on every save — which is correct, and is asserted separately. So the
+    /// file is produced through KDBXKit's writer with `regenerateSalts: false`, the existing opt-out
+    /// whose whole purpose is letting tests control exactly these bytes. Nothing test-only is added
+    /// to the production API to make this possible.
+    private func writeDatabaseWithInnerStreamKey(
+        algorithm: InnerHeader.EncryptionAlgorithm,
+        keyLength: Int,
+        password: String
+    ) throws -> Data {
+        let creds = credentials(password)
+        var created = try codec.makeEmpty(name: "Inner Key Fixture", credentials: creds)
+        created.vault.entries = [
+            VaultEntry(
+                id: UUID(), groupID: nil, title: Self.probeTitle, username: Self.probeUsername,
+                password: Self.probePassword, url: "", notes: "", otpAuthURL: nil,
+                customFields: [:], created: Date(), modified: Date()
+            ),
+        ]
+
+        let base = try XCTUnwrap(Self.kdbxContent(of: created))
+        var content = KDBXContentMerge.apply(created.vault, to: base)
+        content.innerHeader.encryptionAlgorithm = algorithm
+        content.innerHeader.encryptionKey = SecureBytes(
+            Data((0..<keyLength).map { _ in UInt8.random(in: UInt8.min...UInt8.max) })
+        )
+
+        let stream = OutputStream(toMemory: ())
+        stream.open()
+        defer { stream.close() }
+        try KDBXWriter(to: stream).write(
+            content,
+            unlockData: UnlockData(masterPassword: password),
+            regenerateSalts: false
+        )
+        return try XCTUnwrap(
+            stream.property(forKey: .dataWrittenToMemoryStreamKey) as? Data,
+            "the fixture was written but its bytes could not be read back out of the stream"
+        )
+    }
 
     private static func kdbxContent(of decoded: DecodedVault) -> KDBXContent? {
         (decoded.opaque as? KDBXOrigin)?.content

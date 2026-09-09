@@ -60,8 +60,11 @@ public struct InnerHeader: Sendable, Equatable {
 
     /// The encryption key that was used for encrypting protected strings in the XML document. See ``EncryptionAlgorithm-swift.enum``
     ///
-    /// For ChaCha20, the key is 64 bytes.
-    /// For Salsa20, the key is 32 bytes.
+    /// This is `K`, the raw bytes as they appear in the inner header — not the cipher key. `K` is
+    /// hashed to produce the cipher key (`SHA-512(K)` for ChaCha20, `SHA-256(K)` for Salsa20), so
+    /// **any non-empty length is valid on read.** Writers conventionally emit 64 bytes for ChaCha20
+    /// and 32 for Salsa20, and this library's writer does the same, but a file carrying some other
+    /// length is legal and must be read, not rejected.
     ///
     /// Held as `SecureBytes` (page-locked, zero-on-deinit) — this key
     /// encrypts every password in the unlocked vault; a process-memory dump

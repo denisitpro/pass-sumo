@@ -155,8 +155,10 @@ struct KDBXKitCodec: VaultCodec {
             // vault under the same key would encrypt the passwords with the SAME keystream, and
             // anyone holding both files recovers the plaintext by XORing them together — no
             // password needed. That defect is precisely why this project pins an unreleased KDBXKit
-            // revision instead of a tag (see project.yml). The flag exists only so KDBXKit's own
-            // tests can assert byte-equality; production code has no legitimate use for it.
+            // revision instead of a tag (see project.yml). The flag exists only so tests can
+            // control the exact bytes on disk — byte-equality round-trips, and the
+            // inner-stream-key fixtures in `KDBXCodecTests`. Production code has no legitimate
+            // use for it.
             try KDBXWriter(to: stream).write(content, unlockData: unlockData)
         } catch {
             throw KDBXErrorMapping.vaultError(from: error)

@@ -288,7 +288,16 @@ enum VaultError: Error, Equatable {
     case wrongCredentials
     case notAKDBXFile
     case unsupportedVersion(String)
-    case corrupted(String)
+    /// A sentence for the person looking at the screen, plus — when there is one — the raw
+    /// technical text from the layer that actually failed.
+    ///
+    /// The two are separate payloads because they have different audiences and the split kept
+    /// being lost when they were one string. A KDBXKit error interpolated into the sentence put
+    /// `invalidKeyLength(algorithm: KDBXKit.InnerHeader.EncryptionAlgorithm.ChaCha20, …)` in front
+    /// of a user who cannot act on it, and it pushed the part they *can* act on out of view. The
+    /// diagnostic is still shown — smaller, selectable, so it can be pasted into a bug report —
+    /// but it is never what the first line says.
+    case corrupted(String, diagnostic: String?)
     case unsupportedFeature(String)
     case io(String)
 }
