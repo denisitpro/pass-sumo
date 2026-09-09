@@ -1,8 +1,16 @@
 import SwiftUI
 
-/// The three-column browser — group sidebar, entry list, entry detail. This is "the screen the
-/// user lives in" (per the UI brief this file was written against): everything else in the app is
-/// a doorway into or out of it.
+/// The browser — group sidebar, entry list, entry detail. This is "the screen the user lives in"
+/// (per the UI brief this file was written against): everything else in the app is a doorway into
+/// or out of it.
+///
+/// **Two `NavigationSplitView` columns, not three** (issue #49). The entry detail used to be a
+/// third `detail:` column, but `NavigationSplitView`'s `columnVisibility` binding on macOS only
+/// ever controls the leading columns — there is no first-class way to give the trailing column a
+/// show/hide control, which is exactly the gap the owner hit ("the sidebar collapses, why doesn't
+/// the right pane?"). Moving entry detail into `.inspector(isPresented:)` instead gives it a real,
+/// system-provided show/hide for free, plus a natural place to hang a toolbar toggle and a
+/// keyboard shortcut. `isDetailPaneVisible` is that binding.
 ///
 /// Owns ALL cross-column state itself (`selectedGroupID`, `selectedEntryID`, `searchText`) rather
 /// than letting each column keep its own — a group change has to clear which entry is selected
@@ -28,6 +36,13 @@ struct VaultBrowserView: View {
     @State private var selectedEntryID: UUID?
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// Whether the entry-detail inspector is shown. Seeded from `AppSettings.detailPaneVisible` on
+    /// appear and mirrored back on change (same one-way-mirror pattern the menu-bar wiring below
+    /// uses for `selectedEntryID`) rather than reading `appEnvironment` directly in the binding
+    /// passed to `.inspector` — `.inspector` needs a plain `Binding<Bool>` it can write to on every
+    /// toggle, and `appEnvironment` is `nil` in the `#Preview` below and in any other context with
+    /// no environment, where this still needs to work with a sensible default.
+    @State private var isDetailPaneVisible = true
     @State private var showingGenerator = false
     @State private var editingEntry: EditingEntry?
     /// The entry a permanent delete has been requested for, held until the user confirms. Nothing
@@ -86,7 +101,7 @@ struct VaultBrowserView: View {
                 onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true }
             )
             .accessibilityIdentifier("browser.sidebar")
-        } content: {
+        } detail: {
             EntryListView(
                 vault: vault,
                 groupID: selectedGroupID,
@@ -100,27 +115,35 @@ struct VaultBrowserView: View {
             .searchable(text: $searchText, placement: .toolbar, prompt: "Search entries and passwords")
             .searchFocused($isSearchFocused)
             .accessibilityIdentifier("browser.search")
-        } detail: {
-            Group {
-                if let selectedEntry {
-                    EntryDetailView(
-                        entry: selectedEntry,
-                        clipboard: clipboard,
-                        isLocked: isLocked,
-                        // The one capability the detail view needs from the vault, handed over as
-                        // a function instead of the vault itself — see its `resolveAttachment`.
-                        resolveAttachment: { vault.bytes(for: $0) },
-                        onEdit: { openForEdit(selectedEntry.id) }
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "No Entry Selected",
-                        systemImage: "lock.doc",
-                        description: Text("Choose an entry from the list.")
-                    )
+            .inspector(isPresented: $isDetailPaneVisible) {
+                Group {
+                    if let selectedEntry {
+                        EntryDetailView(
+                            entry: selectedEntry,
+                            clipboard: clipboard,
+                            isLocked: isLocked,
+                            // The one capability the detail view needs from the vault, handed over
+                            // as a function instead of the vault itself — see its
+                            // `resolveAttachment`.
+                            resolveAttachment: { vault.bytes(for: $0) },
+                            onEdit: { openForEdit(selectedEntry.id) }
+                        )
+                    } else {
+                        ContentUnavailableView(
+                            "No Entry Selected",
+                            systemImage: "lock.doc",
+                            description: Text("Choose an entry from the list.")
+                        )
+                    }
                 }
+                .accessibilityIdentifier("browser.detail")
             }
-            .accessibilityIdentifier("browser.detail")
+        }
+        .onAppear {
+            isDetailPaneVisible = appEnvironment?.settings.detailPaneVisible ?? true
+        }
+        .onChange(of: isDetailPaneVisible) { _, newValue in
+            appEnvironment?.settings.detailPaneVisible = newValue
         }
         .onChange(of: selectedGroupID) {
             // Switching groups can leave `selectedEntryID` pointing at an entry that's no longer
@@ -162,11 +185,13 @@ struct VaultBrowserView: View {
             }
         }
         .onChange(of: menuRequest) { _, request in handle(request) }
-        // These buttons carry NO `.keyboardShortcut` except the generator's. Every other shortcut
-        // they used to declare is also declared by `AppCommands` — and ⌘N meant two different things
-        // in the two places (New Database in the menu, New Entry here), which is a conflict, not a
-        // duplicate. `AppCommands` is the single keyboard surface; the toolbar is the pointer
-        // surface. ⌘⇧G stays because the generator has no menu item at all, so this is its only binding.
+        // These buttons carry NO `.keyboardShortcut` except the generator's and the detail-pane
+        // toggle's. Every other shortcut they used to declare is also declared by `AppCommands` —
+        // and ⌘N meant two different things in the two places (New Database in the menu, New Entry
+        // here), which is a conflict, not a duplicate. `AppCommands` is the single keyboard surface;
+        // the toolbar is the pointer surface. ⌘⇧G stays because the generator has no menu item at
+        // all, so this is its only binding — same reasoning for ⌥⌘I below (issue #49): toggling the
+        // inspector is this view's own `@State`, with no menu-bar equivalent to conflict with.
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -206,6 +231,21 @@ struct VaultBrowserView: View {
                 }
                 .accessibilityIdentifier("browser.save")
                 .disabled(!store.isDirty)
+
+                Button {
+                    isDetailPaneVisible.toggle()
+                } label: {
+                    Label(
+                        isDetailPaneVisible ? "Hide Detail" : "Show Detail",
+                        systemImage: "sidebar.trailing"
+                    )
+                }
+                // ⌥⌘I is the platform convention for toggling an inspector (Safari's Web Inspector
+                // uses the same binding, for the same action, in a different app). Checked against
+                // `AppCommands.swift`: nothing there binds "i" or uses `.option` at all, so this
+                // does not collide with anything already in this app.
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .accessibilityIdentifier("browser.toggleDetail")
             }
         }
         .sheet(item: $editingEntry) { editing in

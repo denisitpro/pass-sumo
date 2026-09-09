@@ -21,6 +21,7 @@ final class AppSettings {
         static let autoLockTimeout = "settings.autoLockTimeout"
         static let clipboardClearTimeout = "settings.clipboardClearTimeout"
         static let showPasswordStrength = "settings.showPasswordStrength"
+        static let detailPaneVisible = "settings.detailPaneVisible"
         static let generatorLength = "settings.generator.length"
         static let generatorLowercase = "settings.generator.lowercase"
         static let generatorUppercase = "settings.generator.uppercase"
@@ -48,6 +49,14 @@ final class AppSettings {
         didSet { defaults.set(showPasswordStrength, forKey: Key.showPasswordStrength) }
     }
 
+    /// Whether `VaultBrowserView`'s entry-detail inspector is shown (issue #49). Not surfaced in
+    /// this screen — it's window chrome the browser's own toolbar toggle drives, not a preference
+    /// a user goes looking for in Settings — but persisted the same `Key`/`didSet` way as every
+    /// other setting here rather than through a second mechanism.
+    var detailPaneVisible: Bool {
+        didSet { defaults.set(detailPaneVisible, forKey: Key.detailPaneVisible) }
+    }
+
     /// Only `length` and the four character classes are user-facing (see `SettingsView`'s body) —
     /// `excludeAmbiguous`/`customSymbols` stay at `PasswordGenerator.Recipe`'s own defaults, which
     /// is exactly "few controls, no clutter" applied to the recipe itself, not just the screen.
@@ -61,6 +70,7 @@ final class AppSettings {
         autoLockTimeout = Self.storedDouble(defaults, Key.autoLockTimeout) ?? Self.defaultAutoLockTimeout
         clipboardClearTimeout = Self.storedDouble(defaults, Key.clipboardClearTimeout) ?? Self.defaultClipboardClearTimeout
         showPasswordStrength = (defaults.object(forKey: Key.showPasswordStrength) as? Bool) ?? true
+        detailPaneVisible = (defaults.object(forKey: Key.detailPaneVisible) as? Bool) ?? true
 
         var recipe = PasswordGenerator.Recipe()
         if let length = defaults.object(forKey: Key.generatorLength) as? Int { recipe.length = length }

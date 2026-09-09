@@ -66,6 +66,7 @@ final class AppShellTests: XCTestCase {
             settings.clipboardClearTimeout = 15
             settings.showPasswordStrength = false
             settings.generatorRecipe = recipe
+            settings.detailPaneVisible = false
         }
 
         let reloaded = AppSettings(defaults: scratch)
@@ -73,6 +74,7 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(reloaded.clipboardClearTimeout, 15)
         XCTAssertEqual(reloaded.showPasswordStrength, false)
         XCTAssertEqual(reloaded.generatorRecipe, recipe)
+        XCTAssertEqual(reloaded.detailPaneVisible, false)
     }
 
     func testSettingsDefaultsWhenNothingStoredYet() {
@@ -84,6 +86,10 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(settings.clipboardClearTimeout, AppSettings.defaultClipboardClearTimeout)
         XCTAssertTrue(settings.showPasswordStrength)
         XCTAssertEqual(settings.generatorRecipe, PasswordGenerator.Recipe())
+        // The detail inspector starts shown — issue #49's default matches the pane's old,
+        // always-visible `detail:` column behavior, so upgrading from a build with no saved
+        // preference does not silently hide it.
+        XCTAssertTrue(settings.detailPaneVisible)
     }
 
     // MARK: - AppCommands enablement
