@@ -8,7 +8,7 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 241 tests (1 skipped, 0 failures) and `make durability`
+issue #3). `make test` currently passes 244 tests (1 skipped, 0 failures) and `make durability`
 22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
 single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
@@ -153,13 +153,20 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
 
 ## Gotchas worth recording
 
-- **One open durability defect, found by `make durability` (issue #22), reported not fixed.**
-  `VaultStore.save()` has no mutual exclusion — it is `@MainActor` but its body is an awaited
-  `Task.detached`, so two `save()` calls encode and write concurrently (measured overlap: 2). The
-  file is never torn (each write is atomic, one rename wins) but the loser's edits are silently
-  discarded while its `save()` reports success. Details and evidence in
-  `PassSumo/Sources/DurabilityTests/README.md`. (The second defect that suite found — a save that
-  failed outright under a file-scoped grant — is fixed; see the backup entry below.)
+- **Saves are serialised by a task chain, and `@MainActor` is not what does it (issue #27).**
+  `save()` is `@MainActor`, but its body is an awaited `Task.detached`, so the actor is released
+  across the write — two `save()` calls used to encode and write concurrently (measured overlap: 2)
+  and the loser's edits were silently discarded while its `save()` reported success. The fix: each
+  `save()` reads the chain's tail, appends a task that awaits it, and publishes itself as the new
+  tail — all with **no suspension point in between**, which is what makes that read-modify-write
+  atomic under main-actor isolation. Do not "simplify" that into a bool flag or an `actor` owning
+  the write: a flag races across the same suspension, and an actor would have to snapshot before
+  the hop, i.e. as of when the save was *requested*, resurrecting stale state. A queued save waits
+  and then encodes the vault as of when it **runs**; it is never coalesced into the in-flight save,
+  which has already snapshotted and provably lacks the later edits. `isDirty` is cleared only when
+  nothing was edited after the snapshot that save wrote (`editRevision`), so an edit landing during
+  the KDF is never reported as being on disk. Evidence, before and after, in
+  `PassSumo/Sources/DurabilityTests/README.md`.
 - **Backups live in the app's container, and no entitlement backs them (issue #26).**
   `<Application Support>/PassSumo/Backups/<name>-<hash of the path>/<name>-<stamp>.kdbx`, obtained
   from `FileManager` — never `~`-expansion, never a literal container path. The old
@@ -228,12 +235,13 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   obligations, before first App Store submission.
 - #5 — the KDBXKit vendoring decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
   wiring, Twofish decision, and others).
-- #22 — the durability suite (`make durability`). Built. Of the two defects it found, the
-  concurrent-`save()` one is still open (see "Gotchas worth recording" above); the backup-location
-  one was #26 and is fixed.
+- #22 — the durability suite (`make durability`). Built. Both defects it found are fixed: #27
+  (concurrent `save()`) and #26 (backup location).
 - #26 — the pre-save backup wrote a sibling file, so a save could fail outright under a
   file-scoped grant. Fixed: backups moved into the app's container, and a failed backup no longer
   blocks the save. See "Gotchas worth recording" above.
+- #27 — `save()` had no mutual exclusion, so two racing saves lost one set of edits. Fixed: saves
+  are chained. See "Gotchas worth recording" above.
 
 ## Acceptance criteria (owner's definition)
 

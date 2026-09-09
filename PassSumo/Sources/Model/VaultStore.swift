@@ -54,6 +54,20 @@ final class VaultStore {
     /// re-enter the master password on every save. Cleared by `lock()`.
     private var credentials: VaultCredentials?
 
+    /// The tail of the save chain: the most recently enqueued save, or `nil` when none is in
+    /// flight. See `save()` for why a chain of tasks — rather than a lock, a flag or an `actor` —
+    /// is what makes overlapping saves impossible here.
+    private var saveChain: Task<Void, Never>?
+
+    /// Counts in-memory edits, so a completing save can tell whether the state it wrote is still
+    /// the state in memory. Incremented by `markEdited()` and never reset — only compared.
+    ///
+    /// Exists because `isDirty` alone cannot answer "did MY change get written": a save encodes a
+    /// snapshot and then spends most of a second in Argon2, and an edit landing in that window is
+    /// genuinely not on disk. Clearing `isDirty` on that save's success would tell the user
+    /// otherwise (issue #27).
+    private var editRevision = 0
+
     init(codec: any VaultCodec, fileAccess: any VaultFileAccess) {
         self.codec = codec
         self.fileAccess = fileAccess
@@ -211,7 +225,7 @@ final class VaultStore {
             currentURL = url
             // Nothing is on disk yet: the first `save()` is not optional, it's how this database
             // starts existing at all.
-            isDirty = true
+            markEdited()
             state = .unlocked(decoded.vault)
         case .failure(let error):
             lastError = error
@@ -223,7 +237,51 @@ final class VaultStore {
     /// `origin` so the codec can restore whatever it stashed outside `Vault` on the last
     /// decode/create — see `VaultCodec`'s hard-requirement doc comment. A no-op (no throw, no
     /// disk access, no error set) when nothing is unlocked — there's nothing to save.
+    ///
+    /// **Saves are serialised, and by construction rather than by luck (issue #27).** `@MainActor`
+    /// alone does not serialise this: the real work is an awaited `Task.detached`, and the main
+    /// actor is released at that suspension, so a second `save()` used to walk straight in and
+    /// encode-and-write alongside the first. Each write is atomic, so the file was never torn — but
+    /// one rename won and the loser's edits were silently discarded while its `save()` reported
+    /// success.
+    ///
+    /// The mechanism is a chain of tasks: each call reads the current tail, appends a task that
+    /// awaits that tail before doing any work of its own, and publishes itself as the new tail.
+    /// That read-modify-write of `saveChain` happens with **no suspension point in between**, so
+    /// main-actor isolation makes it atomic and the chain is a total order — task N's work cannot
+    /// begin until task N-1 has fully returned. Preferred over an `actor` owning the write (an
+    /// actor would have to take its snapshot before the hop, i.e. as of when the save was
+    /// *requested*, and would then resurrect stale state) and over a hand-rolled async semaphore
+    /// (more continuation and cancellation machinery to get right, for a guarantee the language
+    /// already gives here). The expensive part still runs in a detached task, so a queued save
+    /// waits off the main actor and the UI never blocks on Argon2.
+    ///
+    /// A save asked for while another is in flight therefore **waits and then writes the latest
+    /// state** — it is never dropped, and never coalesced into the in-flight save. Coalescing was
+    /// rejected: the in-flight save has already taken its snapshot, so it provably does *not*
+    /// contain edits made after it started, and folding a later request into it would report
+    /// success for exactly the edits it did not write.
     func save() async {
+        let predecessor = saveChain
+        let link = Task { @MainActor in
+            // Nothing above this line touches the vault: the whole point is that the snapshot is
+            // taken by `performSave()` AFTER the predecessor is done.
+            if let predecessor { await predecessor.value }
+            await self.performSave()
+        }
+        saveChain = link
+        await link.value
+        // Only the tail clears the chain. A save that already has a successor must leave
+        // `saveChain` alone, or the next caller would link onto `nil` and run alongside it.
+        if saveChain == link { saveChain = nil }
+    }
+
+    /// The actual encode-and-write. **Only ever called from inside the chain `save()` builds** —
+    /// calling it directly would reintroduce exactly the overlap that chain exists to prevent.
+    private func performSave() async {
+        // Snapshot HERE, not in `save()`: a queued save must encode the vault as of when it RUNS.
+        // Snapshotting at request time would write whatever the vault looked like before the wait
+        // and silently undo every edit made during it.
         guard case .unlocked(let vault) = state,
               let url = currentURL,
               let credentials
@@ -232,6 +290,7 @@ final class VaultStore {
         let codec = self.codec
         let fileAccess = self.fileAccess
         let origin = decodedOrigin
+        let revision = editRevision
         let result = await Task.detached(priority: .userInitiated) { () -> Result<VaultBackupOutcome, VaultError> in
             do {
                 let data = try codec.encode(vault, credentials: credentials, origin: origin)
@@ -251,7 +310,10 @@ final class VaultStore {
             // about the save that just happened.
             lastBackupURL = backup.url
             lastBackupError = backup.error
-            isDirty = false
+            // Clear `isDirty` only if the snapshot this save wrote is still what's in memory. An
+            // edit that landed while the KDF was running is genuinely NOT on disk; reporting the
+            // vault as clean would be this save claiming credit for work it never wrote.
+            if editRevision == revision { isDirty = false }
             lastError = nil
         case .failure(let error):
             lastError = error
@@ -299,7 +361,7 @@ final class VaultStore {
         }
         decodedOrigin?.vault = vault
         state = .unlocked(vault)
-        isDirty = true
+        markEdited()
     }
 
     // MARK: - Deletion
@@ -371,7 +433,14 @@ final class VaultStore {
     private func commit(_ vault: Vault) {
         decodedOrigin?.vault = vault
         state = .unlocked(vault)
+        markEdited()
+    }
+
+    /// Records that the in-memory vault changed: dirty, and one revision further on than any save
+    /// currently in flight captured. The two always move together — see `editRevision`.
+    private func markEdited() {
         isDirty = true
+        editRevision += 1
     }
 }
 

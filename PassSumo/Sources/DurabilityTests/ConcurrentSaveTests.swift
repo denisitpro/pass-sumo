@@ -86,23 +86,23 @@ private final class OverlapObservingFileAccess: VaultFileAccess {
 final class ConcurrentSaveTests: DurabilityTestCase {
     /// Two `save()` calls issued without awaiting the first.
     ///
-    /// `VaultStore.save()` is `@MainActor`, but its body is a `Task.detached` that it awaits — so
-    /// the main actor is released the moment the first save starts encoding, and a second `save()`
-    /// entering at that point runs its own detached encode-and-write alongside the first. Nothing
-    /// in `VaultStore` holds a lock, a flag or a serial executor across that suspension.
+    /// This used to fail — `save()` was `@MainActor`, but its body was an awaited `Task.detached`,
+    /// so the main actor was released the moment the first save started encoding and a second
+    /// `save()` entering at that point ran its own detached encode-and-write alongside it (measured
+    /// peak overlap: 2). Issue #27 fixed that by chaining each save onto the previous one's
+    /// completion; the assertion below is what holds the fix in place through the real
+    /// `KDBXKitCodec` + `SandboxedVaultFileAccess` stack, timing and Argon2 included.
     ///
     /// Two assertions, and they are deliberately different in kind:
     ///
     /// 1. **The file must survive.** Whatever the ordering, what is left on disk is a complete,
     ///    openable database. This holds because each write is `.atomic`: two renames onto the same
     ///    path cannot interleave, one simply wins.
-    /// 2. **The saves must not overlap.** They do. This is a real finding, not a test artefact —
-    ///    see README.md and the note below.
+    /// 2. **The saves must not overlap.** Peak overlap must be 1.
     ///
-    /// `XCTExpectFailure(strict:)` is how the second assertion is recorded without leaving the
-    /// suite red, and it is not a way of looking away: it is strict, so the moment `VaultStore`
-    /// grows the serialisation it needs, this test fails for saying the defect is still there and
-    /// forces someone to come back and delete this block.
+    /// The lost update the overlap caused — and the dirty-flag half of it — are pinned
+    /// deterministically in `UnitTests/VaultStoreSaveSerializationTests`, which can hold a fake
+    /// codec inside the critical section instead of racing a real KDF.
     @MainActor
     func testTwoConcurrentSavesDoNotOverlap() async throws {
         let directory = try makeScratchDirectory()
@@ -139,19 +139,9 @@ final class ConcurrentSaveTests: DurabilityTestCase {
         let titles = try assertOpens(url, "after two concurrent saves")
         XCTAssertTrue(titles.contains("raced"), "the edit was lost entirely: \(titles)")
 
-        XCTExpectFailure(
-            "KNOWN DEFECT (durability suite finding): VaultStore.save() has no mutual exclusion. "
-                + "It is @MainActor, but its body is an awaited Task.detached, so a second save() "
-                + "entering during that suspension encodes and writes alongside the first. Two "
-                + "backups are taken of the same pre-save file and two atomic writes race for the "
-                + "same path; the loser's edits are silently discarded even though its save() "
-                + "reported success. Delete this XCTExpectFailure once save() serialises.",
-            strict: true
-        ) {
-            XCTAssertEqual(
-                recorder.maximumOverlap, 1,
-                "two saves were in flight at once (peak overlap \(recorder.maximumOverlap))"
-            )
-        }
+        XCTAssertEqual(
+            recorder.maximumOverlap, 1,
+            "two saves were in flight at once (peak overlap \(recorder.maximumOverlap))"
+        )
     }
 }
