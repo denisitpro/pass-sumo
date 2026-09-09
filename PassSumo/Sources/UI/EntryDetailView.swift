@@ -69,6 +69,39 @@ enum AttachmentPreviewPolicy {
     }
 }
 
+/// Writes an attachment's bytes wherever the user points a save panel — the single egress for
+/// attachment payloads, shared by `EntryDetailView` and `EntryEditView` (issue #52: the edit sheet
+/// used to offer only the destructive remove action, with no way to export while editing).
+///
+/// **Attachment bytes are secret material** (repo CLAUDE.md): this goes through `NSSavePanel`
+/// only, never a temp file, never the pasteboard — matching the same reasoning as
+/// `AttachmentPreviewPolicy` just above.
+///
+/// `runModal` rather than a sheet: the caller is a plain SwiftUI view with no window reference to
+/// attach one to, and a modal panel also guarantees the payload does not outlive the interaction
+/// inside a captured completion handler.
+///
+/// A failed write used to be swallowed, which is the worst outcome available here: the user
+/// watched a save panel accept a destination and leaves believing their passport scan is on disk
+/// when nothing is there. It is not theoretical either — `.atomic` writes a sibling temp file in
+/// the destination directory first, which a powerbox-granted URL can plausibly refuse. Surfacing
+/// the error is the fix; changing the write strategy on that guess is not. The message carries the
+/// filename and the system's own reason, never any payload bytes.
+enum AttachmentExporter {
+    static func export(_ payload: Data, suggestedName: String) -> String? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        do {
+            try payload.write(to: url, options: [.atomic])
+            return nil
+        } catch {
+            return "\(suggestedName) could not be saved: \(error.localizedDescription)"
+        }
+    }
+}
+
 /// Everything one attachment row needs that depends on the payload, resolved once per attachment
 /// list rather than once per render. See `EntryDetailView.rebuildAttachmentRows()`.
 private struct AttachmentRowState {
@@ -191,13 +224,10 @@ struct EntryDetailView: View {
         }
     }
 
-    /// A scheme is required, not just a parseable string: `URL(string:)` alone happily accepts a
-    /// bare "example.com" that `NSWorkspace` then silently fails to open. Requiring a scheme is
-    /// what keeps `openURL` from no-oping on the common case of a user having pasted a bare domain
-    /// into the URL field, instead of surfacing a button that looks live but does nothing.
+    /// Shared with `EntryListView`'s row context menu (issue #48) — see `EntryURLResolver`'s own
+    /// doc comment for why the scheme test lives there instead of being duplicated here.
     private var resolvedURL: URL? {
-        guard !entry.url.isEmpty, let url = URL(string: entry.url), url.scheme != nil else { return nil }
-        return url
+        EntryURLResolver.resolvedURL(from: entry.url)
     }
 
     private var urlRow: some View {
@@ -308,7 +338,7 @@ struct EntryDetailView: View {
                     // Resolved at the moment of export rather than held on the row: one plaintext
                     // copy, alive only for the duration of the write.
                     guard let payload = resolveAttachment(attachment) else { return }
-                    exportError = Self.export(payload, suggestedName: attachment.name)
+                    exportError = AttachmentExporter.export(payload, suggestedName: attachment.name)
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
@@ -334,32 +364,6 @@ struct EntryDetailView: View {
             }
         }
         .accessibilityIdentifier("detail.attachment.\(attachment.name)")
-    }
-
-    /// Writes `payload` wherever the user points the save panel, returning a message to show when
-    /// the write fails and `nil` otherwise.
-    ///
-    /// `runModal` rather than a sheet: this view has no window reference to attach one to, and a
-    /// modal panel also guarantees the payload does not outlive the interaction inside a captured
-    /// completion handler.
-    ///
-    /// A failed write used to be swallowed, which is the worst outcome available here: the user
-    /// watched a save panel accept a destination and leaves believing their passport scan is on
-    /// disk when nothing is there. It is not theoretical either — `.atomic` writes a sibling temp
-    /// file in the destination directory first, which a powerbox-granted URL can plausibly refuse.
-    /// Surfacing the error is the fix; changing the write strategy on that guess is not. The
-    /// message carries the filename and the system's own reason, never any payload bytes.
-    private static func export(_ payload: Data, suggestedName: String) -> String? {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = suggestedName
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        do {
-            try payload.write(to: url, options: [.atomic])
-            return nil
-        } catch {
-            return "\(suggestedName) could not be saved: \(error.localizedDescription)"
-        }
     }
 
     private static let byteFormatter: ByteCountFormatter = {

@@ -1,10 +1,14 @@
 import SwiftUI
 
-/// Standalone password-generator sheet. Opened from two places with different meanings for "Use":
-/// the browser toolbar (no target field exists there — see `VaultBrowserView`'s call site, where
-/// "Use" just copies) and `EntryEditView`'s "Generate" button (where "Use" fills the password field
-/// being edited). Both meanings are expressed as the `onUse` closure so this view stays agnostic
-/// about which one it's in.
+/// Standalone password-generator sheet. Opened from two places with a genuinely different meaning
+/// for "Use": `EntryEditView`'s "Generate" button, where "Use" fills the password field being
+/// edited, and `VaultBrowserView`'s toolbar, where there is no field to fill at all. It used to
+/// paper over that second case by making "Use" just copy — identical to the "Copy" button right
+/// next to it, with nothing on screen saying so (issue #45: the owner could not tell them apart
+/// because, from the toolbar, they were not meaningfully apart). `onUse` is therefore OPTIONAL:
+/// the caller with a real field to fill passes a closure, the caller with nothing to fill passes
+/// `nil`, and this view hides "Use" entirely rather than disabling it with no explanation — it
+/// stays agnostic about which caller it's in either way.
 ///
 /// Reads its starting `Recipe` from whatever the caller hands it and never persists a change back —
 /// there is no `Settings`/`SettingsStore` type in this repo yet (checked before writing this file),
@@ -14,7 +18,7 @@ import SwiftUI
 struct GeneratorSheet: View {
     let generator: PasswordGenerator
     let clipboard: ClipboardService
-    var onUse: (String) -> Void
+    var onUse: ((String) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -26,7 +30,7 @@ struct GeneratorSheet: View {
         generator: PasswordGenerator,
         recipe: PasswordGenerator.Recipe = .init(),
         clipboard: ClipboardService,
-        onUse: @escaping (String) -> Void
+        onUse: ((String) -> Void)? = nil
     ) {
         self.generator = generator
         self.clipboard = clipboard
@@ -72,24 +76,52 @@ struct GeneratorSheet: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("generator.entropy")
 
-            HStack {
-                Button("Regenerate", action: regenerate)
-                    .accessibilityIdentifier("generator.regenerate")
-                    .keyboardShortcut("r", modifiers: .command)
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack {
+                    Button("Regenerate", action: regenerate)
+                        .accessibilityIdentifier("generator.regenerate")
+                        .keyboardShortcut("r", modifiers: .command)
 
-                Spacer()
+                    Spacer()
 
-                Button("Copy") { clipboard.copy(result) }
-                    .accessibilityIdentifier("generator.copy")
-                    .disabled(result.isEmpty)
+                    // Leftmost of the trailing group, and the odd one out stylistically on
+                    // purpose: this dismisses without doing anything to the result, unlike Copy
+                    // and Use beside it. `.cancelAction` is what keeps Esc working — SwiftUI does
+                    // not dismiss a macOS sheet on Esc by itself; a button bound to it is what does.
+                    Button("Close") { dismiss() }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("generator.close")
 
-                Button("Use") {
-                    onUse(result)
-                    dismiss()
+                    // Copy puts the result on the clipboard (through the app's one
+                    // `ClipboardService`, auto-clear and concealed-pasteboard markers included —
+                    // see that type) and leaves the sheet open, e.g. to keep tweaking the recipe.
+                    Button("Copy") { clipboard.copy(result) }
+                        .accessibilityIdentifier("generator.copy")
+                        .disabled(result.isEmpty)
+
+                    // Use exists only where there is something to use it ON — see this type's own
+                    // doc comment on why `onUse` is optional rather than a toolbar-only "Use" that
+                    // silently did the same thing as Copy.
+                    if let onUse {
+                        Button("Use") {
+                            onUse(result)
+                            dismiss()
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("generator.use")
+                        .disabled(result.isEmpty)
+                    }
                 }
-                .keyboardShortcut(.defaultAction)
-                .accessibilityIdentifier("generator.use")
-                .disabled(result.isEmpty)
+
+                // Issue #3's "show the machinery" rule: the countdown that follows a Copy is real
+                // app behavior, not a fixed constant, so this reads the live, user-configurable
+                // value rather than restating whatever `ClipboardService`'s own default happens to
+                // be right now.
+                Text("Clipboard clears after \(Int(clipboard.clearInterval))s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("generator.clipboardTimeout")
             }
         }
         .padding(20)
