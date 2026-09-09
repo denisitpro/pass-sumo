@@ -185,10 +185,11 @@ struct EntryEditView: View {
         }
     }
 
-    /// Add / remove attachments. Viewing, previewing and exporting them lives in
-    /// `EntryDetailView` — this sheet is only the mutation surface, which is why there is no
-    /// preview here: rendering the payload would put a second copy of secret bytes on screen in a
-    /// context where nobody asked to look at it.
+    /// Add / remove / export attachments. Preview still lives only in `EntryDetailView` — issue
+    /// #52 separated "why no export" from "why no preview": a save-panel write is a user-initiated
+    /// egress the same way it is in the detail view, but rendering the payload on screen would
+    /// still put a second copy of secret bytes where nobody asked to look at it, so that part of
+    /// the original reasoning stands and preview stays detail-view-only.
     private var attachmentsSection: some View {
         Section("Attachments") {
             ForEach($attachments) { $draft in
@@ -201,6 +202,18 @@ struct EntryEditView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                    // Export before remove: the destructive control must not be the first thing
+                    // under the cursor for a row whose other action is harmless.
+                    Button {
+                        exportAttachment(draft)
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Save this attachment to a file")
+                    .accessibilityLabel("Save attachment")
+                    .accessibilityIdentifier("edit.saveAttachment.\(draft.attachment.name)")
+
                     Button(role: .destructive) {
                         attachments.removeAll { $0.id == draft.id }
                     } label: {
@@ -276,6 +289,30 @@ struct EntryEditView: View {
         }
 
         attachmentError = problems.isEmpty ? nil : problems.joined(separator: "\n")
+    }
+
+    /// Writes one attachment's bytes through `AttachmentExporter` — the same `NSSavePanel` path
+    /// `EntryDetailView` uses, reused rather than duplicated (issue #52). Resolved on demand,
+    /// exactly like the detail view's own export button, rather than pre-resolved into cached row
+    /// state: this sheet has no `rebuildAttachmentRows()`-style machinery, and adding one purely to
+    /// mirror the detail view would be more code than a rare click justifies.
+    private func exportAttachment(_ draft: AttachmentDraft) {
+        guard let payload = payload(for: draft) else {
+            attachmentError = "\(draft.attachment.name) could not be exported."
+            return
+        }
+        attachmentError = AttachmentExporter.export(payload, suggestedName: draft.attachment.name)
+    }
+
+    /// An attachment's bytes, from wherever they currently live. A file added THIS session carries
+    /// its own bytes in `addedBlob` (see that property's doc comment — it is not pooled into the
+    /// vault until `save()` calls `upsert`); anything already in the vault resolves through the
+    /// store's own state, the same `Vault.bytes(for:)` indirection `VaultBrowserView` hands
+    /// `EntryDetailView` as `resolveAttachment`.
+    private func payload(for draft: AttachmentDraft) -> Data? {
+        if let addedBlob = draft.addedBlob { return addedBlob.bytes }
+        guard case .unlocked(let vault) = store.state else { return nil }
+        return vault.bytes(for: draft.attachment)
     }
 
     /// Gives a second `Screenshot.png` a numeric suffix rather than letting it silently replace (or
