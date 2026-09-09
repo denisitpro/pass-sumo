@@ -387,4 +387,21 @@ final class BrowserLogicTests: XCTestCase {
             wasRevealed: false, previousEntryID: id, currentEntryID: id, isLocked: false
         ))
     }
+
+    // MARK: - GeneratorSheet's optional "Use" (issue #45)
+
+    /// `VaultBrowserView`'s toolbar presentation has no field to fill, so it passes no `onUse` at
+    /// all — this is what makes `GeneratorSheet` hide "Use" instead of offering a button that
+    /// silently duplicates "Copy", which was the whole reason the owner couldn't tell them apart.
+    func testGeneratorSheetHasNoUseActionWhenTheCallerProvidesNone() {
+        let sheet = GeneratorSheet(generator: PasswordGenerator(), clipboard: ClipboardService())
+        XCTAssertNil(sheet.onUse)
+    }
+
+    /// `EntryEditView`'s "Generate…" call site has a password field to fill, so it provides
+    /// `onUse` — this is what makes "Use" appear there.
+    func testGeneratorSheetHasAUseActionWhenTheCallerProvidesOne() {
+        let sheet = GeneratorSheet(generator: PasswordGenerator(), clipboard: ClipboardService(), onUse: { _ in })
+        XCTAssertNotNil(sheet.onUse)
+    }
 }

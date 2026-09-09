@@ -257,10 +257,11 @@ struct VaultBrowserView: View {
             )
         }
         .sheet(isPresented: $showingGenerator) {
-            // Opened from the toolbar, with no target field to fill — "Use" here just copies to
-            // the clipboard and closes, same as "Copy" without the extra click. The field-filling
-            // meaning of "Use" only exists at `EntryEditView`'s own "Generate…" call site.
-            GeneratorSheet(generator: generator, clipboard: clipboard, onUse: { clipboard.copy($0) })
+            // Opened from the toolbar, with no target field to fill — `onUse` is `nil` so
+            // `GeneratorSheet` hides "Use" entirely rather than offering a button that just
+            // duplicates "Copy" with no explanation (issue #45). The field-filling meaning of
+            // "Use" only exists at `EntryEditView`'s own "Generate…" call site.
+            GeneratorSheet(generator: generator, clipboard: clipboard)
         }
         // Both countdowns are live values, not placeholders: `AutoLockController` and
         // `ClipboardService` are each `@Observable` and tick their own published second counters, so
