@@ -5,34 +5,38 @@ The mark is drawn from geometry in this file, not extracted from source art, so
 every edge stays crisp at every exported size and the whole icon is one command
 away from being re-rendered in a different colour or proportion.
 
-Two concepts are implemented; pick one with --concept:
+Three concepts are implemented; pick one with --concept:
 
-  c1  "Lock monogram" — a padlock whose shackle is placed off-centre so the
-      silhouette also reads as a P: the body's left edge and the shackle's left
-      leg share one vertical (the stem), the arch closes onto the body's top
-      edge (the bowl), and the body runs on to the right as the lock mass.
-      Solid body with the keyhole punched clean through to the tile.
+  c1  "Keyhole P" — a bold monoline capital P whose counter *is* a keyhole:
+      a bore concentric with the bowl, plus a slot tapering into the bowl's
+      lower stroke and stopping short of its outer edge, so the bowl stays
+      closed and the letter stays a letter. Shipped.
 
-  c2  "Ribbon padlock" — no letter. A padlock built from constant-width ribbon
-      with mitred corners: a rectangle ring for the body, an arc of the same
-      width for the shackle, and a solid keyhole floating in the counter.
+  c3  "Thin P" — the same idea in a thin constructed weight. A thin stroke
+      cannot carry a keyhole as its counter (see `letter_p`), so the counter
+      is a plain circle with a small keyhole nested inside it.
 
-Both sit on a deep navy tile (palette C accent-800 -> accent-900) with the mark
-in a vivid azure gradient, plus a soft drop shadow and a light upper-left edge
-highlight. See design/logo/README.md for the colour tokens and their provenance,
-and for the verified Apple geometry the CANVAS/TILE/CORNER_RADIUS numbers encode.
+  c2  "Padlock" — no letter. A symmetric solid padlock with the keyhole
+      punched through, under a constant-width shackle arc. Kept as the safe
+      fallback; it is the system lock glyph in brand colours.
+
+All sit on a deep navy tile (palette C accent-800 -> accent-900) with the mark
+in an azure gradient and a light upper-left edge highlight. There is no drop
+shadow: it greyed the tile and cost a whole art tier. See design/logo/README.md
+for the colour tokens and their provenance, and for the verified Apple geometry
+the CANVAS/TILE/CORNER_RADIUS numbers encode.
 
 Small sizes get different, simpler art on purpose (normal macOS practice — the
-asset catalog supports per-size art): gradients, shadows and edge highlights all
-turn to mush below ~64px, so those tiers use a flat azure mark on a flat navy
-tile, and the smallest tier drops the keyhole too.
+asset catalog supports per-size art), and that art is deliberately larger and
+heavier than the full-art mark, so shrinking the large mark for air costs
+nothing at 16px.
 
 Usage:
     python3 design/logo/make-appicon.py --concept c1
-    python3 design/logo/make-appicon.py --concept c2 --out /tmp/c2-appiconset
+    python3 design/logo/make-appicon.py --concept c3 --out /tmp/c3-appiconset
 
     # preview only, no asset catalog written:
-    python3 design/logo/make-appicon.py --concept c2 --skip-appicon
+    python3 design/logo/make-appicon.py --concept c3 --skip-appicon
 
 Requires: Pillow (no numpy).
 """
@@ -100,15 +104,18 @@ A = {
 # it sits inside the brand rather than beside it. Provenance in README.md.
 AZURE = "#25C9ED"
 
-TILE_STOPS = [(0.0, A[800]), (1.0, A[900])]     # top -> bottom, slightly diagonal
-TILE_AXIS = ((0.15, 0.0), (0.85, 1.0))
-# Front-loaded on purpose, and only mildly. A plain two-stop ramp left most of
-# the mark's area mid-gradient and the icon read as mid-teal rather than azure;
-# ramping to full azure too early (tried accent-500 -> azure by 22%) put a
-# visible diagonal crease across the stem. Reaching azure at 55% along a long
-# axis gives smooth shading with the upper two thirds at the azure itself.
-MARK_STOPS = [(0.0, A[400]), (0.55, AZURE), (1.0, AZURE)]
-MARK_AXIS = ((0.05, 1.00), (0.85, 0.15))
+# Tile: a diagonal from a light top-left corner into the ramp's darkest step,
+# which most of the tile sits at. Deep enough to read as material rather than
+# as a slab, without inventing a hex darker than the ramp holds.
+TILE_STOPS = [(0.0, A[800]), (0.62, A[900]), (1.0, A[900])]
+TILE_AXIS = ((0.0, 0.0), (1.0, 1.0))
+
+# Mark: the full ramp, accent-500 at the mark's bottom-left corner to the
+# measured azure at its top-right. Spent across the mark's own bounding box
+# (see render_master), so it is visible at 256px instead of nearly flat.
+# accent-500 rather than the darker accent-700 the ramp offers: at accent-700
+# the stem's foot sinks into the tile it sits on.
+MARK_STOPS = [(0.0, A[500]), (1.0, AZURE)]
 # The tile's outermost band, darkened rather than lit: a lighter rim (tried at
 # accent-700) reads as a drawn outline around the icon, which dates it. Landing
 # on the gradient's own dark end instead just deepens the edge.
@@ -258,6 +265,7 @@ def arc_points(
 CONCEPTS = {
     "c1": "Keyhole P",
     "c2": "Padlock",
+    "c3": "Thin P",
 }
 
 
@@ -283,53 +291,108 @@ def keyhole_shapes(cx: float, cy: float, r: float, slot_bottom: float) -> list:
     ]
 
 
-def geometry_c1(tier: str) -> tuple[list, list]:
-    """A letter P whose counter *is* a keyhole.
+def letter_p(
+    cap_h: float,
+    stroke: float,
+    bowl_ratio: float,
+    slot_inset: float | None = None,
+    nested: tuple[float, float, float] | None = None,
+) -> tuple[list, float]:
+    """A monoline capital P, laid out with the stem's left edge at x=0 and the
+    cap line at y=0. Returns (ops, width).
 
-    The bowl is a D — a disc plus the block bridging it to the stem — and the
-    counter punched out of it is a keyhole: a circular bore concentric with
-    that disc, plus a slot tapering down into the bowl's lower stroke but
-    stopping short of its outer edge, so the bowl stays closed and the letter
-    stays a letter.
+    One construction serves every weight. `stroke` is both the stem width and
+    the bowl's stroke — equal by design, which is what makes the letterform
+    read as deliberate rather than drawn. The bowl is a D: the disc plus the
+    block bridging it to the stem. All terminals are flat and square; there is
+    exactly one terminal treatment and no corner rounding anywhere.
 
-    Making the counter concentric with the bowl at `bowl_r - stroke` is what
-    keeps the bowl's stroke even all the way round; the stem's right edge then
-    lands exactly tangent to the counter, which is where a P's stem belongs.
+    The counter is concentric with the bowl disc at `bowl_r - stroke`. That
+    single choice keeps the bowl's weight even all the way round *and* puts the
+    stem's right edge exactly tangent to the counter, which is where a P's stem
+    belongs in type.
+
+    Two ways to get the keyhole into it:
+
+    `slot_inset` — the counter itself is punched as a keyhole: bore plus a slot
+    tapering into the bowl's lower stroke, ending `slot_inset` above its outer
+    edge so the bowl stays closed. This needs a heavy stroke to work at all:
+    slot depth is only ever `stroke - slot_inset`, while the bore radius is
+    `bowl_r - stroke`, so a readable keyhole requires stroke ~= half the bowl
+    radius. A thin letterform structurally cannot carry a keyhole as its
+    counter — hence the second mode.
+
+    `nested` — (bore_r, slot_len, dy): the counter is a plain circle and a
+    small solid keyhole is placed inside it, offset by `dy`. This is the thin
+    weight's only option.
     """
-    top, bottom = 0.140, 0.860
-    bowl_r = 0.270
-    stem_w = 0.180 if tier == "minimal" else 0.160
-    stroke = 0.165 if tier == "minimal" else 0.150
+    bowl_h = cap_h * bowl_ratio
+    bowl_r = bowl_h / 2
     counter_r = bowl_r - stroke
+    if counter_r <= 0:
+        raise ValueError("stroke is too heavy for this bowl — counter would vanish")
+    bowl_cx = stroke + counter_r
+    bowl_cy = bowl_r
+    width = bowl_cx + bowl_r
 
-    # Laid out from x=0, then translated so the bounding box is centred — the
-    # per-tier stroke weights would otherwise shift the mark sideways.
-    stem_right = stem_w
-    bowl_cx = stem_right + counter_r
-    dx = 0.5 - (bowl_cx + bowl_r) / 2
-    stem_left, stem_right, bowl_cx = dx, dx + stem_w, dx + bowl_cx
-    bowl_cy = top + bowl_r
-    bowl_bottom = top + 2 * bowl_r
-
-    add = [
-        ("rect", stem_left, top, stem_right, bottom, 0.018),
-        ("ellipse", bowl_cx - bowl_r, top, bowl_cx + bowl_r, bowl_bottom),
-        ("rect", stem_left, top, bowl_cx, bowl_bottom, 0.0),
+    ops: list[tuple[str, list]] = [
+        (
+            "add",
+            [
+                ("rect", 0.0, 0.0, stroke, cap_h, 0.0),
+                ("ellipse", bowl_cx - bowl_r, 0.0, bowl_cx + bowl_r, bowl_h),
+                ("rect", 0.0, 0.0, bowl_cx, bowl_h, 0.0),
+            ],
+        )
     ]
-    if tier == "minimal":
-        # A slot this thin disappears at 16px and only muddies the bore, so
-        # the counter stays a plain circle there.
-        punch = [("ellipse", bowl_cx - counter_r, bowl_cy - counter_r,
-                  bowl_cx + counter_r, bowl_cy + counter_r)]
+    if slot_inset is not None:
+        ops.append(("punch", [("keyhole", bowl_cx, bowl_cy, counter_r, bowl_h - slot_inset)]))
     else:
-        # The slot stops roughly half a stroke short of the bowl's outer edge:
-        # any deeper and the strip of bowl left under it reads as an accident
-        # rather than as the plate the keyhole is cut into.
-        punch = [("keyhole", bowl_cx, bowl_cy, counter_r, bowl_bottom - 0.070)]
-    return add, punch
+        ops.append(
+            (
+                "punch",
+                [("ellipse", bowl_cx - counter_r, bowl_cy - counter_r,
+                  bowl_cx + counter_r, bowl_cy + counter_r)],
+            )
+        )
+        if nested is not None:
+            bore_r, slot_len, dy = nested
+            cy = bowl_cy + dy
+            ops.append(("add", [("keyhole", bowl_cx, cy, bore_r, cy + slot_len)]))
+    return ops, width
 
 
-def geometry_c2(tier: str) -> tuple[list, list]:
+# Per-tier letterform parameters. The small tiers are deliberately *larger and
+# heavier* than the full-art tier — standard practice, and what lets the
+# large-size mark shrink for air without costing 16px legibility.
+P_PARAMS = {
+    "c1": {
+        "full": dict(cap_h=0.650, stroke=0.115, bowl_ratio=0.64, slot_inset=0.045),
+        "simplified": dict(cap_h=0.680, stroke=0.122, bowl_ratio=0.66, slot_inset=0.040),
+        "minimal": dict(cap_h=0.700, stroke=0.130, bowl_ratio=0.70),
+    },
+    # C3's identity — the thin constructed line — exists only at the full-art
+    # sizes. Below that the stroke and the nested keyhole both fall under a
+    # pixel, so its small tiers converge on C1's. That is a real cost of the
+    # thin direction, not a shortcut.
+    "c3": {
+        "full": dict(cap_h=0.660, stroke=0.070, bowl_ratio=0.62,
+                     nested=(0.048, 0.105, -0.030)),
+        "simplified": dict(cap_h=0.680, stroke=0.100, bowl_ratio=0.64, slot_inset=0.035),
+        "minimal": dict(cap_h=0.700, stroke=0.130, bowl_ratio=0.70),
+    },
+}
+
+
+def geometry_p(concept: str, tier: str) -> list[tuple[str, list]]:
+    ops, width = letter_p(**P_PARAMS[concept][tier])
+    cap_h = P_PARAMS[concept][tier]["cap_h"]
+    ops = translate_ops(ops, (1.0 - width) / 2, (1.0 - cap_h) / 2)
+    dx, dy = optical_correction(ops)
+    return translate_ops(ops, dx, dy)
+
+
+def geometry_c2(tier: str) -> list[tuple[str, list]]:
     """A padlock, symmetric and solid: a rounded body with the keyhole punched
     clean through to the tile, under a constant-width shackle arc."""
     width = 0.145 if tier == "minimal" else 0.125
@@ -339,15 +402,69 @@ def geometry_c2(tier: str) -> tuple[list, list]:
         + arc_points(arc_cx, arc_cy, arc_r, 180, 0)
         + [(arc_cx + arc_r, 0.500)]
     )
-    add = [
-        ("rect", 0.175, 0.470, 0.825, 0.870, 0.075),
-        ("stroke", shackle, False, width),
+    ops = [
+        ("add", [("rect", 0.175, 0.470, 0.825, 0.870, 0.075),
+                 ("stroke", shackle, False, width)]),
     ]
-    punch = [] if tier == "minimal" else [("keyhole", 0.500, 0.612, 0.072, 0.782)]
-    return add, punch
+    if tier != "minimal":
+        ops.append(("punch", [("keyhole", 0.500, 0.612, 0.072, 0.782)]))
+    return ops
 
 
-GEOMETRY = {"c1": geometry_c1, "c2": geometry_c2}
+GEOMETRY = {
+    "c1": lambda tier: geometry_p("c1", tier),
+    "c2": geometry_c2,
+    "c3": lambda tier: geometry_p("c3", tier),
+}
+
+
+# --- Placement -------------------------------------------------------------
+
+# A P is left-heavy: the stem is full-height ink on the left, the bowl mass is
+# upper-right, and the lower-right quadrant is empty. Centring its bounding box
+# therefore puts its centre of *ink* left of the tile's centre and the mark
+# looks shoved sideways, so it is nudged right by part of that offset (the full
+# offset overshoots — the classic optical-centring overcorrection).
+#
+# Horizontally only. A P is also top-heavy, but the eye places a letter
+# vertically by its cap and baseline, not by its mass: correcting vertically
+# too pushed the mark visibly low in the tile (bottom margin measurably
+# smaller than the top). Cap height and baseline stay box-centred.
+OPTICAL_CORRECTION_X = 0.55
+
+
+def translate_ops(ops: list[tuple[str, list]], dx: float, dy: float) -> list[tuple[str, list]]:
+    def move(prim):
+        kind = prim[0]
+        if kind == "rect":
+            return (kind, prim[1] + dx, prim[2] + dy, prim[3] + dx, prim[4] + dy, prim[5])
+        if kind == "ellipse":
+            return (kind, prim[1] + dx, prim[2] + dy, prim[3] + dx, prim[4] + dy)
+        if kind == "keyhole":
+            return (kind, prim[1] + dx, prim[2] + dy, prim[3], prim[4] + dy)
+        if kind == "stroke":
+            return (kind, [(x + dx, y + dy) for x, y in prim[1]], prim[2], prim[3])
+        raise ValueError(f"unknown primitive {kind!r}")
+
+    return [(mode, [move(p) for p in prims]) for mode, prims in ops]
+
+
+def optical_correction(ops: list[tuple[str, list]], ss: int = 320) -> tuple[float, float]:
+    """How far to move an already box-centred mark so its centre of ink lands
+    nearer the tile centre. Measured from the rendered mask, not guessed."""
+    mask = compose_mask(ops, ss)
+    px = mask.load()
+    weight = mx = 0
+    for y in range(ss):
+        for x in range(ss):
+            a = px[x, y]
+            if a:
+                weight += a
+                mx += a * x
+    if not weight:
+        raise RuntimeError("mark mask is empty — check the geometry parameters")
+    cx = (mx / weight + 0.5) / ss
+    return OPTICAL_CORRECTION_X * (0.5 - cx), 0.0
 
 
 # --- Mask assembly ---------------------------------------------------------
@@ -377,15 +494,20 @@ def _draw_primitives(draw: ImageDraw.ImageDraw, prims: list, ss: int) -> None:
             raise ValueError(f"unknown primitive {kind!r}")
 
 
-def mark_mask(concept: str, tier: str, ss: int) -> Image.Image:
-    add, punch = GEOMETRY[concept](tier)
+def compose_mask(ops: list[tuple[str, list]], ss: int) -> Image.Image:
+    """Apply add/punch layers in order. Order matters: C3 punches its counter
+    and then adds a keyhole inside it, which a single add-then-punch pass would
+    erase."""
     mask = Image.new("L", (ss, ss), 0)
-    _draw_primitives(ImageDraw.Draw(mask), add, ss)
-    if punch:
-        hole = Image.new("L", (ss, ss), 0)
-        _draw_primitives(ImageDraw.Draw(hole), punch, ss)
-        mask = ImageChops.subtract(mask, hole)
+    for mode, prims in ops:
+        layer = Image.new("L", (ss, ss), 0)
+        _draw_primitives(ImageDraw.Draw(layer), prims, ss)
+        mask = ImageChops.lighter(mask, layer) if mode == "add" else ImageChops.subtract(mask, layer)
     return mask
+
+
+def mark_mask(concept: str, tier: str, ss: int) -> Image.Image:
+    return compose_mask(GEOMETRY[concept](tier), ss)
 
 
 # --- Tile composition ------------------------------------------------------
@@ -428,19 +550,18 @@ def render_master(concept: str, tier: str, ss: int = SUPERSAMPLE) -> Image.Image
 
     mask = mark_mask(concept, tier, ss)
 
+    # No drop shadow. It was the one thing greying the tile, and it is what
+    # pushed the full-art cutover up to 128px; without it the full art holds
+    # at 64px (verified by rendering both). The edge highlight below is the
+    # only dimensional cue, and it costs the tile nothing.
     if full:
-        # Just enough shadow to lift the mark off the tile. Anything heavier
-        # reads as 2010-era skeuomorphism rather than as depth.
-        shadow = mask.filter(ImageFilter.GaussianBlur(ss * 0.010))
-        shadow = ImageChops.offset(shadow, 0, int(round(ss * 0.008)))
-        shadow = shadow.point(lambda a: int(a * 0.24))
-        layer.paste(Image.new("RGB", (ss, ss), (0, 0, 0)), (0, 0), shadow)
-
-    fill = (
-        linear_gradient(ss, MARK_STOPS, *MARK_AXIS)
-        if full
-        else Image.new("RGB", (ss, ss), rgb(FLAT_MARK))
-    )
+        # The gradient axis is taken from the mark's own bounding box, corner
+        # to corner, so the whole ramp is spent on the mark instead of on empty
+        # tile. That is what makes the gradient actually visible at 256px.
+        x0, y0, x1, y1 = (v / ss for v in mask.getbbox())
+        fill = linear_gradient(ss, MARK_STOPS, (x0, y1), (x1, y0))
+    else:
+        fill = Image.new("RGB", (ss, ss), rgb(FLAT_MARK))
     layer.paste(fill, (0, 0), mask)
 
     if full:
