@@ -480,7 +480,12 @@ public struct KDBXWriter {
         // (KeePass and KeePassXC do the same). Safe for lazyInnerCipher
         // values: they decrypt with the reader's retained keystream
         // source and re-encrypt with the writer's fresh encryptor. The
-        // key length is fixed per algorithm.
+        // fresh key is emitted at the CONVENTIONAL length for the
+        // algorithm — 64 bytes for ChaCha20, 32 for Salsa20 — which is what
+        // KeePass and KeePassXC write. `K` is hashed, so other lengths are
+        // legal and the reader accepts them (see `InnerHeader.CryptorError`);
+        // the writer nonetheless sticks to the convention, because there is
+        // no upside to being the odd client out.
         var newInnerHeader = content.innerHeader
         let innerKeyLength: Int
         switch newInnerHeader.encryptionAlgorithm {

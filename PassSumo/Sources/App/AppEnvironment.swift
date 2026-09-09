@@ -326,12 +326,28 @@ extension VaultError {
             return "This isn't a KDBX database file."
         case .unsupportedVersion(let version):
             return "Unsupported KDBX version: \(version)."
-        case .corrupted(let detail):
-            return "The database file looks corrupted: \(detail)"
+        case .corrupted(let message, _):
+            // The message is already a complete sentence written for this screen, and it is NOT
+            // prefixed with a verdict like "looks corrupted": several of the errors mapped onto
+            // this case are not corruption at all (see `KDBXErrorMapping`). The technical half
+            // lives in `diagnosticDetail` and is rendered separately.
+            return message
         case .unsupportedFeature(let feature):
             return "This database uses a feature pass-sumo doesn't support yet: \(feature)"
         case .io(let detail):
             return "Couldn't read the file: \(detail)"
+        }
+    }
+
+    /// The raw text from the layer that failed, for a bug report — never the primary message.
+    ///
+    /// `nil` for every error whose whole content is already a sentence a person can act on.
+    var diagnosticDetail: String? {
+        switch self {
+        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io:
+            return nil
+        case .corrupted(_, let diagnostic):
+            return diagnostic
         }
     }
 }

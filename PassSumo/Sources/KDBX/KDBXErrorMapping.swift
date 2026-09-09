@@ -7,6 +7,14 @@ import KDBXKit
 /// adds an error case must then fail the build here rather than silently falling into whichever
 /// bucket the `default` happened to name — which, for a password manager, means the difference
 /// between telling a user their file is damaged and telling them their password is wrong.
+///
+/// The other rule here: **a message must not name a cause the error does not carry.** KDBXKit's
+/// error cases say which stage failed, not why, and inventing a why sends the user looking for
+/// damage that may not exist. `corruptedInnerHeader` used to be reported as "the database's
+/// attachment table is damaged" — but in KDBX 4 the inner header carries the attachment pool AND
+/// the inner random-stream cipher parameters, and the failure that actually shipped was neither
+/// corruption nor attachments (issue #30). Where the stage is known but the cause is not, the
+/// message says so and the library's own text goes in the `diagnostic` payload.
 enum KDBXErrorMapping {
     /// `fileData` is only used to run the Argon2-v1.0 probe on the one error that needs it; nothing
     /// here reads or retains the file's contents otherwise.
@@ -67,32 +75,51 @@ enum KDBXErrorMapping {
                         + "Argon2 version 1.3), then reopen it here."
                 )
             }
-            return .corrupted("The database header is damaged: \(reason)")
+            return .corrupted("The database header is damaged.", diagnostic: reason)
 
         case .corruptedHeaderDigest:
             return .corrupted(
-                "The database header failed its checksum — the file was modified or truncated in transit."
+                "The database header failed its checksum — the file was modified or truncated in transit.",
+                diagnostic: nil
             )
 
         case let .corruptedHMAC(reason):
             return .corrupted(
-                "The database failed its authentication check, so its contents cannot be trusted: \(reason)"
+                "The database failed its authentication check, so its contents cannot be trusted.",
+                diagnostic: reason
             )
 
         case let .corruptedInnerHeader(reason):
-            return .corrupted("The database's attachment table is damaged: \(reason)")
+            // Deliberately silent about the cause, because this error does not know it. The inner
+            // header carries the attachment pool AND the inner random-stream cipher parameters,
+            // and reaching it at all means the password was right and the HMAC passed — so
+            // "damaged" is a guess, and one that has already been wrong in production (issue #30).
+            return .corrupted(
+                "PassSumo could not read this database's internal index. The file decrypted and "
+                    + "passed its integrity check, so your password is correct and the file is "
+                    + "intact — but something inside it is either damaged or in a shape PassSumo "
+                    + "does not understand yet.",
+                diagnostic: reason
+            )
 
         case let .corruptedXML(reason):
-            return .corrupted("The database decrypted but its contents could not be parsed: \(reason)")
+            return .corrupted(
+                "The database decrypted but its contents could not be parsed.",
+                diagnostic: reason
+            )
 
         case let .decompressedPayloadTooLarge(limit):
             return .corrupted(
                 "The database expands to more than \(limit / 1_048_576) MB when decompressed, "
-                    + "which means it is damaged or deliberately malformed."
+                    + "which means it is damaged or deliberately malformed.",
+                diagnostic: nil
             )
 
         case .unexpectedEOF:
-            return .corrupted("The file ends earlier than its header says it should — it is truncated.")
+            return .corrupted(
+                "The file ends earlier than its header says it should — it is truncated.",
+                diagnostic: nil
+            )
 
         case .unlockDataRequired:
             // Unreachable from this codec: `decode` always passes credentials, and the header peek
@@ -117,7 +144,10 @@ enum KDBXErrorMapping {
             return .io("Could not write the database header: \(reason)")
 
         case let .innerHeaderSerializationFailed(reason):
-            return .io("Could not write the database's attachment table: \(reason)")
+            // Same overclaim as the read direction used to make: the inner header is the
+            // attachment pool *and* the inner random-stream parameters, so naming attachments
+            // guesses at a cause the error does not carry.
+            return .io("Could not write the database's internal index: \(reason)")
 
         case let .xmlSerializationFailed(reason):
             return .io("Could not write the database's contents: \(reason)")
@@ -139,13 +169,15 @@ enum KDBXErrorMapping {
         case let .danglingBinaryRef(entryUUID, ref, poolCount):
             return .corrupted(
                 "Refusing to save: entry \(entryUUID) references attachment \(ref), but the "
-                    + "database only holds \(poolCount). Saving would lose the attachment."
+                    + "database only holds \(poolCount). Saving would lose the attachment.",
+                diagnostic: nil
             )
 
         case let .binarySourceCountMismatch(sources, poolEntries):
             return .corrupted(
                 "Refusing to save: \(sources) attachment sources for \(poolEntries) attachment "
-                    + "records. Saving would lose data."
+                    + "records. Saving would lose data.",
+                diagnostic: nil
             )
         }
     }

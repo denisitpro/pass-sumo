@@ -106,6 +106,17 @@ struct UnlockView: View {
                     .accessibilityIdentifier("unlock.error")
             }
 
+            // The library's own words, kept out of the line above and selectable so they can be
+            // pasted into a bug report. Secondary on purpose: a user cannot act on it, but
+            // without it a "PassSumo could not read this database" report carries no evidence.
+            if let diagnostic = environment.store.lastError?.diagnosticDetail {
+                Text(diagnostic)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("unlock.errorDetail")
+            }
+
             if canOfferEnrollment {
                 Toggle("Remember with Touch ID", isOn: $rememberWithTouchID)
                     .disabled(isUnlocking)
