@@ -71,6 +71,13 @@ struct UnlockView: View {
         return !environment.biometrics.isEnabled(for: identifier)
     }
 
+    /// The content column's width. A minimum with no maximum (the pre-#32 behaviour) let a wide
+    /// window stretch a single-line password field into an unreadable hairline running edge to
+    /// edge — nothing on this screen benefits from being wider than this, so it is now a cap, and
+    /// the `.frame(maxWidth: .infinity)` below centres that capped column in whatever window the
+    /// user has.
+    private static let contentWidth: CGFloat = 360
+
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "lock.doc")
@@ -90,15 +97,27 @@ struct UnlockView: View {
                 .truncationMode(.middle)
                 .accessibilityIdentifier("unlock.path")
 
-            SecureField("Master Password", text: $password)
-                .textFieldStyle(.roundedBorder)
-                .disabled(isUnlocking)
-                .accessibilityIdentifier("unlock.password")
-                .onSubmit { Task { await submit() } }
+            // The field sits next to the button that submits it (issue #32: the old `Spacer()`
+            // pinned "Unlock" to the far right edge of a wide window, metres from the field).
+            HStack(spacing: 8) {
+                MasterPasswordField(
+                    placeholder: "Master Password",
+                    text: $password,
+                    isDisabled: isUnlocking,
+                    fieldIdentifier: "unlock.password",
+                    revealIdentifier: "unlock.password.reveal"
+                )
 
+                Button("Unlock") { Task { await submit() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isUnlocking || password.isEmpty)
+                    .accessibilityIdentifier("unlock.submit")
+            }
             // A wrong password must show inline WITHOUT clearing the field (brief) — `password`
             // here is never reset on failure, only on a successful transition away from this view
             // (which un-mounts it entirely).
+            .onSubmit { Task { await submit() } }
+
             if let message = environment.store.lastError?.displayMessage ?? biometricFailure {
                 Text(message)
                     .font(.callout)
@@ -128,27 +147,19 @@ struct UnlockView: View {
                     .controlSize(.small)
             }
 
-            HStack {
-                if canOfferBiometrics {
-                    Button {
-                        Task { await unlockWithBiometrics() }
-                    } label: {
-                        Label("Unlock with Touch ID", systemImage: "touchid")
-                    }
-                    .disabled(isUnlocking)
-                    .accessibilityIdentifier("unlock.biometric")
+            if canOfferBiometrics {
+                Button {
+                    Task { await unlockWithBiometrics() }
+                } label: {
+                    Label("Unlock with Touch ID", systemImage: "touchid")
                 }
-
-                Spacer()
-
-                Button("Unlock") { Task { await submit() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isUnlocking || password.isEmpty)
-                    .accessibilityIdentifier("unlock.submit")
+                .disabled(isUnlocking)
+                .accessibilityIdentifier("unlock.biometric")
             }
         }
         .padding(32)
-        .frame(minWidth: 380)
+        .frame(maxWidth: Self.contentWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { identifier = environment.biometricsIdentifier(for: url) }
     }
 

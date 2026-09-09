@@ -138,15 +138,21 @@ private struct CreateDatabaseSheet: View {
             Text("Create New Database")
                 .font(.headline)
 
-            SecureField("Master Password", text: $password)
-                .textFieldStyle(.roundedBorder)
-                .disabled(isCreating)
-                .accessibilityIdentifier("welcome.create.password")
+            MasterPasswordField(
+                placeholder: "Master Password",
+                text: $password,
+                isDisabled: isCreating,
+                fieldIdentifier: "welcome.create.password",
+                revealIdentifier: "welcome.create.password.reveal"
+            )
 
-            SecureField("Confirm Password", text: $confirmation)
-                .textFieldStyle(.roundedBorder)
-                .disabled(isCreating)
-                .accessibilityIdentifier("welcome.create.confirm")
+            MasterPasswordField(
+                placeholder: "Confirm Password",
+                text: $confirmation,
+                isDisabled: isCreating,
+                fieldIdentifier: "welcome.create.confirm",
+                revealIdentifier: "welcome.create.confirm.reveal"
+            )
 
             if environment.settings.showPasswordStrength, !password.isEmpty {
                 PasswordStrengthMeter(bits: environment.generator.strength(of: password))
