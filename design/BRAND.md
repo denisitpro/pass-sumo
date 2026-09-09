@@ -124,8 +124,14 @@ cards/sheets/the window, `pill` for progress tracks.
 | `border-focus-width` | 2 |
 | `row-entry-h` | 34 |
 | `row-sidebar-h` | 26 |
-| `toolbar-h` | 44 |
+| `toolbar-h` | 44 † |
 | `statusbar-h` | 26 |
+
+† `toolbar-h` is **descriptive of the mockup only**. The window toolbar's height belongs to AppKit:
+under `.windowToolbarStyle(.unified)` the real `NSTitlebarContainerView` measures **52pt** (measured
+2026-09-09 by rendering that exact scene off-screen), and SwiftUI's `.toolbar` exposes no height
+knob. Nothing in the Swift mirror consumes this value, and nothing can — do not try to force 44.
+`row-entry-h`, `row-sidebar-h` and `statusbar-h` are all real and are applied.
 
 Entry-row separators are **inset**: the hairline starts at the row's leading padding
 (`space-5` = 12), not at the pane edge.
