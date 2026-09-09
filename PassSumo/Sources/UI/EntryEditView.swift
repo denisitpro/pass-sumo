@@ -105,7 +105,8 @@ struct EntryEditView: View {
                         "The vault locked while you were editing. This entry was NOT saved.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
-                    .foregroundStyle(.red)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.danger)
                 }
             }
 
@@ -133,13 +134,13 @@ struct EntryEditView: View {
 
             Section("One-Time Password") {
                 TextField("otpauth:// URL or base32 secret", text: $otpAuthURLText)
-                    .font(.system(.body, design: .monospaced))
+                    .font(Typography.monoBody)
                     .accessibilityIdentifier("edit.totp")
             }
 
             Section("Custom Fields") {
                 ForEach($customFields) { $field in
-                    HStack {
+                    HStack(spacing: Spacing.s4) {
                         TextField("Name", text: $field.name)
                         TextField("Value", text: $field.value)
                         Button(role: .destructive) {
@@ -147,7 +148,7 @@ struct EntryEditView: View {
                         } label: {
                             Image(systemName: "minus.circle")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.tokenDestructiveGlyph)
                     }
                 }
                 Button("Add Field") {
@@ -193,15 +194,17 @@ struct EntryEditView: View {
     private var attachmentsSection: some View {
         Section("Attachments") {
             ForEach($attachments) { $draft in
-                HStack(spacing: 8) {
+                HStack(spacing: Spacing.s4) {
                     Image(systemName: "paperclip")
-                        .foregroundStyle(.secondary)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
                     Text(draft.attachment.name)
-                    Spacer()
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.text)
+                    Spacer(minLength: 0)
                     Text(Self.byteFormatter.string(fromByteCount: Int64(draft.attachment.byteCount)))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                        .font(Typography.monoCaption2)
+                        .foregroundStyle(Palette.textTertiary)
                     // Export before remove: the destructive control must not be the first thing
                     // under the cursor for a row whose other action is harmless.
                     Button {
@@ -209,7 +212,7 @@ struct EntryEditView: View {
                     } label: {
                         Image(systemName: "square.and.arrow.down")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.tokenGlyph)
                     .help("Save this attachment to a file")
                     .accessibilityLabel("Save attachment")
                     .accessibilityIdentifier("edit.saveAttachment.\(draft.attachment.name)")
@@ -219,7 +222,7 @@ struct EntryEditView: View {
                     } label: {
                         Image(systemName: "minus.circle")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.tokenDestructiveGlyph)
                     .accessibilityLabel("Remove attachment")
                     .accessibilityIdentifier("edit.removeAttachment.\(draft.attachment.name)")
                 }
@@ -230,7 +233,8 @@ struct EntryEditView: View {
 
             if let attachmentError {
                 Label(attachmentError, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("edit.attachmentError")
             }
         }
@@ -359,7 +363,7 @@ struct EntryEditView: View {
 
     @ViewBuilder
     private var passwordField: some View {
-        HStack {
+        HStack(spacing: Spacing.s4) {
             Group {
                 if isPasswordVisible {
                     TextField("Password", text: $password)
@@ -367,6 +371,7 @@ struct EntryEditView: View {
                     SecureField("Password", text: $password)
                 }
             }
+            .font(Typography.monoBody)
             .accessibilityIdentifier("edit.password")
 
             Button {
@@ -374,7 +379,7 @@ struct EntryEditView: View {
             } label: {
                 Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.tokenGlyph)
             .help(isPasswordVisible ? "Hide password" : "Reveal password")
         }
     }
@@ -386,20 +391,21 @@ struct EntryEditView: View {
     /// means for a password a user typed by hand rather than one this app generated.
     private var strengthMeter: some View {
         let bits = generator.strength(of: password)
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: Spacing.s1) {
             ProgressView(value: min(bits, 100), total: 100)
                 .tint(strengthColor(for: bits))
             Text(password.isEmpty ? "No password" : "~\(Int(bits)) bits (rough guide)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption2)
+                .foregroundStyle(Palette.textTertiary)
         }
     }
 
+    /// Thresholds unchanged; only the colours moved onto the token layer's strength ramp.
     private func strengthColor(for bits: Double) -> Color {
         switch bits {
-        case ..<40: return .red
-        case ..<70: return .orange
-        default: return .green
+        case ..<40: return Palette.strengthWeak
+        case ..<70: return Palette.strengthFair
+        default: return Palette.strengthStrong
         }
     }
 

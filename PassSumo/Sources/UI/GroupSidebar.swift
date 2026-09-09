@@ -87,26 +87,64 @@ struct GroupSidebar: View {
 
     var body: some View {
         List(selection: $selectedGroupID) {
-            HStack {
-                Label("All Entries", systemImage: "tray.full")
-                Spacer()
+            sidebarRow(
+                label: "All Entries",
+                systemImage: "tray.full",
+                count: vault.liveEntries.count,
                 // Recycled entries are excluded, so this number always equals what selecting this
                 // row actually reveals (`EntryListFilter` hides them too). Counting them would
                 // leave the count unchanged when an entry is deleted — the same "nothing
                 // happened" signal that makes a user press ⌫ a second time.
-                Text("\(vault.liveEntries.count)")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
+                isSelected: selectedGroupID == nil,
+                isMuted: false
+            )
             .tag(UUID?.none)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar.allEntries")
 
             OutlineGroup(nodes, children: \.children) { node in
                 row(for: node)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Palette.sidebar)
         .navigationTitle(vault.name.isEmpty ? "PassSumo" : vault.name)
+    }
+
+    /// One sidebar row's contents: icon, label, entry count — all three taking the selection tone
+    /// together, as the mockup's `.side-row.is-selected` does.
+    private func sidebarRow(
+        label: String,
+        systemImage: String,
+        count: Int,
+        isSelected: Bool,
+        isMuted: Bool
+    ) -> some View {
+        let labelColor: Color = isSelected
+            ? Palette.rowSelectionText
+            : (isMuted ? Palette.textSecondary : Palette.text)
+        let quietColor: Color = isSelected
+            ? Palette.rowSelectionText
+            : (isMuted ? Palette.textTertiary : Palette.textSecondary)
+
+        return HStack(spacing: Spacing.s3) {
+            Image(systemName: systemImage)
+                .font(Typography.caption)
+                .foregroundStyle(quietColor)
+            Text(label)
+                .font(isSelected ? Typography.bodyMedium : Typography.body)
+                .foregroundStyle(labelColor)
+                .lineLimit(1)
+            Spacer(minLength: Spacing.s2)
+            Text("\(count)")
+                .font(Typography.monoCaption2)
+                .foregroundStyle(quietColor)
+        }
+        .sidebarRowSurface(isSelected: isSelected)
     }
 
     /// One folder row. The recycle bin is deliberately NOT styled like the folders around it: it
@@ -117,17 +155,19 @@ struct GroupSidebar: View {
     @ViewBuilder
     private func row(for node: GroupTreeNode) -> some View {
         let isRecycleBin = node.group.id == recycleBinID
-        HStack {
-            Label(node.group.name, systemImage: isRecycleBin ? "trash" : "folder")
-                .foregroundStyle(isRecycleBin ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-            Spacer()
+        sidebarRow(
+            label: node.group.name,
+            systemImage: isRecycleBin ? "trash" : "folder",
             // Direct membership only (not descendants) — matches `entries(inGroup:)`, which
             // `EntryListView` uses for the same group filter, so the number shown here always
             // equals what selecting this row actually reveals.
-            Text("\(vault.entries(inGroup: node.group.id).count)")
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        }
+            count: vault.entries(inGroup: node.group.id).count,
+            isSelected: selectedGroupID == node.group.id,
+            // The bin's row is de-emphasised (`.side-row.is-muted`): it is the one group whose
+            // contents are not live credentials, and a user who cannot tell it apart at a glance
+            // is exactly the user who copies a password out of it.
+            isMuted: isRecycleBin
+        )
         .tag(Optional(node.group.id))
         .accessibilityIdentifier(
             isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"

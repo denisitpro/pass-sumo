@@ -16,52 +16,59 @@ struct WelcomeView: View {
     @State private var recents: [RecentDatabase] = []
 
     var body: some View {
-        VStack(spacing: 28) {
-            VStack(spacing: 8) {
+        VStack(spacing: Spacing.s8) {
+            VStack(spacing: Spacing.s4) {
                 Image(systemName: "lock.shield")
-                    .font(.system(size: 52))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: Metrics.heroGlyphSize, weight: .light))
+                    .foregroundStyle(Palette.accent600)
                 Text("PassSumo")
-                    .font(.title)
+                    .font(Typography.title2)
+                    .foregroundStyle(Palette.text)
             }
 
-            VStack(spacing: 12) {
+            VStack(spacing: Spacing.s5) {
                 Button("Open Database…") { openExistingDatabase() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.tokenPrimary)
                     .accessibilityIdentifier("welcome.open")
 
                 Button("Create New Database…") { isPresentingCreateSheet = true }
+                    .buttonStyle(.tokenSecondary)
                     .accessibilityIdentifier("welcome.create")
             }
 
             if let pickerError {
                 Text(pickerError)
-                    .font(.callout)
-                    .foregroundStyle(.red)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("welcome.error")
             }
 
             if !recents.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Spacing.s2) {
                     Text("Recent")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
                     ForEach(recents) { recent in
                         Button {
                             environment.store.select(url: recent.url)
                         } label: {
                             Label(recent.url.lastPathComponent, systemImage: "clock")
                                 .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.tokenQuiet)
                         .accessibilityIdentifier("welcome.recent.\(recent.id)")
                     }
                 }
                 .frame(maxWidth: 320)
             }
         }
-        .padding(40)
+        .padding(Spacing.s10)
+        .cardSurface()
+        .padding(Spacing.s10)
         .frame(minWidth: 420, minHeight: 360)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.canvas)
         .task { loadRecents() }
         .onChange(of: environment.menuRequest) { _, request in
             switch request {
@@ -134,9 +141,10 @@ private struct CreateDatabaseSheet: View {
     private var passwordsMatch: Bool { !password.isEmpty && password == confirmation }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Spacing.s6) {
             Text("Create New Database")
-                .font(.headline)
+                .font(Typography.headline)
+                .foregroundStyle(Palette.text)
 
             MasterPasswordField(
                 placeholder: "Master Password",
@@ -160,15 +168,15 @@ private struct CreateDatabaseSheet: View {
 
             if !confirmation.isEmpty && !passwordsMatch {
                 Text("Passwords don't match.")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("welcome.create.mismatch")
             }
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("welcome.create.error")
             }
 
@@ -176,20 +184,24 @@ private struct CreateDatabaseSheet: View {
                 ProgressView().controlSize(.small)
             }
 
-            HStack {
+            HStack(spacing: Spacing.s3) {
                 Button("Cancel") { dismiss() }
+                    .buttonStyle(.tokenQuiet)
                     .disabled(isCreating)
                 Spacer()
                 Button("Choose Location & Create…") {
                     Task { await chooseLocationAndCreate() }
                 }
+                .buttonStyle(.tokenPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!passwordsMatch || isCreating)
                 .accessibilityIdentifier("welcome.create.confirmButton")
             }
+            .padding(.top, Spacing.s5)
         }
-        .padding(24)
+        .padding(Spacing.s7)
         .frame(width: 380)
+        .background(Palette.surface)
     }
 
     /// Same "never a pre-set default path" reasoning as `WelcomeView.openExistingDatabase()` — see
@@ -227,22 +239,23 @@ private struct PasswordStrengthMeter: View {
     /// comfortably past what any KDBX brute-force budget threatens today.
     private var fraction: Double { min(bits / 100, 1.0) }
 
+    /// Thresholds unchanged; only the colours moved onto the token layer's strength ramp.
     private var tint: Color {
         switch bits {
-        case ..<40: return .red
-        case ..<80: return .yellow
-        default: return .green
+        case ..<40: return Palette.strengthWeak
+        case ..<80: return Palette.strengthFair
+        default: return Palette.strengthStrong
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Spacing.s1) {
             ProgressView(value: fraction)
                 .tint(tint)
                 .accessibilityIdentifier("welcome.create.strength")
             Text("Rough guide: ~\(Int(bits)) bits")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption2)
+                .foregroundStyle(Palette.textTertiary)
         }
     }
 }

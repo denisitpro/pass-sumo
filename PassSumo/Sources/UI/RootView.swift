@@ -8,6 +8,15 @@ struct RootView: View {
 
     var body: some View {
         content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Every screen sits on one of two grounds: `canvas` behind a centred card (Welcome,
+            // Unlock) and `surface` inside the browser's panes, which paint their own. Painting
+            // the canvas once here is what stops the system window background showing through.
+            .background(Palette.canvas)
+            // The app-wide accent, so the controls this design pass does not hand-draw — a
+            // `Slider`'s fill, a `Toggle`'s knob, a `ProgressView`'s bar, `List`'s focus ring —
+            // follow palette C instead of the system blue.
+            .tint(Palette.accent600)
             // Makes `AppEnvironment` reachable via `@Environment(AppEnvironment.self)` for anything
             // mounted under here — in particular `VaultBrowserView`, which reads `selectedEntryID`
             // and `menuRequest` off it (see `AppEnvironment`'s "Cross-cutting UI state" comment for
@@ -37,6 +46,8 @@ struct RootView: View {
             // doc comment) — long enough that a blank window here would read as frozen, so this
             // state is its own visible case rather than folded into `.locked`.
             ProgressView("Unlocking…")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("root.unlocking")
 

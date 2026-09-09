@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en" data-palette="A">
+<!-- DECIDED (2026-09-09): palette C — "Steel Cyan" — is APPROVED (issue #56).
+     Token source of truth = design/BRAND.md; the Swift mirror is
+     PassSumo/Sources/UI/DesignTokens.swift. This file is kept as the record of the
+     three-way comparison, NOT as a token source: read a value from BRAND.md, never
+     from here. Defaults to palette C for that reason. -->
+<html lang="en" data-palette="C">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -195,6 +200,20 @@ svg.icon.solid { fill: currentColor; stroke: none; }
   border-bottom: var(--hairline) solid var(--border);
   box-shadow: var(--shadow-card);
 }
+
+/* Decision banner. Added 2026-09-09 when palette C was approved — see the comment at the
+   top of this file. */
+.decided {
+  margin: 0;
+  padding: var(--space-4) var(--space-7);
+  background: var(--accent-50);
+  border-bottom: var(--hairline) solid var(--accent-200);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--text-2);
+}
+.decided b { color: var(--accent-700); }
+.decided code { font-family: var(--font-mono); color: var(--text); }
 
 .harness-bar {
   display: flex;
@@ -1192,6 +1211,12 @@ svg.icon.solid { fill: currentColor; stroke: none; }
 
 <!-- ============================== HARNESS ============================== -->
 <div class="harness">
+  <p class="decided">
+    <b>Decided 2026-09-09 — palette C, “Steel Cyan”, is approved (issue #56).</b>
+    This page stays as the record of the three-way comparison. It is no longer a token source:
+    the token values live in <code>design/BRAND.md</code>, mirrored in
+    <code>PassSumo/Sources/UI/DesignTokens.swift</code>. Read a value from BRAND.md, never from here.
+  </p>
   <div class="harness-bar">
     <div class="harness-brand">pass-sumo <span>palette review · issue #3</span></div>
 
@@ -1815,7 +1840,8 @@ Rotate after every on-call handover — billing alerts go to ops@.</div>
 
   /* ---------- switching ---------- */
 
-  var state = { palette: "A", screen: "vault" };
+  // Defaults to the APPROVED palette (C) — see the banner at the top of this file.
+  var state = { palette: "C", screen: "vault" };
   var stored = load();
   if (stored && PALETTES[stored.palette]) state.palette = stored.palette;
   if (stored && SCREENS.indexOf(stored.screen) !== -1) state.screen = stored.screen;

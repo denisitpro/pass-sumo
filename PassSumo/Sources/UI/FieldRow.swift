@@ -7,6 +7,10 @@ struct FieldRow: View {
     let label: String
     let value: String
     var isMonospaced: Bool = false
+    /// Renders the value in the accent, the mockup's `.field .link` treatment — for a value that
+    /// points somewhere (the URL row). Presentation only: it does not make the text clickable, and
+    /// the button that actually opens the URL still lives beside the row in `EntryDetailView`.
+    var isLink: Bool = false
     /// Non-nil marks this as a secret: `value` renders as fixed-width dots unless the bound `Bool`
     /// is `true`. `nil` means "not a secret" — no dots, no reveal toggle, `value` shown plainly.
     var isRevealed: Binding<Bool>?
@@ -18,11 +22,11 @@ struct FieldRow: View {
     private var isConcealed: Bool { isSecret && isRevealed?.wrappedValue != true }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.s5) {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: Metrics.fieldLabelWidth, alignment: .leading)
 
             valueContent
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -40,10 +44,15 @@ struct FieldRow: View {
                 .accessibilityValue(isConcealed ? "hidden" : (value.isEmpty ? "empty" : value))
 
             if let isRevealed {
-                Toggle(isOn: isRevealed) {
+                // A quiet glyph, not `.toggleStyle(.button)`: the filled, tinted rendering a
+                // button-style toggle gets once on reads as an action of the same weight as Copy
+                // beside it, which it is not. Same reasoning as `MasterPasswordField`'s eye.
+                Button {
+                    isRevealed.wrappedValue.toggle()
+                } label: {
                     Image(systemName: isRevealed.wrappedValue ? "eye.slash" : "eye")
                 }
-                .toggleStyle(.button)
+                .buttonStyle(.tokenGlyph)
                 .help(isRevealed.wrappedValue ? "Hide \(label)" : "Reveal \(label)")
                 .accessibilityLabel(isRevealed.wrappedValue ? "Hide \(label)" : "Reveal \(label)")
                 .accessibilityIdentifier(revealIdentifier ?? "")
@@ -53,7 +62,7 @@ struct FieldRow: View {
                 Button(action: onCopy) {
                     Image(systemName: "doc.on.doc")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tokenGlyph)
                 .help("Copy \(label)")
                 .accessibilityLabel("Copy \(label)")
                 .accessibilityIdentifier(copyIdentifier ?? "")
@@ -68,13 +77,16 @@ struct FieldRow: View {
             // information worth not leaking to a shoulder-surfer, so a concealed field always
             // shows the same placeholder regardless of the real value's size.
             Text("••••••••••••")
-                .font(isMonospaced ? .system(.body, design: .monospaced) : .body)
+                .font(isMonospaced ? Typography.monoBody : Typography.body)
+                .foregroundStyle(Palette.text)
         } else if value.isEmpty {
             Text("—")
-                .foregroundStyle(.tertiary)
+                .font(Typography.body)
+                .foregroundStyle(Palette.textTertiary)
         } else {
             Text(value)
-                .font(isMonospaced ? .system(.body, design: .monospaced) : .body)
+                .font(isMonospaced ? Typography.monoBody : Typography.body)
+                .foregroundStyle(isLink ? Palette.accent700 : Palette.text)
                 .textSelection(.enabled)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)

@@ -1,6 +1,10 @@
 # design/mockups/
 
-> Status: draft · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: frozen · Last verified: 2026-09-09 · [AI - claude-opus-5]
+
+> **Decided 2026-09-09: palette C — "Steel Cyan" — is approved (issue #56).** The token values now
+> live in `design/BRAND.md`, mirrored in `PassSumo/Sources/UI/DesignTokens.swift`. This folder is
+> the record of how the choice was made, not a place to read a value from.
 
 Self-contained HTML mockups, reviewed and signed off before any SwiftUI is written (see
 `design/README.md` for how this folder fits the rest of `design/`).
@@ -14,6 +18,7 @@ swatches:
 - **Palette A — "Vault Navy"** · deep navy on warm paper, taken from the app icon.
 - **Palette B — "Signal Blue"** · a true signal blue on cool white, closest to platform-native.
 - **Palette C — "Steel Cyan"** · blue pushed toward cyan, instrument-panel and technical.
+  **← approved.**
 
 Four screens, switchable independently of the palette: **Vault** (the main three-pane window —
 this is the screen that decides the palette), **Unlock** (default and wrong-password states side
@@ -32,16 +37,17 @@ open design/mockups/palette-variants.html
 
 Zero network: all CSS, JS and SVG are inline, so it renders identically over `file://` and
 offline. The selected palette and screen are remembered in `localStorage`, defaulting to
-Palette A / Vault.
+**Palette C** (the approved one) / Vault.
 
-### Not yet a token source
+### Not a token source
 
-**The palette is not decided.** Nothing — no SwiftUI colour set, no `design/tokens.json`, no
-`design/design-system.md` — may consume the hex values in this file yet. It is a review artefact
-for picking a direction; the picked palette becomes tokens in a separate, deliberate step once
-issue #3 closes on a choice. The structural tokens (type scale, spacing, radii, hairline weights,
-row heights, shadows) and the semantic colours are shared by all three variants and are the parts
-least likely to change.
+The palette IS decided now, but this file is still not where a value is read from. `design/BRAND.md`
+owns the token values — the merge of this file's shared `:root` block with its
+`:root[data-palette="C"]` override — and `PassSumo/Sources/UI/DesignTokens.swift` is the
+hand-written Swift mirror of that. Copying a hex out of the CSS below instead would create a second
+owner for the same fact, which is the one thing the token layer exists to prevent.
+
+The page defaults to palette C for the same reason, and carries a banner saying so.
 
 ### Contrast
 
@@ -49,5 +55,6 @@ The Tokens screen computes every contrast ratio live in the page. `--warning` an
 
 ### Archive when
 
-Issue #3 has settled on a palette and the decision has been written up as the design system. Keep
-the file until then; after that it is history, not reference.
+`design/design-system.md` exists (issue #3) and documents the components this page prototypes. The
+palette question itself is closed; what keeps the file alive until then is that it is currently the
+only rendering of the target screens. After that it is history, not reference.
