@@ -78,7 +78,10 @@ public extension KDBXContent {
             publicCustomData: [:]
         )
 
-        // ChaCha20 needs 64 bytes of key material per inner-header spec.
+        // 64 bytes is the conventional ChaCha20 inner-stream key length —
+        // what KeePass and KeePassXC emit. `K` is hashed, so the length is a
+        // convention rather than a requirement (see `InnerHeader/cryptor`),
+        // but new files should look like everyone else's.
         let innerHeader = InnerHeader(
             encryptionAlgorithm: .ChaCha20,
             encryptionKey: SecureRandom.bytes(64),

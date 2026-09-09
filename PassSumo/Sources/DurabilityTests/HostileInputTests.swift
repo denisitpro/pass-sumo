@@ -73,7 +73,7 @@ final class HostileInputTests: DurabilityTestCase {
                 try codec.decode(fileData: damaged, credentials: credentials()),
                 "a flipped bit at offset \(offset) decoded successfully"
             ) { error in
-                guard case let .corrupted(message) = error as? VaultError else {
+                guard case let .corrupted(message, _) = error as? VaultError else {
                     return XCTFail("expected .corrupted at offset \(offset), got \(error)")
                 }
                 // The signature of decrypt-first: the payload was decrypted, decompressed and
@@ -133,7 +133,7 @@ final class HostileInputTests: DurabilityTestCase {
                 try codec.decode(fileData: Data(truncated), credentials: credentials()),
                 "a file truncated at \(cut) decoded successfully"
             ) { error in
-                guard case let .corrupted(message) = error as? VaultError else {
+                guard case let .corrupted(message, _) = error as? VaultError else {
                     return XCTFail(
                         "a file truncated at \(cut) should be reported as damaged, got \(error)"
                     )
