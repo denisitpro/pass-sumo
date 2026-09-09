@@ -31,3 +31,7 @@ build/
 ## Machine-local artifact of store-assets/tools/set-wallpaper.sh: the absolute path of the
 ## wallpaper to restore. Per-machine state, never useful in another checkout.
 store-assets/.wallpaper-backup
+
+## Python bytecode cache. design/logo/make-appicon.py is importable, and anything
+## that imports it (e.g. a throwaway comparison render) drops one of these next to it.
+__pycache__/
