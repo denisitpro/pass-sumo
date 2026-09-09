@@ -2,3 +2,4 @@
 - [Memory lives in the repo](pass-sumo-memory-lives-in-repo.md) — why notes go in `claude-memory/` and must be committed to reach the other Mac.
 - [Work sequencing](pass-sumo-work-sequencing.md) — what waits on the design-system decision, and what gates autosave.
 - [Palette decision](pass-sumo-palette-decision.md) — variant C "Steel Cyan" is approved; `design/BRAND.md` owns the tokens, the ramp is light-only pending #57.
+- [Design system docs](pass-sumo-design-system-docs.md) — the spec is an index plus focused siblings under `design/`; the mockup is a palette reference, not a keyboard or component spec.

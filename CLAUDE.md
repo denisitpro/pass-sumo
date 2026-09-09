@@ -229,8 +229,8 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
 ## Open issues
 
 - #1 — v1 feature scope (KDBX read/write, unlock, search, generator, TOTP, backups, auto-lock).
-- #3 — design system + UX guideline (Strongbox as an information-architecture reference, not as
-  scope) before the beta UI pass.
+- #3 — design system + UX guideline. Written: `design/design-system.md` is the index, and
+  `design/BRAND.md` owns every token value. The decisions it deliberately left open are #60–#66.
 - #4 — export-compliance confirmation for `ITSAppUsesNonExemptEncryption = true` and its
   obligations, before first App Store submission.
 - #5 — the KDBXKit vendoring decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
