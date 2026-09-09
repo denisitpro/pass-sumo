@@ -48,6 +48,17 @@ struct AppCommands: Commands {
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!isUnlocked)
             Divider()
+            // Deliberately without a keyboard shortcut, same reasoning as "Empty Recycle Bin…"
+            // below: this is a disclosure command reached a handful of times in a database's life,
+            // not a keyboard-first action, and it needs no muscle-memory bridge from another app.
+            //
+            // It exists because backups moved into the app's sandbox container (issue #26), which
+            // is a path — `~/Library/Containers/…/Data/Library/Application Support/PassSumo/
+            // Backups` — no user would find or guess. A backup nobody can reach is only half a
+            // backup, so the app has to be able to point at it.
+            Button("Show Backups in Finder") { showBackupsInFinder() }
+                .disabled(environment.backupDirectory == nil)
+            Divider()
             Button("Lock Database") { environment.store.lock() }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(!isUnlocked)
@@ -160,5 +171,21 @@ struct AppCommands: Commands {
     private func copySelected(_ field: (VaultEntry) -> String) {
         guard let entry = selectedEntry else { return }
         environment.clipboard.copy(field(entry))
+    }
+
+    /// Opens the backup directory in Finder, creating it first if no save has needed it yet.
+    ///
+    /// Creating on demand rather than disabling the item when the directory is absent: an empty
+    /// folder answers the user's actual question ("where are my backups?" — "here, and there are
+    /// none yet"), whereas a greyed-out menu item answers nothing and looks like a bug. The
+    /// creation is inside the app's own container, so it needs no grant and cannot prompt.
+    ///
+    /// Silent on failure by design — there is no error surface on a menu command, and the only way
+    /// this fails is a container the app cannot write, which the next save will report through
+    /// `VaultStore.lastBackupError` in language that actually explains the consequence.
+    private func showBackupsInFinder() {
+        guard let directory = environment.backupDirectory else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(directory)
     }
 }

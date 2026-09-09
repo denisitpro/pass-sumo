@@ -31,6 +31,16 @@ final class VaultStore {
     private(set) var currentURL: URL?
     private(set) var lastBackupURL: URL?
 
+    /// Why the last successful save could not make its pre-save backup, or `nil` when it could (or
+    /// when there was nothing to back up).
+    ///
+    /// Separate from `lastError` because the two mean opposite things about the user's data.
+    /// `lastError` means the save did NOT happen. This means the save DID happen, but without the
+    /// safety net that normally precedes it — the save is not blocked by a failed backup (issue
+    /// #26: it used to be, and the result was an app that could not save at all), and the failure
+    /// is not swallowed either. `StatusBar` shows it; see `VaultBackupOutcome` for the full policy.
+    private(set) var lastBackupError: VaultError?
+
     private let codec: any VaultCodec
     private let fileAccess: any VaultFileAccess
 
@@ -222,7 +232,7 @@ final class VaultStore {
         let codec = self.codec
         let fileAccess = self.fileAccess
         let origin = decodedOrigin
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<URL?, VaultError> in
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<VaultBackupOutcome, VaultError> in
             do {
                 let data = try codec.encode(vault, credentials: credentials, origin: origin)
                 return .success(try fileAccess.write(data, to: url))
@@ -234,8 +244,13 @@ final class VaultStore {
         }.value
 
         switch result {
-        case .success(let backupURL):
-            lastBackupURL = backupURL
+        case .success(let backup):
+            // The save succeeded either way — `write` reports a failed backup as a value rather
+            // than by throwing, precisely so a backup problem cannot cost the user their edits.
+            // Both properties are assigned on every path so neither can be read as a stale claim
+            // about the save that just happened.
+            lastBackupURL = backup.url
+            lastBackupError = backup.error
             isDirty = false
             lastError = nil
         case .failure(let error):

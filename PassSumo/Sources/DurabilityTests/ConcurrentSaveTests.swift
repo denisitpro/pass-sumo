@@ -60,7 +60,7 @@ private final class OverlapObservingFileAccess: VaultFileAccess {
 
     func read(from url: URL) throws -> Data { try wrapped.read(from: url) }
 
-    func write(_ data: Data, to url: URL) throws -> URL? {
+    func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         defer { recorder.leave() }
         return try wrapped.write(data, to: url)
     }
@@ -70,6 +70,8 @@ private final class OverlapObservingFileAccess: VaultFileAccess {
     func resolveBookmark(_ data: Data) throws -> (url: URL, isStale: Bool) {
         try wrapped.resolveBookmark(data)
     }
+
+    func backupDirectory(for url: URL?) -> URL? { wrapped.backupDirectory(for: url) }
 }
 
 /// Category 1, the concurrency half — **two saves must never be in flight at once.**
@@ -111,7 +113,7 @@ final class ConcurrentSaveTests: DurabilityTestCase {
         let store = VaultStore(
             codec: OverlapObservingCodec(wrapped: KDBXKitCodec(), recorder: recorder),
             fileAccess: OverlapObservingFileAccess(
-                wrapped: SandboxedVaultFileAccess(), recorder: recorder
+                wrapped: try makeFileAccess(), recorder: recorder
             )
         )
 

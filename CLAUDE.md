@@ -8,7 +8,7 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 222 tests (1 skipped, 0 failures) and `make durability`
+issue #3). `make test` currently passes 241 tests (1 skipped, 0 failures) and `make durability`
 22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
 single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
@@ -107,7 +107,9 @@ copied into the test bundle as a folder reference).
 ## Architecture
 
 - `Sources/Model` — domain types, the `VaultCodec` protocol, `VaultStore` (also owns Recycle Bin
-  moves/empty and Touch ID database-ID assignment), an in-memory fake codec for tests/previews.
+  moves/empty and Touch ID database-ID assignment), `VaultFileAccess` + `VaultBackupStore` (the
+  sandbox bracket, the atomic write, and the pre-save backup policy), an in-memory fake codec for
+  tests/previews.
 - `Sources/KDBX` — the real `VaultCodec` implementation, wrapping KDBXKit, including attachment
   handling (`KDBXAttachments.swift`).
 - `Sources/Security` — password generator, TOTP, clipboard handling, auto-lock, Keychain/Touch ID.
@@ -151,15 +153,26 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
 
 ## Gotchas worth recording
 
-- **Two open durability defects, found by `make durability` (issue #22), reported not fixed.**
-  (1) `VaultStore.save()` has no mutual exclusion — it is `@MainActor` but its body is an awaited
+- **One open durability defect, found by `make durability` (issue #22), reported not fixed.**
+  `VaultStore.save()` has no mutual exclusion — it is `@MainActor` but its body is an awaited
   `Task.detached`, so two `save()` calls encode and write concurrently (measured overlap: 2). The
   file is never torn (each write is atomic, one rename wins) but the loser's edits are silently
-  discarded while its `save()` reports success. (2) Under a sandbox grant covering only the vault
-  FILE, the save fails — at the pre-save backup, which creates `<name>.kdbx.bak-<stamp>` in a
-  directory the app was never granted. `Data.write(options: [.atomic])` itself is fine there:
-  Foundation falls back to a temporary file outside the directory and still replaces by rename.
-  Details and evidence in `PassSumo/Sources/DurabilityTests/README.md`.
+  discarded while its `save()` reports success. Details and evidence in
+  `PassSumo/Sources/DurabilityTests/README.md`. (The second defect that suite found — a save that
+  failed outright under a file-scoped grant — is fixed; see the backup entry below.)
+- **Backups live in the app's container, and no entitlement backs them (issue #26).**
+  `<Application Support>/PassSumo/Backups/<name>-<hash of the path>/<name>-<stamp>.kdbx`, obtained
+  from `FileManager` — never `~`-expansion, never a literal container path. The old
+  `<name>.kdbx.bak-<stamp>` sibling was a new file in a directory the app was never granted (an
+  `NSOpenPanel` pick grants the FILE, not its parent), and because the backup runs before the write
+  it guards, the save died with it. Do **not** "fix" a backup-location problem by adding a
+  file-access entitlement: an entitlement with no user-chosen functionality behind it is what got
+  the sibling app ShotSumo rejected under Guideline 2.4.5(i). A user-picked backup folder with its
+  own persisted security-scoped bookmark is the sanctioned alternative, and is a follow-up.
+  Retention: newest 10, 90 days, 200 MB, oldest pruned first, the newest never pruned. Policy on
+  failure: a failed backup **never** blocks the save and is **never** swallowed — `write` returns a
+  `VaultBackupOutcome`, `VaultStore.lastBackupError` holds the reason, `StatusBar` shows it. The
+  container is invisible to users, so "Show Backups in Finder" in the File menu is what reaches it.
 - `FileManager.copyItem` on APFS issues `clonefile(2)` (1 GiB in ~2 ms, measured), so the pre-save
   backup is complete the instant it exists and cannot be observed half-written. That guarantee is
   the filesystem's, not ours — on a volume where `copyfile` falls back to a byte copy (network
@@ -215,8 +228,12 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   obligations, before first App Store submission.
 - #5 — the KDBXKit vendoring decision and its fix list (Argon2 v1.0 key-derivation bug, interop CI
   wiring, Twofish decision, and others).
-- #22 — the durability suite (`make durability`). Built; the two defects it found are listed under
-  "Gotchas worth recording" above and are NOT fixed — each is its own decision.
+- #22 — the durability suite (`make durability`). Built. Of the two defects it found, the
+  concurrent-`save()` one is still open (see "Gotchas worth recording" above); the backup-location
+  one was #26 and is fixed.
+- #26 — the pre-save backup wrote a sibling file, so a save could fail outright under a
+  file-scoped grant. Fixed: backups moved into the app's container, and a failed backup no longer
+  blocks the save. See "Gotchas worth recording" above.
 
 ## Acceptance criteria (owner's definition)
 

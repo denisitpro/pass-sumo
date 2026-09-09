@@ -270,7 +270,12 @@ struct VaultBrowserView: View {
                 databasePath: store.currentURL?.path ?? "",
                 isDirty: store.isDirty,
                 secondsUntilAutoLock: autoLock.secondsUntilIdleLock,
-                secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil
+                secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
+                // A failed pre-save backup no longer blocks the save (issue #26), so this is the
+                // one place the user learns it happened. Persistent rather than a transient alert:
+                // the condition persists — an unwritable container fails every save — and an alert
+                // dismissed once would leave the app quietly saving without backups thereafter.
+                backupWarning: store.lastBackupError?.backupFailureMessage
             )
         }
     }

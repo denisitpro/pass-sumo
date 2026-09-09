@@ -196,6 +196,11 @@ final class FormatConformanceTests: DurabilityTestCase {
     /// Backups have to be openable by other tools too. A backup is the thing a user reaches for
     /// when everything else has gone wrong, quite possibly from a different application, and one
     /// that only our own reader can open is a promise we have not actually kept.
+    ///
+    /// This matters more since issue #26 moved backups into the app's container: they now keep the
+    /// `.kdbx` extension (rather than the old `.bak-<stamp>` suffix) specifically so that what the
+    /// user finds through "Show Backups in Finder" is a file any KDBX client will open. That is the
+    /// claim this test checks, with `keepassxc-cli` as the other client.
     func testBackupsOpenInKeePassXCToo() throws {
         let cli = try Self.keePassXCCLIOrSkip()
 
@@ -203,7 +208,11 @@ final class FormatConformanceTests: DurabilityTestCase {
         let database = try createDatabase(in: directory, title: "v1")
         _ = try runHelper(database: database, title: "v2")
 
-        let backup = try XCTUnwrap(backups(of: database).first, "the save should have left a backup")
+        let backup = try XCTUnwrap(try backups(of: database).first, "the save should have left a backup")
+        XCTAssertEqual(
+            backup.pathExtension, "kdbx",
+            "a backup the user is expected to open must still look like a database: \(backup.lastPathComponent)"
+        )
         let listing = try Self.run(cli, ["ls", "-R", backup.path], stdin: Self.password + "\n")
         XCTAssertEqual(
             listing.status, 0,

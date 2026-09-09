@@ -41,7 +41,8 @@ enum Stage: String, Sendable {
     /// The codec is done: the complete new file's bytes exist in memory, and `VaultFileAccess`
     /// is about to touch the disk. Between `save-begin` and here, NOTHING has been written.
     case writeBegin = "write-begin"
-    /// The backup copy and the atomic write both returned successfully.
+    /// The atomic write returned successfully. The backup was attempted first; whether it worked is
+    /// reported separately as an `INFO:backup-*` line, since a failed backup does not fail the save.
     case writeEnd = "write-end"
     /// `VaultStore.save()` returned.
     case saveEnd = "save-end"
@@ -96,11 +97,10 @@ struct Options: Sendable {
         /// `Data.write(options: [.atomic])` and report whether the file's inode changed.
         ///
         /// This isolates the ONE primitive the whole no-torn-file guarantee rests on, so it can be
-        /// run under a sandbox profile that grants the file and not its directory — the case
-        /// `SandboxedVaultFileAccess` has never been exercised in, and the one where `.atomic`'s
-        /// sibling temporary file was suspected of being denied. Bypassing `VaultFileAccess` is the
-        /// point: the full save path fails EARLIER under such a profile (at the backup copy), which
-        /// would mask what the atomic write itself does.
+        /// run under a sandbox profile that grants the file and not its directory — the case where
+        /// `.atomic`'s sibling temporary file was suspected of being denied. Bypassing
+        /// `VaultFileAccess` is the point: it answers what the atomic write does on its own, with
+        /// no backup, no `VaultStore` and no codec in the picture to confuse the result.
         ///
         /// A changed inode means the bytes arrived via a rename over the destination, i.e. the
         /// write really was atomic and not an in-place rewrite that a crash could tear.
@@ -121,6 +121,14 @@ struct Options: Sendable {
     /// Print this marker and then block forever, so a test can kill at an exact boundary rather
     /// than racing a timer.
     var hangAt: Stage?
+    /// Directory the pre-save backups go under, replacing `VaultBackupPolicy.default`'s
+    /// `<Application Support>/PassSumo/Backups`.
+    ///
+    /// Not optional in practice: this process is UNSANDBOXED, so the production default resolves to
+    /// the developer's real, shared `~/Library/Application Support` — a durability run would leave
+    /// 8 MB test vaults there and prune the ones from the previous run. The suite always passes a
+    /// per-test scratch directory. Left with a default so the helper stays runnable by hand.
+    var backupRoot: URL?
 
     static func parse(_ arguments: [String]) -> Options {
         var databasePath: String?
@@ -129,6 +137,7 @@ struct Options: Sendable {
         var title = "durability-probe"
         var attachmentBytes = 0
         var hangAt: Stage?
+        var backupRoot: URL?
 
         var index = arguments.startIndex
         while index < arguments.endIndex {
@@ -156,6 +165,7 @@ struct Options: Sendable {
                 let raw = value()
                 guard let parsed = Stage(rawValue: raw) else { Marker.fail("unknown --hang-at \(raw)") }
                 hangAt = parsed
+            case "--backup-root": backupRoot = URL(fileURLWithPath: value(), isDirectory: true)
             default:
                 Marker.fail("unknown argument \(flag)")
             }
@@ -171,7 +181,8 @@ struct Options: Sendable {
             mode: mode,
             entryTitle: title,
             attachmentBytes: attachmentBytes,
-            hangAt: hangAt
+            hangAt: hangAt,
+            backupRoot: backupRoot
         )
     }
 }
@@ -185,9 +196,10 @@ struct Options: Sendable {
 /// `VaultStore` already takes `any VaultFileAccess`, so nothing about the app has to change to
 /// observe it). The backup copy and the atomic write both happen inside the wrapped `write`, so
 /// the two markers bracket them jointly; a test that needs to distinguish "during the backup" from
-/// "during the write" does it by watching the directory for the backup file and the atomic
-/// temporary file, which is finer-grained than any marker could be without cutting the production
-/// method open.
+/// "during the write" does it by watching the BACKUP directory for the backup file and the vault's
+/// own directory for the atomic temporary file, which is finer-grained than any marker could be
+/// without cutting the production method open. (Those are two different directories now that
+/// backups live in the app's container — see `VaultBackupStore`.)
 final class StageAnnouncingFileAccess: VaultFileAccess {
     private let wrapped: any VaultFileAccess
     private let hangAt: Stage?
@@ -201,13 +213,13 @@ final class StageAnnouncingFileAccess: VaultFileAccess {
         try wrapped.read(from: url)
     }
 
-    func write(_ data: Data, to url: URL) throws -> URL? {
+    func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         Marker.emit(.writeBegin)
         hangIfRequested(at: .writeBegin)
-        let backupURL = try wrapped.write(data, to: url)
+        let outcome = try wrapped.write(data, to: url)
         Marker.emit(.writeEnd)
         hangIfRequested(at: .writeEnd)
-        return backupURL
+        return outcome
     }
 
     func bookmark(for url: URL) throws -> Data {
@@ -216,6 +228,10 @@ final class StageAnnouncingFileAccess: VaultFileAccess {
 
     func resolveBookmark(_ data: Data) throws -> (url: URL, isStale: Bool) {
         try wrapped.resolveBookmark(data)
+    }
+
+    func backupDirectory(for url: URL?) -> URL? {
+        wrapped.backupDirectory(for: url)
     }
 
     private func hangIfRequested(at stage: Stage) {
@@ -243,10 +259,14 @@ enum DurabilityHelper {
         }
 
         let credentials = VaultCredentials(password: options.password, keyFile: nil)
+        var backupPolicy = VaultBackupPolicy.default
+        if let backupRoot = options.backupRoot {
+            backupPolicy.root = { backupRoot }
+        }
         let store = VaultStore(
             codec: KDBXKitCodec(),
             fileAccess: StageAnnouncingFileAccess(
-                wrapping: SandboxedVaultFileAccess(),
+                wrapping: SandboxedVaultFileAccess(backupPolicy: backupPolicy),
                 hangAt: options.hangAt
             )
         )
@@ -285,6 +305,17 @@ enum DurabilityHelper {
 
         if let error = store.lastError {
             Marker.fail("save failed: \(error)")
+        }
+
+        // The backup's own outcome, reported separately from the save's. A failed backup no longer
+        // fails the save (issue #26), so without this line a test could not tell "saved with a
+        // backup" from "saved without one" — which is exactly the distinction the policy turns on.
+        if let backupError = store.lastBackupError {
+            Marker.info("backup-failed=\(backupError)")
+        } else if let backupURL = store.lastBackupURL {
+            Marker.info("backup-made=\(backupURL.path)")
+        } else {
+            Marker.info("backup-not-needed")
         }
 
         Marker.emit(.done)

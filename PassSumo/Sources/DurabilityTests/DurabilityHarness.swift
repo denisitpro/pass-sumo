@@ -93,13 +93,15 @@ enum KillCondition {
     case never
     /// Kill the instant this stage marker appears on stdout.
     case marker(String)
-    /// Kill the instant a `<name>.kdbx.bak-*` file appears, i.e. mid-`copyItem`.
+    /// Kill the instant a backup file appears in the database's backup directory, i.e.
+    /// mid-`copyItem`.
     case backupAppears
     /// Kill once the backup's size has reached `bytes`, i.e. the copy is done but the atomic write
     /// has not replaced anything yet.
     case backupReaches(bytes: Int)
-    /// Kill the instant a sibling file appears that is neither the database nor a backup — which is
-    /// what `Data.write(options: [.atomic])`'s temporary file looks like from outside.
+    /// Kill the instant a sibling of the database appears — which, now that backups live in the
+    /// app's container rather than beside the vault, can only be
+    /// `Data.write(options: [.atomic])`'s temporary file.
     case atomicTemporaryAppears
     /// Kill this long after the helper announced `save-begin`. The shotgun: no phase is claimed, so
     /// the assertion has to hold for whatever phase it hits.
@@ -160,12 +162,14 @@ class DurabilityTestCase: XCTestCase {
     static let paddingBytes = 8 * 1024 * 1024
 
     private var scratchDirectories: [URL] = []
+    private var cachedBackupRoot: URL?
 
     override func tearDown() {
         for directory in scratchDirectories {
             try? FileManager.default.removeItem(at: directory)
         }
         scratchDirectories = []
+        cachedBackupRoot = nil
         super.tearDown()
     }
 
@@ -179,6 +183,54 @@ class DurabilityTestCase: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         scratchDirectories.append(directory)
         return directory
+    }
+
+    // MARK: Backups
+
+    /// This test's own backup root, standing in for `<Application Support>/PassSumo/Backups`.
+    ///
+    /// Every `SandboxedVaultFileAccess` this suite builds — in-process or in the helper — must be
+    /// pointed at this, and every helper run gets it via `--backup-root`. The production default is
+    /// the *real* Application Support, which under `make durability` (unsigned, unsandboxed) is the
+    /// developer's own shared one: a run left there would deposit 8 MB test vaults and prune the
+    /// previous run's, in a directory this suite does not own and `tearDown` does not clean.
+    func backupRoot() throws -> URL {
+        if let cachedBackupRoot { return cachedBackupRoot }
+        let root = try makeScratchDirectory().appendingPathComponent("Backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        cachedBackupRoot = root
+        return root
+    }
+
+    /// A production `SandboxedVaultFileAccess` whose backups land in `backupRoot()`.
+    ///
+    /// The retention numbers are the production ones on purpose: a test that quietly ran with a
+    /// different cap would not be testing the shipped policy.
+    func makeFileAccess() throws -> SandboxedVaultFileAccess {
+        var policy = VaultBackupPolicy.default
+        let root = try backupRoot()
+        policy.root = { root }
+        return SandboxedVaultFileAccess(backupPolicy: policy)
+    }
+
+    /// The directory `database`'s backups go in, derived by the PRODUCTION code
+    /// (`VaultBackupStore.directoryName(for:)`) rather than re-implemented here — so a change to
+    /// how per-database identity is derived cannot leave these tests looking in a stale place and
+    /// reporting "no backup" when there is one.
+    func backupDirectory(of database: URL) throws -> URL {
+        try backupRoot().appendingPathComponent(
+            VaultBackupStore.directoryName(for: database),
+            isDirectory: true
+        )
+    }
+
+    /// The backups of `database`, oldest first by filename stamp.
+    func backups(of database: URL) throws -> [URL] {
+        Self.backupURLs(in: try backupDirectory(of: database))
+    }
+
+    static func backupURLs(in directory: URL) -> [URL] {
+        contents(of: directory).sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     // MARK: Host capabilities
@@ -272,6 +324,10 @@ class DurabilityTestCase: XCTestCase {
         if let hangAt {
             arguments += ["--hang-at", hangAt]
         }
+        // Always: the helper is unsandboxed, so its production default would be the developer's
+        // real Application Support. See `backupRoot()`.
+        let backupDirectory = try backupDirectory(of: database)
+        arguments += ["--backup-root", try backupRoot().path]
 
         let helper = try helperExecutable()
         let process = Process()
@@ -313,7 +369,11 @@ class DurabilityTestCase: XCTestCase {
             }
             if !killed,
                let reason = Self.killObservation(
-                   killWhen, markers: markers, database: database, saveBeganAt: saveBeganAt
+                   killWhen,
+                   markers: markers,
+                   database: database,
+                   backupDirectory: backupDirectory,
+                   saveBeganAt: saveBeganAt
                ) {
                 kill(pid, SIGKILL)
                 killed = true
@@ -358,6 +418,7 @@ class DurabilityTestCase: XCTestCase {
         _ condition: KillCondition,
         markers: [String],
         database: URL,
+        backupDirectory: URL,
         saveBeganAt: Date?
     ) -> String? {
         switch condition {
@@ -366,10 +427,10 @@ class DurabilityTestCase: XCTestCase {
         case let .marker(stage):
             return markers.contains(marker: stage) ? "marker \(stage)" : nil
         case .backupAppears:
-            guard let backup = backupURLs(besides: database).first else { return nil }
+            guard let backup = backupURLs(in: backupDirectory).first else { return nil }
             return "backup was \(size(of: backup)) bytes when first seen"
         case let .backupReaches(bytes):
-            guard let backup = backupURLs(besides: database).first(where: { size(of: $0) >= bytes })
+            guard let backup = backupURLs(in: backupDirectory).first(where: { size(of: $0) >= bytes })
             else { return nil }
             return "backup reached \(size(of: backup)) of \(bytes) bytes"
         case .atomicTemporaryAppears:
@@ -384,20 +445,15 @@ class DurabilityTestCase: XCTestCase {
 
     // MARK: Looking at the directory
 
-    /// Backups of `database` sitting next to it — the `<name>.kdbx.bak-<stamp>` files
-    /// `SandboxedVaultFileAccess` rotates.
-    static func backupURLs(besides database: URL) -> [URL] {
-        contents(of: database.deletingLastPathComponent())
-            .filter { $0.lastPathComponent.hasPrefix(database.lastPathComponent + ".bak-") }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-    }
-
-    /// Anything in the directory that is neither the database nor one of its backups. During a save
-    /// that is `Data.write(options: [.atomic])`'s temporary file; at rest there should be nothing.
+    /// Anything in the vault's directory that is not the vault itself.
+    ///
+    /// Since backups moved into the app's container (issue #26) NOTHING of ours belongs beside the
+    /// database, so during a save this is `Data.write(options: [.atomic])`'s temporary file and
+    /// nothing else, and at rest it must be empty. That is stronger than the old version of this
+    /// helper, which had to exempt `.bak-` files from the very check that would have caught them.
     static func temporaryURLs(besides database: URL) -> [URL] {
         contents(of: database.deletingLastPathComponent()).filter {
             $0.lastPathComponent != database.lastPathComponent
-                && !$0.lastPathComponent.hasPrefix(database.lastPathComponent + ".bak-")
         }
     }
 
@@ -415,8 +471,6 @@ class DurabilityTestCase: XCTestCase {
         guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]) else { return 0 }
         return values.fileSize ?? 0
     }
-
-    func backups(of database: URL) -> [URL] { Self.backupURLs(besides: database) }
 
     // MARK: Databases
 
