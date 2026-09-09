@@ -1,2 +1,3 @@
 - [Touch ID cross-machine context](touchid-cross-machine-context.md) — biometrics are unverifiable on the Mac mini; what a MacBook session needs before touching them.
 - [Memory lives in the repo](pass-sumo-memory-lives-in-repo.md) — why notes go in `claude-memory/` and must be committed to reach the other Mac.
+- [Work sequencing](pass-sumo-work-sequencing.md) — what waits on the design-system decision, and what gates autosave.
