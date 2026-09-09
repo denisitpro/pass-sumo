@@ -44,14 +44,33 @@ final class VaultStoreTests: XCTestCase {
         }
     }
 
-    private func makeFileAccess(maxKept: Int = 10, clock: TestClock = TestClock()) -> SandboxedVaultFileAccess {
-        SandboxedVaultFileAccess(
+    /// A real `SandboxedVaultFileAccess` whose backups land under this test's own temp directory
+    /// instead of `<Application Support>/PassSumo/Backups` — the production root, which an unsigned
+    /// `make test` would resolve to the developer's real, shared Application Support.
+    private func makeFileAccess(
+        maxCount: Int = 10,
+        clock: TestClock = TestClock()
+    ) -> SandboxedVaultFileAccess {
+        let root = tempDirectory.appendingPathComponent("Backups", isDirectory: true)
+        return SandboxedVaultFileAccess(
             backupPolicy: .init(
-                directory: { $0.deletingLastPathComponent() },
-                maxKept: maxKept,
+                root: { root },
+                maxCount: maxCount,
+                maxAge: VaultBackupPolicy.default.maxAge,
+                maxTotalBytes: VaultBackupPolicy.default.maxTotalBytes,
                 now: { clock.next() }
             )
         )
+    }
+
+    /// The backups of `url` that `makeFileAccess()`'s store wrote, oldest first — via the
+    /// production `VaultBackupStore`, so these tests cannot look in a stale place if the naming
+    /// changes.
+    private func backups(of url: URL) -> [URL] {
+        var policy = VaultBackupPolicy.default
+        let root = tempDirectory.appendingPathComponent("Backups", isDirectory: true)
+        policy.root = { root }
+        return VaultBackupStore(policy: policy).backups(of: url).map(\.url)
     }
 
     /// Round-trip state for `FakeAssigningVaultCodec` below — just enough to carry a database ID
@@ -267,12 +286,104 @@ final class VaultStoreTests: XCTestCase {
         await store.save()
 
         XCTAssertNotNil(store.lastBackupURL, "the very first save over a pre-existing file must produce a backup")
+        XCTAssertNil(store.lastBackupError)
         if let backupURL = store.lastBackupURL {
             XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+            // In the backup root, NOT beside the vault — issue #26.
+            XCTAssertNotEqual(
+                backupURL.deletingLastPathComponent().standardizedFileURL,
+                vaultURL.deletingLastPathComponent().standardizedFileURL,
+                "the backup was written next to the user's database again"
+            )
+            XCTAssertTrue(
+                backupURL.path.contains("/Backups/"),
+                "the backup did not land under the backup root: \(backupURL.path)"
+            )
         }
     }
 
-    func testBackupRotationKeepsOnlyTheNewestTen() async {
+    /// **The behavioural half of issue #26.** A backup that cannot be made must not cost the user
+    /// their save, and must not vanish quietly either.
+    ///
+    /// The failure is provoked the way the real one happened — a backup root the process cannot
+    /// create anything in — and both halves of the policy are asserted: the file on disk is the new
+    /// version (`isDirty` cleared, `lastError` nil), and `lastBackupError` carries the reason for
+    /// the UI to show.
+    func testASaveStillSucceedsWhenTheBackupCannotBeMadeAndSaysSo() async throws {
+        let vaultURL = tempDirectory.appendingPathComponent("nobackup.kdbx")
+        try Data("an existing database".utf8).write(to: vaultURL)
+
+        // A regular FILE where the backup root's directory has to go: `createDirectory` cannot
+        // succeed against it, whatever the permissions, and it needs no `chmod` that a test running
+        // as root would silently ignore.
+        let blockedRoot = tempDirectory.appendingPathComponent("blocked", isDirectory: true)
+        try Data("not a directory".utf8).write(to: blockedRoot)
+
+        let fileAccess = SandboxedVaultFileAccess(
+            backupPolicy: .init(
+                root: { blockedRoot },
+                maxCount: 10,
+                maxAge: VaultBackupPolicy.default.maxAge,
+                maxTotalBytes: VaultBackupPolicy.default.maxTotalBytes,
+                now: Date.init
+            )
+        )
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: fileAccess)
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        store.upsert(makeEntry(title: "Written anyway"))
+        await store.save()
+
+        XCTAssertNil(store.lastError, "a failed backup must not fail the save: \(String(describing: store.lastError))")
+        XCTAssertFalse(store.isDirty, "the save did happen, so the edits are on disk")
+        XCTAssertNotEqual(
+            try Data(contentsOf: vaultURL), Data("an existing database".utf8),
+            "the save reported success without replacing the file"
+        )
+        XCTAssertNotNil(store.lastBackupError, "the backup failure was swallowed")
+        XCTAssertNil(store.lastBackupURL, "there is no backup to point at")
+    }
+
+    /// The other side of the same property: once a save CAN back up again, the warning goes away
+    /// rather than sticking around as a permanent scare.
+    func testASuccessfulBackupClearsAPreviousBackupFailure() async throws {
+        let vaultURL = tempDirectory.appendingPathComponent("recovers.kdbx")
+        try Data("an existing database".utf8).write(to: vaultURL)
+
+        let blockedRoot = tempDirectory.appendingPathComponent("blocked-then-fine", isDirectory: true)
+        try Data("not a directory".utf8).write(to: blockedRoot)
+
+        // One codec instance for both stores: `InMemoryVaultCodec`'s "ciphertext" is a per-instance
+        // dictionary, so a second instance could not decode what the first one wrote.
+        let codec = InMemoryVaultCodec()
+        let store = VaultStore(
+            codec: codec,
+            fileAccess: SandboxedVaultFileAccess(
+                backupPolicy: .init(
+                    root: { blockedRoot },
+                    maxCount: 10,
+                    maxAge: VaultBackupPolicy.default.maxAge,
+                    maxTotalBytes: VaultBackupPolicy.default.maxTotalBytes,
+                    now: Date.init
+                )
+            )
+        )
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        store.upsert(makeEntry(title: "First"))
+        await store.save()
+        XCTAssertNotNil(store.lastBackupError)
+
+        // Clear the obstruction and save again through a store whose root now works.
+        try FileManager.default.removeItem(at: blockedRoot)
+        let healthy = VaultStore(codec: codec, fileAccess: makeFileAccess())
+        await healthy.open(url: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        healthy.upsert(makeEntry(title: "Second"))
+        await healthy.save()
+
+        XCTAssertNil(healthy.lastBackupError, "the warning must not outlive the condition")
+        XCTAssertNotNil(healthy.lastBackupURL)
+    }
+
+    func testBackupRetentionKeepsOnlyTheNewestTen() async {
         let vaultURL = tempDirectory.appendingPathComponent("rotate.kdbx")
         let codec = InMemoryVaultCodec()
         let credentials = VaultCredentials(password: "pw", keyFile: nil)
@@ -288,9 +399,16 @@ final class VaultStoreTests: XCTestCase {
             await store.save()
         }
 
-        let contents = try! FileManager.default.contentsOfDirectory(at: tempDirectory, includingPropertiesForKeys: nil)
-        let backups = contents.filter { $0.lastPathComponent.hasPrefix("rotate.kdbx.bak-") }
-        XCTAssertEqual(backups.count, 10)
+        XCTAssertEqual(backups(of: vaultURL).count, 10)
+        // And nothing beside the vault: the sibling `<name>.kdbx.bak-<stamp>` this used to write is
+        // the ungranted write issue #26 removed, so its absence is part of the contract now.
+        let siblings = (try? FileManager.default.contentsOfDirectory(
+            at: tempDirectory, includingPropertiesForKeys: nil
+        )) ?? []
+        XCTAssertEqual(
+            siblings.filter { $0.lastPathComponent.contains(".bak-") }, [],
+            "a `.bak-` sibling was written next to the database"
+        )
     }
 
     // MARK: - assignDatabaseIDIfNeeded() (Touch ID enrollment support)

@@ -275,6 +275,19 @@ final class AppEnvironment {
         enrolledDatabaseIDsByBookmarkHash = map
     }
 
+    /// The directory holding backups of the open database, or — with nothing open — the directory
+    /// every database's backups live under. `nil` when this environment keeps no on-disk backups,
+    /// which is the `-ui-testing 1` fake.
+    ///
+    /// Exists so `AppCommands` can offer "Show Backups in Finder" without reaching for the
+    /// concrete `SandboxedVaultFileAccess`: backups moved into the app's sandbox container (issue
+    /// #26), where a user would never find them, so the app has to be able to point at them. Pure
+    /// path derivation — nothing is created here — so it is safe to read from a menu item's
+    /// enablement on every redraw.
+    var backupDirectory: URL? {
+        fileAccess.backupDirectory(for: store.currentURL)
+    }
+
     /// Resolves a bookmark minted by `rememberRecentDatabase(_:)`, for `WelcomeView`'s recent-
     /// databases list. `nil` when the bookmark can no longer be resolved at all (file deleted,
     /// volume unmounted) — `WelcomeView` is expected to simply drop that entry rather than show it.
@@ -332,6 +345,22 @@ extension VaultError {
             return "This database uses a feature pass-sumo doesn't support yet: \(feature)"
         case .io(let detail):
             return "Couldn't read the file: \(detail)"
+        }
+    }
+
+    /// Wording for the one case where the save SUCCEEDED but its pre-save backup did not —
+    /// `VaultStore.lastBackupError`, rendered by `StatusBar`.
+    ///
+    /// Its own sentence rather than `displayMessage`, because `displayMessage` opens with
+    /// "Couldn't read the file", which for this case says the opposite of what happened: the file
+    /// was written, it is the *copy* that was not made. The user needs both halves — the data is
+    /// safe, and it went to disk without the version-before-it being kept.
+    var backupFailureMessage: String {
+        switch self {
+        case .io(let detail):
+            return "Saved, but no backup: \(detail)"
+        default:
+            return "Saved, but no backup: \(displayMessage)"
         }
     }
 }

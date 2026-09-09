@@ -30,7 +30,7 @@ final class TornWriteTests: DurabilityTestCase {
         XCTAssertTrue(titles.contains("v2"), "the new entry is missing: \(titles)")
         XCTAssertTrue(titles.contains("v1"), "the old entry was lost: \(titles)")
 
-        let backups = backups(of: database)
+        let backups = try backups(of: database)
         XCTAssertEqual(backups.count, 1, "exactly one backup should have been rotated in")
         let backup = try XCTUnwrap(backups.first)
         XCTAssertEqual(
@@ -71,7 +71,7 @@ final class TornWriteTests: DurabilityTestCase {
             "nothing had been written yet, so the file must be untouched"
         )
         XCTAssertEqual(
-            backups(of: database), [],
+            try backups(of: database), [],
             "the backup is taken inside the write — a kill before it must not have produced one"
         )
         let titles = try assertOpens(database, "after a kill during the KDF")
@@ -106,7 +106,7 @@ final class TornWriteTests: DurabilityTestCase {
             "encoding is not supposed to touch the disk at all"
         )
         XCTAssertEqual(
-            backups(of: database), [],
+            try backups(of: database), [],
             "the backup is taken inside the write, which had not started"
         )
         XCTAssertEqual(
@@ -118,6 +118,10 @@ final class TornWriteTests: DurabilityTestCase {
     // MARK: - Killed during the backup
 
     /// Killed while the pre-save backup copy is in flight.
+    ///
+    /// The copy's destination is the app's own container, not a sibling of the vault (issue #26),
+    /// so the trigger watches the per-database backup directory — `backupDirectory(of:)`, derived
+    /// by the production code — rather than the vault's directory.
     ///
     /// Two things must hold. The database itself is untouched — the backup is taken before the
     /// write, so nothing has replaced it yet. And any backup file left behind must be a complete,
@@ -151,8 +155,14 @@ final class TornWriteTests: DurabilityTestCase {
             "the backup runs before the write — the database itself must be untouched"
         )
 
-        XCTAssertFalse(backups(of: database).isEmpty, "the trigger fired, so a backup must exist")
-        for backup in backups(of: database) {
+        XCTAssertEqual(
+            Self.temporaryURLs(besides: database), [],
+            "the backup was written beside the vault — that is the ungranted write issue #26 "
+                + "removed, and a kill mid-copy is exactly where a fallback would show up"
+        )
+
+        XCTAssertFalse(try backups(of: database).isEmpty, "the trigger fired, so a backup must exist")
+        for backup in try backups(of: database) {
             let titles = try assertOpens(
                 backup,
                 "a backup left behind by a kill during the copy — \(Self.size(of: backup)) of "
@@ -182,7 +192,7 @@ final class TornWriteTests: DurabilityTestCase {
             try Data(contentsOf: database), before,
             "the write had not replaced anything yet"
         )
-        let backup = try XCTUnwrap(backups(of: database).first, "the backup should exist by now")
+        let backup = try XCTUnwrap(try backups(of: database).first, "the backup should exist by now")
         XCTAssertEqual(
             try Data(contentsOf: backup), before,
             "a backup that reached full size must also be byte-identical, not merely the right length"
@@ -229,9 +239,10 @@ final class TornWriteTests: DurabilityTestCase {
         )
         // A kill mid-write leaves Foundation's temporary file orphaned next to the database — there
         // is no one left to rename or delete it. That is tolerable, but only as long as it cannot be
-        // mistaken for the vault or for one of its backups: the rotation in
-        // `SandboxedVaultFileAccess` selects backups by filename prefix, and a stray file matching
-        // that prefix would be counted as a backup and eventually presented as one.
+        // mistaken for the vault itself: an orphan ending in `.kdbx` is one a user could open by
+        // accident, or a future "recent databases" scan could offer them. (It can no longer be
+        // mistaken for a backup — backups are not in this directory at all any more, and
+        // `VaultBackupStore` matches its own files by an exact name shape rather than a prefix.)
         for orphan in Self.temporaryURLs(besides: database) {
             XCTAssertFalse(
                 orphan.pathExtension == "kdbx",
@@ -268,7 +279,7 @@ final class TornWriteTests: DurabilityTestCase {
                 "kill at +\(offset)s left a file that is neither version: \(titles); "
                     + "markers: \(outcome.markers)"
             )
-            for backup in backups(of: database) {
+            for backup in try backups(of: database) {
                 try assertOpens(backup, "a backup left by a kill at +\(offset)s")
             }
         }

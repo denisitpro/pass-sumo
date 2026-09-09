@@ -21,14 +21,23 @@ Instead:
 - **`Sources/DurabilityTests`** — spawns that helper and kills it at a controlled point, then
   reopens whatever is on disk with the real codec.
 
+One injected seam, and it is not optional: backups go to `<Application Support>/PassSumo/Backups`
+(see `VaultBackupStore`), which for an unsigned, unsandboxed run is the developer's own shared
+Application Support. Every `SandboxedVaultFileAccess` this suite builds is therefore pointed at a
+per-test scratch root — `DurabilityTestCase.backupRoot()`, passed to the helper as
+`--backup-root` — so a run cannot litter or prune a directory it does not own. The per-database
+subdirectory *inside* that root is still derived by the production code
+(`VaultBackupStore.directoryName(for:)`), so a change to how backups are named cannot leave these
+tests looking in a stale place and calling it "no backup".
+
 The kill point is chosen by evidence, not by sleeping and hoping:
 
 | Trigger | Fires on | Lands in |
 |---|---|---|
 | `.marker(save-begin)` | a line on the helper's stdout | the Argon2 derivation, before anything is written |
-| `.backupAppears` | the `.bak-` file existing | the backup copy |
+| `.backupAppears` | a file appearing in the backup directory | the backup copy |
 | `.backupReaches(bytes:)` | the backup reaching full size | after the backup, before the write |
-| `.atomicTemporaryAppears` | a sibling temp file existing | inside `Data.write(options: [.atomic])` |
+| `.atomicTemporaryAppears` | a sibling of the vault existing | inside `Data.write(options: [.atomic])` |
 | `.delayAfterSaveBegin(_:)` | a stopwatch | anywhere — the shotgun sweep |
 
 Every kill test then asserts which stages the helper *actually reached*, so a kill that arrives too
@@ -58,8 +67,9 @@ defect** — see "Findings" below.
 ### `AtomicWriteTests.swift` — the atomic-write path under a sandbox
 
 Establishes that `.atomic` replaces the file by `rename(2)` (the file's inode changes), that it
-still does so when only the file — not its directory — is writable, and what the production save
-path does under that same restriction. **This one records the other real defect.**
+still does so when only the file — not its directory — is writable, and that the production save
+path now completes under that same restriction, backup included. **This one found the other real
+defect, and now guards its fix** (issue #26 — see "Findings" below).
 
 ### `FormatConformanceTests.swift` — what we write is conformant, and safe
 
@@ -79,7 +89,8 @@ without allocating anything). Deliberately does not repeat what
 
 ## Findings
 
-Two real defects, both reported rather than fixed — fixing either is a separate decision.
+Two real defects. The first is still open and reported rather than fixed; the second is fixed
+(issue #26) and these tests now guard the fix.
 
 ### 1. `VaultStore.save()` has no mutual exclusion
 
@@ -94,25 +105,37 @@ Recorded as a strict `XCTExpectFailure` in `testTwoConcurrentSavesDoNotOverlap`,
 usable as a gate and the moment `save()` starts serialising, that test fails and forces the note to
 be removed.
 
-### 2. Under a file-scoped sandbox grant, the save fails — at the BACKUP, not the atomic write
+### 2. Under a file-scoped sandbox grant, the save failed — at the BACKUP, not the atomic write
+### *(found here, fixed in issue #26)*
 
-This was the open question issue #22 raised, and the answer is the opposite of the hypothesis.
+This was the open question issue #22 raised, and the answer was the opposite of the hypothesis.
 
 - `Data.write(options: [.atomic])` is **fine**. Watching the directory during a 300 MB atomic write
   shows a `v.kdbx.sb-<hex>-<rand>` sibling appear when the process is unrestricted and **no sibling
   at all** when the same write runs under a grant covering only the file — yet the inode still
   changes both times. Foundation falls back to a temporary file the sandbox permits and renames from
   there.
-- `SandboxedVaultFileAccess.makeBackupIfNeeded` is **not** fine. It copies the vault to
+- The backup was **not** fine. `SandboxedVaultFileAccess` copied the vault to
   `<name>.kdbx.bak-<stamp>` *next to the vault*, which means creating a new file in a directory the
-  app was never granted. Under a file-only grant the save fails with
-  `io("failed to back up …: you don't have permission to access …")`.
+  app was never granted. Under a file-only grant the save failed with
+  `io("failed to back up …: you don't have permission to access …")` — and since the backup runs
+  before the write it protects, the user could not save at all.
 
-The failure is safe — the database is left byte-identical, and `VaultStore` leaves `isDirty` set so
-the user is not told their edits are saved — but the user cannot save at all. If a real
-powerbox grant for a user-picked file is file-scoped (see the caveat below), this is a shipping
-blocker. The fix would be to put backups somewhere the app can always write (its container) or to
-ask for a directory grant; neither is done here.
+**What changed.** Backups moved into the app's own container, at
+`<Application Support>/PassSumo/Backups/<database name>-<hash of its path>/`, obtained from
+`FileManager` — no entitlement, and none to be added: a file-access entitlement claimed to make a
+write the user never chose is what got the sibling app ShotSumo rejected under App Review Guideline
+2.4.5(i). And the behavioural half: a backup that fails no longer aborts the save. `write` returns
+a `VaultBackupOutcome`, `VaultStore` keeps the reason in `lastBackupError`, and `StatusBar` shows
+it — the save proceeds and the user is told it went to disk unprotected. See `VaultBackupStore` for
+the destination, the per-database identity and the retention caps.
+
+`testProductionSavePathSucceedsUnderAFileOnlyGrantBecauseBackupsLiveInTheContainer` is the
+regression test. It is the same case that used to assert the failure, and it now requires four
+things: the save completes, a backup was actually made (a "fix" that stopped taking one would pass
+the first assertion alone), the backup is the *pre-save* version, and **nothing at all** was
+written beside the vault — a fallback that tried the sibling "just in case" would reintroduce the
+whole defect.
 
 ## What this suite does **not** prove
 
@@ -129,10 +152,27 @@ Read this before treating a green run as an all-clear.
   layer the App Sandbox is built on, applied by hand. It does **not** prove that a
   powerbox-issued extension has exactly that scope. The profile self-checks that it actually bites
   before any assertion relies on it.
+
+  Since issue #26 this caveat matters less than it did, and it is worth being precise about why.
+  The fix does not depend on knowing a powerbox grant's exact scope: the app no longer writes
+  **anything** into the vault's directory, so the only write left there is the atomic replacement
+  of a file the user explicitly picked — which is the narrowest thing any grant for that file can
+  possibly permit. What is still unverified is the interactive path end to end: nobody has yet
+  opened a database through `NSOpenPanel` in a signed build, saved, and watched the backup land.
+  That needs a human at the keyboard.
+- **The real container IS covered, and only under `make durability-signed`.**
+  `testAtomicWriteWorksInsideTheRealAppSandboxContainer` is the one test that writes through the
+  PRODUCTION backup policy — no injected root — and asserts the resulting file is under
+  `Library/Application Support/PassSumo/Backups`. That is the premise the whole of issue #26's fix
+  rests on (the app can always write its own container, with no file-access entitlement), so it is
+  checked against a genuine App Sandbox rather than modelled. It skips under `make durability`,
+  where there is no container to check.
 - **`make durability` runs unsigned, so the host has no sandbox at all.** An unsigned build gets no
   entitlements and therefore no container. `testAtomicWriteWorksInsideTheRealAppSandboxContainer`
   skips there with that message and only runs under `make durability-signed`. Even then it covers
-  the app's own container, which the app owns outright — not a file-scoped grant.
+  the app's own container, which the app owns outright — not a file-scoped grant. That is not a
+  weakness any more, it is the point: the container is where backups go, so that test is the one
+  real-sandbox evidence the fix has (see the bullet on it above).
 - **The two runs cover different things, and neither covers everything.** Measured:
   `make durability` = 22 tests, 1 skipped (the real-container one), 0 failures.
   `make durability-signed` = 22 tests, 4 skipped, 0 failures — the container test runs and passes,
@@ -144,9 +184,11 @@ Read this before treating a green run as an all-clear.
 - **APFS is doing some of the work.** `FileManager.copyItem` on APFS issues `clonefile(2)` — 1 GiB
   cloned in ~2 ms, measured — so the backup is complete the instant it exists and can never be
   observed half-written. On a volume where `copyfile` falls back to a byte copy (a network share, an
-  exFAT stick, a disk image) a kill mid-copy **would** leave a truncated `.bak-` file that the
-  rotation counts as a backup. This suite cannot reach such a volume; the tests state where the
-  guarantee comes from so nobody mistakes it for ours.
+  exFAT stick, a disk image) a kill mid-copy **would** leave a truncated backup that retention
+  counts as one. This suite cannot reach such a volume; the tests state where the guarantee comes
+  from so nobody mistakes it for ours. Note that the destination is now the app's container, so in
+  practice this is the container's filesystem — APFS on any Mac that ships today, but a guarantee
+  of the volume's, still not ours.
 - **Removable / external volumes are not covered.** Issue #22 asks for the kill tests to be repeated
   on one, since `rename(2)`'s atomicity is a filesystem guarantee. That needs a volume that is not
   present on a CI machine or reliably on the owner's.
@@ -162,7 +204,7 @@ Read this before treating a green run as an all-clear.
 
 ## Cost, and why it is not in `make test`
 
-Measured: **22 tests, ~28 s** of test time, against `make test`'s 217 tests in ~24 s. So it roughly
+Measured: **22 tests, ~27 s** of test time, against `make test`'s 233 tests in ~24 s. So it roughly
 doubles the routine check — real, but not the main reason it is separate.
 
 The reason it is separate is that it is a different kind of test. It spawns subprocesses and

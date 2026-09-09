@@ -20,6 +20,15 @@ struct StatusBar: View {
     /// (`ClipboardService.secondsRemaining`, `0` meaning "not counting" collapsed to `nil` by the
     /// caller).
     let secondsUntilClipboardClear: Int?
+    /// Set when the last save went through but its pre-save backup did not
+    /// (`VaultStore.lastBackupError`, worded by `VaultError.backupFailureMessage`). `nil` in the
+    /// normal case.
+    ///
+    /// Lives here rather than in an alert because the condition is not momentary: a backup fails
+    /// because the app's container cannot be written, which is true of the next save too. A
+    /// dismissable alert would be acknowledged once and the app would go on saving unprotected in
+    /// silence — the "swallowed failure" half of issue #26's policy, arrived at from the other side.
+    let backupWarning: String?
 
     var body: some View {
         HStack(spacing: 16) {
@@ -27,6 +36,15 @@ struct StatusBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityIdentifier("statusbar.path")
+
+            if let backupWarning {
+                Label(backupWarning, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(backupWarning)
+                    .accessibilityIdentifier("statusbar.backupWarning")
+            }
 
             if isDirty {
                 Label("Unsaved changes", systemImage: "circle.fill")
@@ -65,7 +83,8 @@ struct StatusBar: View {
         databasePath: "/Users/den/Documents/Personal.kdbx",
         isDirty: false,
         secondsUntilAutoLock: 284,
-        secondsUntilClipboardClear: nil
+        secondsUntilClipboardClear: nil,
+        backupWarning: nil
     )
 }
 
@@ -74,6 +93,18 @@ struct StatusBar: View {
         databasePath: "/Users/den/Documents/Personal.kdbx",
         isDirty: true,
         secondsUntilAutoLock: 12,
-        secondsUntilClipboardClear: 7
+        secondsUntilClipboardClear: 7,
+        backupWarning: nil
+    )
+}
+
+#Preview("Saved without a backup") {
+    StatusBar(
+        databasePath: "/Users/den/Documents/Personal.kdbx",
+        isDirty: false,
+        secondsUntilAutoLock: 284,
+        secondsUntilClipboardClear: nil,
+        backupWarning: "Saved, but no backup: couldn't back up Personal.kdbx before saving: "
+            + "the volume is out of space."
     )
 }

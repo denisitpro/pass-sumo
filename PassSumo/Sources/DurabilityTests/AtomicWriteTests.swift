@@ -61,8 +61,9 @@ final class AtomicWriteTests: DurabilityTestCase {
     /// the inode still changes either way. It falls back to a temporary file the sandbox does
     /// permit and renames from there.
     ///
-    /// The practical consequence: `.atomic` is not the thing that breaks in the sandbox. The backup
-    /// is — see the next test.
+    /// The practical consequence: `.atomic` is not the thing that breaks in the sandbox. The
+    /// backup was — a sibling `.bak-` file the app had no grant for — which is what issue #26
+    /// moved into the app's own container; see the next test.
     func testAtomicWriteSucceedsWhenTheSandboxGrantsTheFileButNotItsDirectory() throws {
         let (database, profile) = try makeSingleFileGrant()
 
@@ -84,22 +85,26 @@ final class AtomicWriteTests: DurabilityTestCase {
         try assertOpens(database, "after an atomic write under a file-only grant")
     }
 
-    /// **A real defect, found by this suite.** Under a file-only grant the production save path
-    /// fails — and not at the atomic write, which the test above shows is fine, but at the pre-save
-    /// backup: `SandboxedVaultFileAccess` copies the vault to `<name>.kdbx.bak-<stamp>` NEXT TO
-    /// the vault, which means creating a new file in a directory the app was never granted.
+    /// **The regression test for issue #26.** Under a file-only grant the whole production save
+    /// path now works, backup included, because the backup no longer goes anywhere near the
+    /// vault's directory.
     ///
-    /// The failure is at least a safe one — the save reports `VaultError.io`, the database is left
-    /// byte-for-byte intact, and `VaultStore` leaves `isDirty` set so the user is not told their
-    /// edits are on disk. But the user simply cannot save, which for a password manager whose
-    /// entire sandbox story is "the user picks a `.kdbx` with `NSOpenPanel`" is a shipping blocker,
-    /// not a rough edge.
+    /// This is the test that used to assert the defect. It previously required the save to FAIL:
+    /// `SandboxedVaultFileAccess` copied the vault to `<name>.kdbx.bak-<stamp>` beside itself,
+    /// which is a new file in a directory the app was never granted, and because the backup runs
+    /// before the write it protects, the save died with it. A password manager that cannot save is
+    /// not shippable, so the destination moved into the app's own container (`VaultBackupStore`).
     ///
-    /// This test asserts the CURRENT behaviour, including the failure, because pretending it does
-    /// not happen would remove the only signal anyone has. When the backup moves somewhere the app
-    /// can always write (its container) or the app starts asking for a directory grant, this test
-    /// is the one that has to be rewritten — deliberately, with the fix.
-    func testProductionSavePathIsBlockedByAFileOnlyGrantBecauseTheBACKUPNeedsTheDirectory() throws {
+    /// Four assertions, and each one is a different way the fix could be wrong:
+    ///
+    /// 1. The save completes — the helper reaches `done`.
+    /// 2. A backup was actually made. A "fix" that merely stopped attempting one would satisfy
+    ///    assertion 1 and quietly remove the protection the backup exists for.
+    /// 3. The backup is in the backup directory, and is the PRE-save version. A backup of the bytes
+    ///    the save just wrote is not a backup.
+    /// 4. Nothing was left beside the vault. Not one sibling — that is the write the sandbox
+    ///    refuses, and a fallback that tried it "just in case" would reintroduce the whole defect.
+    func testProductionSavePathSucceedsUnderAFileOnlyGrantBecauseBackupsLiveInTheContainer() throws {
         let (database, profile) = try makeSingleFileGrant()
         let before = try Data(contentsOf: database)
 
@@ -109,28 +114,33 @@ final class AtomicWriteTests: DurabilityTestCase {
             launcher: [Self.sandboxExec, "-f", profile.path]
         )
 
-        XCTAssertFalse(
+        XCTAssertTrue(
             outcome.reached(HelperStage.done),
-            "the save unexpectedly SUCCEEDED under a file-only grant. That is good news and this "
-                + "test is now wrong — check whether the backup moved out of the vault's directory, "
-                + "and rewrite this test around the new behaviour rather than deleting it."
+            "the save was refused under a file-only grant — the regression issue #26 fixed is "
+                + "back: markers \(outcome.markers), errors \(outcome.errors), info \(outcome.info)"
         )
         XCTAssertTrue(
-            outcome.errors.contains { $0.contains("failed to back up") },
-            "the save failed for some other reason than the backup: \(outcome.errors)"
+            outcome.info.contains { $0.hasPrefix("backup-made=") },
+            "the save succeeded but made no backup, which is not the fix — it is the protection "
+                + "being dropped to make the save go through: info \(outcome.info)"
         )
 
-        // The one thing that must never be negotiable: a save that cannot proceed leaves the
-        // existing database exactly as it was.
+        let backups = try backups(of: database)
+        XCTAssertEqual(backups.count, 1, "expected exactly one backup, got \(backups)")
+        let backup = try XCTUnwrap(backups.first)
         XCTAssertEqual(
-            try Data(contentsOf: database), before,
-            "a refused save damaged the database it could not replace"
+            try Data(contentsOf: backup), before,
+            "the backup must be the version that existed BEFORE this save"
         )
+
+        // The whole point of moving the backup: nothing of ours is written into the directory the
+        // sandbox did not grant. Not a backup, not a fallback, not debris.
         XCTAssertEqual(
             Self.temporaryURLs(besides: database), [],
-            "a refused save left debris next to the database"
+            "the save left a file beside the database, in a directory the app was never granted"
         )
-        try assertOpens(database, "after a save refused by the sandbox")
+        let titles = try assertOpens(database, "after a save under a file-only grant")
+        XCTAssertTrue(titles.contains("v2"), "the edit never reached disk: \(titles)")
     }
 
     // MARK: - The mechanism on a directory that cannot be written at all
@@ -140,15 +150,22 @@ final class AtomicWriteTests: DurabilityTestCase {
     /// read-only. Unlike the Seatbelt case, there is no fallback here: even a rename from elsewhere
     /// needs write permission on the destination directory, so the atomic write itself cannot land.
     ///
-    /// Included because the outcome is the one that matters for data safety: everything FAILS, and
+    /// Included because the outcome is the one that matters for data safety: the WRITE fails, and
     /// failing is correct. What must not happen is a partial write, a zero-byte file, or a save
     /// that reports success without having replaced anything.
+    ///
+    /// Note what changed with issue #26, because it is the distinction the whole fix turns on. This
+    /// case used to fail at the backup copy, before the write was even attempted. It now gets a
+    /// backup — the container is writable regardless of what the vault's directory permits — and
+    /// then fails at the write, which is the honest place to fail: the destination genuinely cannot
+    /// be replaced. So the assertion below is not just "it throws", it is "it throws having first
+    /// preserved the version it could not replace".
     func testSaveFailsCleanlyWhenTheDirectoryIsUnwritable() throws {
         let directory = try makeScratchDirectory()
         let database = try createDatabase(in: directory, title: "v1")
         let before = try Data(contentsOf: database)
 
-        let fileAccess = SandboxedVaultFileAccess()
+        let fileAccess = try makeFileAccess()
         // r-x: the directory can be listed and traversed, but nothing can be created or renamed
         // into it. The database file itself stays writable.
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
@@ -165,17 +182,32 @@ final class AtomicWriteTests: DurabilityTestCase {
             "an atomic write into an unwritable directory unexpectedly succeeded"
         )
 
-        // Then the whole save path. It fails earlier still — at the backup copy — but the property
-        // under test is the same: a refused save is refused as a whole.
+        // Then the whole save path. It now reaches the write before failing, and the write is what
+        // refuses — a refused save is still refused as a whole.
         XCTAssertThrowsError(
             try fileAccess.write(Data("not a database".utf8), to: database)
         ) { error in
-            guard case .io = error as? VaultError else {
+            guard case .io(let detail) = error as? VaultError else {
                 return XCTFail("expected VaultError.io, got \(error)")
             }
+            XCTAssertTrue(
+                detail.contains("failed to write"),
+                "the save should now fail at the WRITE, not at the backup — the backup goes to the "
+                    + "app's container, which this directory's permissions have no say over: \(detail)"
+            )
         }
 
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
+        // And the backup it took on the way through is the intact pre-write version.
+        let backups = try backups(of: database)
+        XCTAssertEqual(backups.count, 1, "expected one backup taken before the refused write")
+        if let backup = backups.first {
+            XCTAssertEqual(
+                try Data(contentsOf: backup), before,
+                "the backup taken before a refused write must be the version on disk"
+            )
+        }
         XCTAssertEqual(
             try Data(contentsOf: database), before,
             "the refused write must not have touched the database"
@@ -219,9 +251,32 @@ final class AtomicWriteTests: DurabilityTestCase {
         )
 
         // And the full path, backup included — inside the container the app owns the directory, so
-        // this is expected to succeed. It is the contrast with the file-only grant above.
-        let fileAccess = SandboxedVaultFileAccess()
+        // this is expected to succeed.
+        let fileAccess = try makeFileAccess()
         XCTAssertNoThrow(try fileAccess.write(bytes, to: url))
+
+        // The backup's destination under `make durability-signed` is the REAL production one: this
+        // asserts that `<Application Support>/PassSumo/Backups` is writable from inside a genuine
+        // App Sandbox container with no file-access entitlement at all — which is the premise the
+        // whole of issue #26's fix rests on, and the only test here that checks it for real rather
+        // than through an injected root.
+        let production = SandboxedVaultFileAccess()
+        let outcome = try production.write(bytes, to: url)
+        guard case .made(let backup) = outcome else {
+            return XCTFail(
+                "the production backup policy could not write inside the app's own container, "
+                    + "which is where issue #26 moved backups to: \(outcome)"
+            )
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: backup) }
+        XCTAssertTrue(
+            backup.path.contains("/Library/Application Support/PassSumo/Backups/"),
+            "the backup did not land under Application Support: \(backup.path)"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: backup), bytes,
+            "the backup is not a copy of what was on disk before the write"
+        )
     }
 
     // MARK: - Helpers
