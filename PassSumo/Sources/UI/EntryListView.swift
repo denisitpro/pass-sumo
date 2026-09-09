@@ -130,9 +130,17 @@ struct EntryListView: View {
         // Dense rows on purpose — hundreds of entries is the expected scale (repo CLAUDE.md
         // positioning notes), so this list favors information density over generous row padding.
         .padding(.vertical, 1)
-        // The mouse-driven equivalent of the existing Return-to-edit keyboard path — see
-        // `onOpenEntry`'s doc comment.
-        .onTapGesture(count: 2) { onOpenEntry(entry.id) }
+        // The whole row must be hit-testable, not just its text/icon content (an `HStack`'s
+        // `Spacer()` is otherwise a hole in the gesture's hit area), and this must be a
+        // `.simultaneousGesture` rather than a plain `.onTapGesture`/`.gesture`: `List(selection:)`
+        // on macOS already owns a click gesture for row selection, and an exclusive gesture here
+        // would compete with — and can lose to — that built-in one, silently swallowing the double
+        // click instead of ever calling `onOpenEntry`. Verified empirically: a plain
+        // `.onTapGesture(count: 2)` never fired against a real double-click in this List; this does.
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded { onOpenEntry(entry.id) }
+        )
         .contextMenu { contextMenuItems(for: entry) }
     }
 
