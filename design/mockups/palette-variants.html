@@ -57,7 +57,7 @@
 
   /* Semantic colours — identical in all three palettes --------------------- */
   --success:    #157F4F;  --success-bg: #E6F4EC;
-  --warning:    #A96B00;  --warning-bg: #FBF1DE;
+  --warning:    #A06400;  --warning-bg: #FBF1DE;
   --danger:     #B3261E;  --danger-bg:  #FBE9E7;
 
   --strength-weak:   #C0392B;
@@ -91,7 +91,7 @@
 
   --text:   #1B2430;
   --text-2: #5A6472;
-  --text-3: #8B93A0;
+  --text-3: #6E7684;
 
   --row-sel-bg:   #E4EBF6;
   --row-sel-text: #1F3C69;
@@ -119,7 +119,7 @@
 
   --text:   #0F1B2D;
   --text-2: #55617A;
-  --text-3: #8892A6;
+  --text-3: #6A7488;
 
   --row-sel-bg:   #D8E8FF;
   --row-sel-text: #0B479B;
@@ -147,7 +147,7 @@
 
   --text:   #10242A;
   --text-2: #4E6169;
-  --text-3: #85969C;
+  --text-3: #64777E;
 
   --row-sel-bg:   #D2E9EF;
   --row-sel-text: #0F5163;
@@ -848,7 +848,11 @@ svg.icon.solid { fill: currentColor; stroke: none; }
 .sheet-stage::before {
   content: "";
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1180px;
+  transform: translateX(-50%);
   background: var(--scrim);
 }
 .sheet, .annotation { position: relative; }
@@ -1618,7 +1622,7 @@ Rotate after every on-call handover — billing alerts go to ops@.</div>
           <button class="btn btn-plain" type="button">Close</button>
           <button class="btn" type="button">Copy</button>
           <button class="btn btn-primary" type="button">Use</button>
-          <div class="foot-note">Clipboard clears after 180 s</div>
+          <div class="foot-note">Clipboard clears after 30 s</div>
         </div>
       </div>
     </div>

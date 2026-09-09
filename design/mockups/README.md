@@ -43,6 +43,10 @@ issue #3 closes on a choice. The structural tokens (type scale, spacing, radii, 
 row heights, shadows) and the semantic colours are shared by all three variants and are the parts
 least likely to change.
 
+### Contrast
+
+The Tokens screen computes every contrast ratio live in the page. `--warning` and `--text-3` were adjusted on 2026-09-09 to clear WCAG AA 4.5:1 for normal text after the first render measured them at 4.4:1 and ~3.1:1 respectively. `--text-3` is therefore safe for captions and metadata rather than only for placeholder text.
+
 ### Archive when
 
 Issue #3 has settled on a palette and the decision has been written up as the design system. Keep
