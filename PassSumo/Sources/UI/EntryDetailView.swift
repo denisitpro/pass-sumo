@@ -224,13 +224,10 @@ struct EntryDetailView: View {
         }
     }
 
-    /// A scheme is required, not just a parseable string: `URL(string:)` alone happily accepts a
-    /// bare "example.com" that `NSWorkspace` then silently fails to open. Requiring a scheme is
-    /// what keeps `openURL` from no-oping on the common case of a user having pasted a bare domain
-    /// into the URL field, instead of surfacing a button that looks live but does nothing.
+    /// Shared with `EntryListView`'s row context menu (issue #48) — see `EntryURLResolver`'s own
+    /// doc comment for why the scheme test lives there instead of being duplicated here.
     private var resolvedURL: URL? {
-        guard !entry.url.isEmpty, let url = URL(string: entry.url), url.scheme != nil else { return nil }
-        return url
+        EntryURLResolver.resolvedURL(from: entry.url)
     }
 
     private var urlRow: some View {

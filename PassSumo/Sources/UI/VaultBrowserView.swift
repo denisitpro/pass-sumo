@@ -92,7 +92,10 @@ struct VaultBrowserView: View {
                 groupID: selectedGroupID,
                 searchText: $searchText,
                 selectedEntryID: $selectedEntryID,
-                onOpenEntry: { id in openForEdit(id) }
+                onOpenEntry: { id in openForEdit(id) },
+                onCopyUsername: { entry in clipboard.copy(entry.username) },
+                onCopyPassword: { entry in clipboard.copy(entry.password) },
+                onDeleteEntry: { id in requestDelete(id) }
             )
             .searchable(text: $searchText, placement: .toolbar, prompt: "Search entries and passwords")
             .searchFocused($isSearchFocused)
