@@ -61,8 +61,8 @@ itself complete and openable.
 
 ### `ConcurrentSaveTests.swift` — two saves must not overlap
 
-In-process, because the question is about the app's own orchestration. **This one records a real
-defect** — see "Findings" below.
+In-process, because the question is about the app's own orchestration. **This one found a real
+defect, and now guards its fix** (issue #27 — see "Findings" below).
 
 ### `AtomicWriteTests.swift` — the atomic-write path under a sandbox
 
@@ -89,21 +89,32 @@ without allocating anything). Deliberately does not repeat what
 
 ## Findings
 
-Two real defects. The first is still open and reported rather than fixed; the second is fixed
-(issue #26) and these tests now guard the fix.
+Two real defects, both now fixed (issues #27 and #26), and these tests guard both fixes.
 
-### 1. `VaultStore.save()` has no mutual exclusion
+### 1. `VaultStore.save()` had no mutual exclusion
+### *(found here, fixed in issue #27)*
 
-`save()` is `@MainActor`, but its body is an awaited `Task.detached`. A second `save()` entering
-during that suspension encodes and writes alongside the first: measured peak overlap is 2. Two
-backups are taken of the same pre-save file, and two atomic writes race for the same path — the
-loser's edits are silently discarded even though its `save()` reported success. The *file* is never
-torn (each write is atomic, so one rename simply wins), so this is a lost-update bug, not a
+`save()` was `@MainActor`, but its body was an awaited `Task.detached`. A second `save()` entering
+during that suspension encoded and wrote alongside the first: measured peak overlap was 2. Two
+backups were taken of the same pre-save file, and two atomic writes raced for the same path — the
+loser's edits were silently discarded even though its `save()` reported success. The *file* was
+never torn (each write is atomic, so one rename simply wins), so this was a lost-update bug, not a
 corruption bug.
 
-Recorded as a strict `XCTExpectFailure` in `testTwoConcurrentSavesDoNotOverlap`, so the suite stays
-usable as a gate and the moment `save()` starts serialising, that test fails and forces the note to
-be removed.
+**What changed.** Saves are now chained: each `save()` appends a task that awaits the previous
+one's completion before touching the vault, and the read-modify-write of that chain's tail happens
+on the main actor with no suspension point in between, so it cannot race. The expensive work still
+runs in a detached task, so a queued save waits off the main actor. A save asked for during another
+one waits and then encodes the state as of when it **runs** — never coalesced into the in-flight
+save, which has already taken its snapshot and provably does not contain the later edits. And the
+honesty half: a save clears `isDirty` only if nothing was edited after the snapshot it wrote, so an
+edit that landed during the KDF is no longer reported as being on disk.
+
+`testTwoConcurrentSavesDoNotOverlap` asserts peak overlap is 1 through the real stack; its
+`XCTExpectFailure` is gone. The lost update itself, and the dirty-flag half, are pinned
+deterministically in `UnitTests/VaultStoreSaveSerializationTests` — that suite can hold a fake
+codec *inside* the critical section instead of racing a real Argon2 derivation, so all three
+assertions fail on the old code for the right reason rather than by timing luck.
 
 ### 2. Under a file-scoped sandbox grant, the save failed — at the BACKUP, not the atomic write
 ### *(found here, fixed in issue #26)*
