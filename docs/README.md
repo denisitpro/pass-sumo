@@ -11,6 +11,7 @@ something is, or where something new should go.
 |---|---|
 | [`../README.md`](../README.md) | Repo entry point: what pass-sumo is, current status. |
 | [`feature.md`](feature.md) | The feature inventory: what's shipped, partial, and deliberately not doing — for audit and for the landing page. Path is a deliberate exception to the "where a new doc goes" rule below (issue #100). |
+| [`dependency-currency.md`](dependency-currency.md) | Standing audit table (issue #116): platform/toolchain, vendored KDBXKit, vendored Argon2, and every SwiftPM dependency — what we're on, what's current, and open owner decisions. Re-run before each release; diff against this file rather than rediscovering it. |
 | [`../CLAUDE.md`](../CLAUDE.md) (symlinked as `../AGENTS.md`) | Working agreements for AI sessions in this repo — positioning, key decisions, repo structure, working rules. Read before doing any work here. |
 | `publish/apple-facts.md` | Apple's Mac App Store requirements as verified facts, each with a confidence label (VERIFIED/INFERRED/UNVERIFIED). Includes what ShotSumo (same developer account) learned first-hand from its own rejections and validation errors. Ends with an OPEN QUESTIONS list to resolve before the first submission. |
 | `publish/export-compliance.md` | The encryption declaration (`ITSAppUsesNonExemptEncryption`), what Apple requires, the BIS annual self-classification report, and the French ANSSI declaration. |
