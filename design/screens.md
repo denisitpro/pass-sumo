@@ -58,8 +58,11 @@ or a lock.
 
 **Assembly.** One `cardSurface` on `canvas`, capped at a fixed content width and centred: a
 `hero-glyph-size` lock glyph in `text-3`; the filename in `headline`; **the full path** in
-`monoCaption`/`text-3`, middle-truncated; then the password field and the "Unlock" primary button
-**side by side** in one row.
+`monoCaption`/`text-3`, middle-truncated; a one-line instruction ("Enter password to unlock.") in
+`body`/`text-2`; then the password field and the "Unlock" primary button **side by side** in one
+row. At the foot of the card, the running version (`AppVersionInfo`, the same accessor Settings'
+About row reads) in `caption2`/`text-3` — this is issue #107: the owner wants to see which build he
+is running without leaving this screen.
 
 The path is deliberate: this user wants to know exactly which file on disk they are about to
 decrypt, not have it hidden behind a friendly display name. The field sits next to the button that
