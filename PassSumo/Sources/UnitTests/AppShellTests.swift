@@ -222,4 +222,80 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(commands.selectedEntry?.password, entry.password)
         XCTAssertEqual(commands.selectedEntry?.username, entry.username)
     }
+
+    func testNewGroupMenuRequestRoundTrips() async {
+        // Same shape as `testEditEntryCommandPublishesARequestForTheSelectedEntry`: `AppCommands`'
+        // "New Group" button body, exercised without a menu bar or `VaultBrowserView`'s own
+        // `groupNamePrompt` state.
+        let environment = AppEnvironment.uiTesting()
+        await environment.loadUITestingFixture()
+        environment.menuRequest = .newGroup
+        XCTAssertEqual(environment.menuRequest, .newGroup)
+    }
+
+    // MARK: - Copy URL / Copy One-Time Code (issue #16)
+
+    func testSelectedEntryURLResolvesAValidHTTPSURL() async {
+        let environment = AppEnvironment.uiTesting()
+        await environment.loadUITestingFixture()
+        guard case .unlocked(let vault) = environment.store.state,
+              let entry = vault.entries.first(where: { $0.url == "https://accounts.google.com" })
+        else {
+            XCTFail("expected the sample vault's Gmail entry")
+            return
+        }
+        environment.selectedEntryID = entry.id
+
+        XCTAssertEqual(AppCommands(environment: environment).selectedEntryURL, URL(string: entry.url))
+    }
+
+    func testSelectedEntryURLIsNilWhenNothingResolves() async {
+        // A bare host with no scheme (`URL(string:)` accepts it; `NSWorkspace` would silently fail
+        // on it) must disable "Launch URL" / "Copy Password and Launch URL" rather than firing on
+        // a value that cannot actually be opened.
+        let environment = AppEnvironment.uiTesting()
+        await environment.loadUITestingFixture()
+        guard case .unlocked(let vault) = environment.store.state, var entry = vault.entries.first
+        else {
+            XCTFail("expected the sample vault to have at least one entry")
+            return
+        }
+        entry.url = "example.com"
+        environment.store.upsert(entry)
+        environment.selectedEntryID = entry.id
+
+        XCTAssertNil(AppCommands(environment: environment).selectedEntryURL)
+    }
+
+    func testSelectedEntryTOTPGeneratorProducesACodeForAnEntryWithAOneTimeSecret() async {
+        let environment = AppEnvironment.uiTesting()
+        await environment.loadUITestingFixture()
+        guard case .unlocked(let vault) = environment.store.state,
+              let entry = vault.entries.first(where: { $0.otpAuthURL != nil })
+        else {
+            XCTFail("expected the sample vault to have an entry with a one-time secret")
+            return
+        }
+        environment.selectedEntryID = entry.id
+
+        let generator = AppCommands(environment: environment).selectedEntryTOTPGenerator
+        XCTAssertNotNil(generator)
+        // `try?` flattens (SE-0230), so this is `String?`, not `String??`.
+        let code = try? generator?.code(at: Date())
+        XCTAssertEqual(code?.count, generator?.config.digits)
+    }
+
+    func testSelectedEntryTOTPGeneratorIsNilForAnEntryWithNoOneTimeSecret() async {
+        let environment = AppEnvironment.uiTesting()
+        await environment.loadUITestingFixture()
+        guard case .unlocked(let vault) = environment.store.state,
+              let entry = vault.entries.first(where: { $0.otpAuthURL == nil })
+        else {
+            XCTFail("expected the sample vault to have an entry with no one-time secret")
+            return
+        }
+        environment.selectedEntryID = entry.id
+
+        XCTAssertNil(AppCommands(environment: environment).selectedEntryTOTPGenerator)
+    }
 }

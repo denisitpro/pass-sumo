@@ -620,6 +620,10 @@ struct VaultBrowserView: View {
         switch request {
         case .newEntry:
             editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
+        case .newGroup:
+            // Same call the toolbar's "New Group" button makes (see `newGroupParentID`'s own doc
+            // comment for where the folder lands).
+            handle(.create(parentID: newGroupParentID))
         case .editEntry(let id):
             openForEdit(id)
         case .deleteEntry(let id):

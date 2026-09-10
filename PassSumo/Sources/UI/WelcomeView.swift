@@ -86,7 +86,8 @@ struct WelcomeView: View {
             case .newDatabase:
                 isPresentingCreateSheet = true
                 environment.menuRequest = nil
-            case .openDatabase, .newEntry, .editEntry, .deleteEntry, .emptyRecycleBin, .focusSearch, nil:
+            case .openDatabase, .newEntry, .newGroup, .editEntry, .deleteEntry, .emptyRecycleBin,
+                 .focusSearch, nil:
                 break
             }
         }

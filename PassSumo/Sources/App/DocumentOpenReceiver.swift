@@ -25,6 +25,16 @@ final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     private var handler: ((URL) -> Void)?
     private var pending: URL?
 
+    /// **Issue #16's ⌘T caveat.** macOS turns on automatic window tabbing for every resizable
+    /// window by default, which is what installs a system-supplied Window ▸ "New Tab" item bound
+    /// to ⌘T — the same chord `AppCommands` now spends on "Copy One-Time Code" (matching
+    /// Strongbox). This app is a one-window, three-pane browser with no use for tabs, so turning
+    /// tabbing off removes the collision at its source instead of leaving ⌘T merely unclaimed by
+    /// our own menus and hoping the system item never appears.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         // Only the first file URL. Finder can hand over a multi-selection, and this app has one
         // window holding one vault — opening them all is issue #47, and opening the last one
