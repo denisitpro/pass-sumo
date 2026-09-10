@@ -8,9 +8,9 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 246 tests (1 skipped, 0 failures) and `make durability`
-22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
-single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
+issue #3). `make test` and `make durability` both pass green; run them for the counts rather than
+reading a number here, because every merge falsifies one. The unit suite's single skip,
+`testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
 unattended. The v1 feature scope lives in GitHub issue #1.
 
@@ -89,8 +89,8 @@ committed. `make help` lists every target; the ones that matter day to day:
   What it does and does not prove — in particular the unsigned/no-sandbox caveat — is documented in
   `PassSumo/Sources/DurabilityTests/README.md`, which also records the two real defects it found.
 - `make durability-signed` — the same suite with signing, so the real-App-Sandbox-container test
-  stops skipping (22 tests, 4 skipped). Most kill tests still work — the helper carries no
-  entitlements and stays unsandboxed — but four cases skip, because a sandboxed host cannot launch
+  stops skipping. Most kill tests still work — the helper carries no entitlements and stays
+  unsandboxed — but four cases skip, because a sandboxed host cannot launch
   `sandbox-exec` (no nesting) and cannot poll a directory fast enough to catch the atomic write's
   temporary file. Neither run is a superset of the other.
 - `make e2e` — the XCUITest suite (`PassSumoUITests`). Steals keyboard/mouse focus and needs a
