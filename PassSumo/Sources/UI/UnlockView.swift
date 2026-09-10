@@ -79,27 +79,28 @@ struct UnlockView: View {
     private static let contentWidth: CGFloat = 360
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Spacing.s6) {
             Image(systemName: "lock.doc")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .font(.system(size: Metrics.heroGlyphSize, weight: .light))
+                .foregroundStyle(Palette.textTertiary)
 
             Text(url.lastPathComponent)
-                .font(.headline)
+                .font(Typography.headline)
+                .foregroundStyle(Palette.text)
 
             // The full path, not just the filename — pass-sumo deliberately shows the machinery
             // (repo CLAUDE.md's positioning notes): this user wants to know exactly which file on
             // disk they are about to decrypt, not have that hidden behind a friendly display name.
             Text(url.path)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption)
+                .foregroundStyle(Palette.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityIdentifier("unlock.path")
 
             // The field sits next to the button that submits it (issue #32: the old `Spacer()`
             // pinned "Unlock" to the far right edge of a wide window, metres from the field).
-            HStack(spacing: 8) {
+            HStack(spacing: Spacing.s4) {
                 MasterPasswordField(
                     placeholder: "Master Password",
                     text: $password,
@@ -108,7 +109,11 @@ struct UnlockView: View {
                     revealIdentifier: "unlock.password.reveal"
                 )
 
+                // The one accent-filled action on this screen — everything else here is quiet by
+                // comparison, which is the whole point of the primary style (design/BRAND.md).
                 Button("Unlock") { Task { await submit() } }
+                    .buttonStyle(.tokenPrimary)
+                    .frame(height: Metrics.fieldHeight)
                     .keyboardShortcut(.defaultAction)
                     .disabled(isUnlocking || password.isEmpty)
                     .accessibilityIdentifier("unlock.submit")
@@ -120,25 +125,30 @@ struct UnlockView: View {
 
             if let message = environment.store.lastError?.displayMessage ?? biometricFailure {
                 Text(message)
-                    .font(.callout)
-                    .foregroundStyle(.red)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("unlock.error")
             }
 
             // The library's own words, kept out of the line above and selectable so they can be
-            // pasted into a bug report. Secondary on purpose: a user cannot act on it, but
-            // without it a "PassSumo could not read this database" report carries no evidence.
+            // pasted into a bug report. Quiet and monospaced on purpose: a user cannot act on it,
+            // but without it a "PassSumo could not read this database" report carries no evidence.
             if let diagnostic = environment.store.lastError?.diagnosticDetail {
                 Text(diagnostic)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Typography.monoCaption2)
+                    .foregroundStyle(Palette.textTertiary)
                     .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("unlock.errorDetail")
             }
 
             if canOfferEnrollment {
                 Toggle("Remember with Touch ID", isOn: $rememberWithTouchID)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.text)
                     .disabled(isUnlocking)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("unlock.rememberWithTouchID")
             }
 
@@ -152,14 +162,19 @@ struct UnlockView: View {
                     Task { await unlockWithBiometrics() }
                 } label: {
                     Label("Unlock with Touch ID", systemImage: "touchid")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.tokenSecondary)
                 .disabled(isUnlocking)
                 .accessibilityIdentifier("unlock.biometric")
             }
         }
-        .padding(32)
+        .padding(Spacing.s9)
         .frame(maxWidth: Self.contentWidth)
+        // The card the mockup centres on the canvas — `surface` ground, hairline edge, card shadow.
+        .cardSurface()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.canvas)
         .task { identifier = environment.biometricsIdentifier(for: url) }
     }
 

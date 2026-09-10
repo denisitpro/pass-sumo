@@ -95,11 +95,23 @@ struct EntryListView: View {
                             : "No entry matches “\(searchText)”."
                     )
                 )
+                .foregroundStyle(Palette.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Palette.surface)
             } else {
                 List(entries, selection: $selectedEntryID) { entry in
-                    row(for: entry)
+                    row(for: entry, isLast: entry.id == entries.last?.id)
                         .accessibilityIdentifier("list.entry.\(entry.id)")
+                        // The row draws its own ground, height, padding and inset hairline (see
+                        // `entryRowSurface`), so `List` must contribute none of the three: no
+                        // insets, no separator, no default row background.
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Palette.surface)
                 .onKeyPress(.return) {
                     guard let selectedEntryID else { return .ignored }
                     onOpenEntry(selectedEntryID)
@@ -110,26 +122,33 @@ struct EntryListView: View {
         .accessibilityIdentifier("browser.list")
     }
 
-    private func row(for entry: VaultEntry) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
+    private func row(for entry: VaultEntry, isLast: Bool) -> some View {
+        let isSelected = entry.id == selectedEntryID
+        // Title and sub-line are pushed together into the mockup's 34pt row: 13/17 over 11/13, so
+        // both fit without the row growing. Dense on purpose — hundreds of entries is the expected
+        // scale (repo CLAUDE.md positioning notes).
+        return HStack(spacing: Spacing.s4) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text(entry.title.isEmpty ? "Untitled" : entry.title)
+                    .font(isSelected ? Typography.bodyMedium : Typography.body)
+                    .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.text)
+                    .lineLimit(1)
                 if !entry.username.isEmpty {
                     Text(entry.username)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Typography.caption2)
+                        .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
+                        .lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
             if entry.otpAuthURL != nil {
                 Image(systemName: "clock.badge.checkmark")
-                    .foregroundStyle(.secondary)
+                    .font(Typography.caption)
+                    .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textTertiary)
                     .accessibilityLabel("Has a one-time code")
             }
         }
-        // Dense rows on purpose — hundreds of entries is the expected scale (repo CLAUDE.md
-        // positioning notes), so this list favors information density over generous row padding.
-        .padding(.vertical, 1)
+        .entryRowSurface(isSelected: isSelected, showsSeparator: !isLast)
         // The whole row must be hit-testable, not just its text/icon content (an `HStack`'s
         // `Spacer()` is otherwise a hole in the gesture's hit area), and this must be a
         // `.simultaneousGesture` rather than a plain `.onTapGesture`/`.gesture`: `List(selection:)`

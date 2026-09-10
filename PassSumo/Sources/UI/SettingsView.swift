@@ -166,7 +166,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .font(Typography.body)
+        .foregroundStyle(Palette.text)
         .frame(width: 420, height: 420)
+        .background(Palette.canvas)
         .accessibilityIdentifier("root.settings")
         // Push edits into the already-running services immediately — a timeout change should take
         // effect on the vault the user has open right now, not only on the next launch. `settings`
@@ -189,7 +192,8 @@ struct SettingsView: View {
         if case .unlocked = environment.store.state {
             if let unavailable = BiometricUnlock.availabilityError() {
                 Text(unavailable.userMessage)
-                    .foregroundStyle(.secondary)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
                     .accessibilityIdentifier("settings.touchID.unavailable")
             } else {
                 Toggle("Unlock with Touch ID", isOn: touchIDBinding)
@@ -200,14 +204,15 @@ struct SettingsView: View {
                 }
                 if let touchIDError {
                     Text(touchIDError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.danger)
                         .accessibilityIdentifier("settings.touchID.error")
                 }
             }
         } else {
             Text("Open a database to set up Touch ID unlock.")
-                .foregroundStyle(.secondary)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
                 .accessibilityIdentifier("settings.touchID.noDatabase")
         }
     }

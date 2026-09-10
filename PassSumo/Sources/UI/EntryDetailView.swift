@@ -147,10 +147,10 @@ struct EntryDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Spacing.s6) {
                 header
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Spacing.s3) {
                     FieldRow(label: "Title", value: entry.title)
                     FieldRow(
                         label: "Username", value: entry.username,
@@ -182,8 +182,10 @@ struct EntryDetailView: View {
 
                 metadataSection
             }
-            .padding(20)
+            .padding(Spacing.s7)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Palette.surface)
         .onAppear { lastSeenEntryID = entry.id }
         // `initial: true` so the first render is the build, not a render that decodes. Keyed on
         // the attachment LIST rather than on `entry.id`: an edit that adds or removes one keeps
@@ -210,18 +212,33 @@ struct EntryDetailView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: Spacing.s5) {
             Text(entry.title.isEmpty ? "Untitled" : entry.title)
-                .font(.title2.weight(.semibold))
-            Spacer()
+                .font(Typography.title3)
+                .foregroundStyle(Palette.text)
+                .lineLimit(1)
+            Spacer(minLength: 0)
             Button {
                 onEdit()
             } label: {
                 Label("Edit", systemImage: "pencil")
             }
+            .buttonStyle(.tokenSecondary)
             .accessibilityIdentifier("detail.edit")
             .keyboardShortcut("e", modifiers: .command)
         }
+    }
+
+    /// The mockup's `.section-head`: a quiet caption over a hairline that separates one group of
+    /// fields from the next. One function so all three sections cannot drift apart.
+    private func sectionHeading(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s5) {
+            Palette.border.frame(height: Metrics.hairline)
+            Text(title)
+                .font(Typography.captionMedium)
+                .foregroundStyle(Palette.textSecondary)
+        }
+        .padding(.top, Spacing.s3)
     }
 
     /// Shared with `EntryListView`'s row context menu (issue #48) — see `EntryURLResolver`'s own
@@ -231,15 +248,15 @@ struct EntryDetailView: View {
     }
 
     private var urlRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            FieldRow(label: "URL", value: entry.url)
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.s4) {
+            FieldRow(label: "URL", value: entry.url, isLink: resolvedURL != nil)
             if let resolvedURL {
                 Button {
                     NSWorkspace.shared.open(resolvedURL)
                 } label: {
                     Image(systemName: "arrow.up.forward.square")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tokenGlyph)
                 .help("Open URL")
                 .accessibilityLabel("Open URL")
                 .accessibilityIdentifier("detail.openURL")
@@ -248,10 +265,8 @@ struct EntryDetailView: View {
     }
 
     private var customFieldsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Custom Fields")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Spacing.s3) {
+            sectionHeading("Custom Fields")
             // No per-field "protected" flag survives into `VaultEntry.customFields` — it's a flat
             // `[String: String]` (see `Domain.swift`) — so unlike Password above there is no
             // signal here to conceal any of these by default; every custom field renders plainly.
@@ -276,17 +291,15 @@ struct EntryDetailView: View {
     /// Which payloads get decoded at all is `AttachmentPreviewPolicy`'s decision; read it before
     /// widening anything here.
     private var attachmentsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Attachments")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Spacing.s4) {
+            sectionHeading("Attachments")
             ForEach(entry.attachments) { attachment in
                 attachmentRow(attachment)
             }
             if let exportError {
                 Label(exportError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("detail.exportError")
             }
         }
@@ -322,18 +335,20 @@ struct EntryDetailView: View {
         // function must not touch `resolveAttachment` itself. Absent state means the rebuild has
         // not run yet, which reads as "not resolvable" for one frame and then corrects itself.
         let state = attachmentRows[attachment.id]
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        return VStack(alignment: .leading, spacing: Spacing.s3) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.s4) {
                 Image(systemName: "paperclip")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 1) {
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+                VStack(alignment: .leading, spacing: Spacing.s1) {
                     Text(attachment.name)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.text)
                     Text(Self.byteFormatter.string(fromByteCount: Int64(attachment.byteCount)))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                        .font(Typography.monoCaption2)
+                        .foregroundStyle(Palette.textTertiary)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 Button {
                     // Resolved at the moment of export rather than held on the row: one plaintext
                     // copy, alive only for the duration of the write.
@@ -342,7 +357,7 @@ struct EntryDetailView: View {
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tokenGlyph)
                 .help("Save this attachment to a file")
                 .accessibilityLabel("Save attachment")
                 // Identifiers are keyed by the attachment's NAME, which KDBX already requires to
@@ -359,7 +374,7 @@ struct EntryDetailView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: 220, maxHeight: 140, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.xs, style: .continuous))
                     .accessibilityIdentifier("detail.attachmentPreview.\(attachment.name)")
             }
         }
@@ -373,10 +388,8 @@ struct EntryDetailView: View {
     }()
 
     private var metadataSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Metadata")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Spacing.s3) {
+            sectionHeading("Metadata")
             // The product deliberately shows the machinery — timestamps and the raw KDBX entry
             // UUID — rather than hiding it behind an "advanced" disclosure. Positioning note (repo
             // CLAUDE.md): this app's user wants to see how the database is actually built, not be

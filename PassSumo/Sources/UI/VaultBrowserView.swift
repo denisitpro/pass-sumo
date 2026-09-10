@@ -134,11 +134,17 @@ struct VaultBrowserView: View {
                             systemImage: "lock.doc",
                             description: Text("Choose an entry from the list.")
                         )
+                        .foregroundStyle(Palette.textSecondary)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Palette.surface)
                 .accessibilityIdentifier("browser.detail")
             }
         }
+        // The toolbar shares the sidebar's tone, as the mockup's `.toolbar` does — otherwise the
+        // window's chrome is the one band still painted by the system.
+        .toolbarBackground(Palette.sidebar, for: .windowToolbar)
         .onAppear {
             isDetailPaneVisible = appEnvironment?.settings.detailPaneVisible ?? true
         }

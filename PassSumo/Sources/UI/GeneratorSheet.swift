@@ -39,16 +39,17 @@ struct GeneratorSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Spacing.s6) {
             Text("Generate Password")
-                .font(.headline)
+                .font(Typography.headline)
+                .foregroundStyle(Palette.text)
 
             resultField
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Spacing.s2) {
                 Text("Length: \(recipe.length)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
                 // 4...64: `PasswordGenerator` itself has no upper bound, but a slider needs one —
                 // 64 comfortably covers every real site's field-length cap while keeping the
                 // slider usable at a small drag distance.
@@ -63,22 +64,27 @@ struct GeneratorSheet: View {
                 .accessibilityIdentifier("generator.length")
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Spacing.s3) {
                 Toggle("Lowercase (a–z)", isOn: $recipe.lowercase)
                 Toggle("Uppercase (A–Z)", isOn: $recipe.uppercase)
                 Toggle("Digits (0–9)", isOn: $recipe.digits)
                 Toggle("Symbols (!#$%…)", isOn: $recipe.symbols)
                 Toggle("Exclude ambiguous characters (0 O 1 l I)", isOn: $recipe.excludeAmbiguous)
             }
+            .font(Typography.body)
+            .foregroundStyle(Palette.text)
 
             Text("Entropy: \(Int(generator.strengthBits(for: recipe).rounded())) bits")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption2)
+                .foregroundStyle(Palette.textTertiary)
                 .accessibilityIdentifier("generator.entropy")
 
-            VStack(alignment: .trailing, spacing: 4) {
-                HStack {
+            VStack(alignment: .trailing, spacing: Spacing.s2) {
+                Divider().overlay(Palette.border)
+
+                HStack(spacing: Spacing.s3) {
                     Button("Regenerate", action: regenerate)
+                        .buttonStyle(.tokenSecondary)
                         .accessibilityIdentifier("generator.regenerate")
                         .keyboardShortcut("r", modifiers: .command)
 
@@ -89,7 +95,7 @@ struct GeneratorSheet: View {
                     // and Use beside it. `.cancelAction` is what keeps Esc working — SwiftUI does
                     // not dismiss a macOS sheet on Esc by itself; a button bound to it is what does.
                     Button("Close") { dismiss() }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.tokenQuiet)
                         .keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("generator.close")
 
@@ -97,6 +103,9 @@ struct GeneratorSheet: View {
                     // `ClipboardService`, auto-clear and concealed-pasteboard markers included —
                     // see that type) and leaves the sheet open, e.g. to keep tweaking the recipe.
                     Button("Copy") { clipboard.copy(result) }
+                        // Primary when it is the only committing action on the sheet (opened from
+                        // the toolbar, with no field to fill), secondary when "Use" is beside it.
+                        .actionButtonStyle(isPrimary: onUse == nil)
                         .accessibilityIdentifier("generator.copy")
                         .disabled(result.isEmpty)
 
@@ -108,6 +117,7 @@ struct GeneratorSheet: View {
                             onUse(result)
                             dismiss()
                         }
+                        .buttonStyle(.tokenPrimary)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("generator.use")
                         .disabled(result.isEmpty)
@@ -119,13 +129,14 @@ struct GeneratorSheet: View {
                 // value rather than restating whatever `ClipboardService`'s own default happens to
                 // be right now.
                 Text("Clipboard clears after \(Int(clipboard.clearInterval))s")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Typography.monoCaption2)
+                    .foregroundStyle(Palette.textTertiary)
                     .accessibilityIdentifier("generator.clipboardTimeout")
             }
         }
-        .padding(20)
+        .padding(Spacing.s7)
         .frame(width: 380)
+        .background(Palette.surface)
         .onAppear(perform: regenerate)
         // `Recipe` is `Equatable` (see `PasswordGenerator.swift`) specifically so this can fire on
         // ANY toggle/length change without listing each `@State` var separately — a new recipe
@@ -136,19 +147,20 @@ struct GeneratorSheet: View {
 
     @ViewBuilder
     private var resultField: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Spacing.s2) {
             Text(result.isEmpty ? " " : result)
-                .font(.system(.body, design: .monospaced))
+                .font(Typography.monoField)
+                .foregroundStyle(Palette.text)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                .padding(Spacing.s4)
+                .sunkenWell()
                 .accessibilityIdentifier("generator.result")
 
             if let error {
                 Text(errorMessage(for: error))
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
             }
         }
     }

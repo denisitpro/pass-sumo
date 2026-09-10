@@ -30,10 +30,10 @@ struct PasswordRevealState: Equatable {
 /// of `CreateDatabaseSheet` (issue #32).
 ///
 /// Deliberately does NOT use `.textFieldStyle(.roundedBorder)`: the system's own rounded-border
-/// rendering is a near-invisible 1px hairline in both appearances, which was the owner's actual
-/// complaint (issue #32 — "the field is ugly, barely visible"), not just the width bug. This draws
-/// its own background/border/focus-ring instead, sized to read as an input at a glance in both
-/// light and dark. The reveal toggle sits INSIDE the field's trailing edge (not a separate button
+/// rendering is a near-invisible 1px hairline, which was the owner's actual complaint (issue #32 —
+/// "the field is ugly, barely visible"), not just the width bug. It draws its own
+/// background/border/focus-ring instead, from the design token layer's `.fieldChrome` (issue #56),
+/// sized to read as an input at a glance. The reveal toggle sits INSIDE the field's trailing edge (not a separate button
 /// beside it) as a quiet, borderless glyph — deliberately not `FieldRow`'s `.toggleStyle(.button)`
 /// treatment, because that renders as a filled, tinted button once revealed, which next to
 /// `Unlock`'s own prominent default-action styling reads as two equally-weighted actions and
@@ -53,35 +53,22 @@ struct MasterPasswordField: View {
     @State private var reveal = PasswordRevealState()
     @FocusState private var isFocused: Bool
 
-    /// Room reserved on the trailing edge for the reveal glyph, so typed text never runs under it.
-    private static let trailingInset: CGFloat = 34
-
     var body: some View {
         ZStack(alignment: .trailing) {
             fieldContent
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(Typography.field)
+                .foregroundStyle(Palette.text)
                 .controlSize(.large)
-                .padding(.vertical, 9)
-                .padding(.leading, 10)
-                .padding(.trailing, Self.trailingInset)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
-                )
-                .overlay(
-                    // Contrast, not just presence: `.primary` at partial opacity reads as a clear
-                    // mid-gray line in light mode and a clear light-gray line in dark mode, instead
-                    // of relying on a single fixed gray that only works in one appearance. Focus
-                    // swaps to the full-strength accent color and a thicker line — the "clear focus
-                    // indication" the brief asks for, owned by this view rather than left to
-                    // whatever the platform default happens to render.
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(
-                            isFocused ? Color.accentColor : Color.primary.opacity(0.32),
-                            lineWidth: isFocused ? 2 : 1.25
-                        )
-                )
+                .padding(.leading, Spacing.s4)
+                .padding(.trailing, Metrics.fieldGlyphInset)
+                .frame(height: Metrics.fieldHeight)
+                // Border weight, ground and focus ring all come from the token layer's
+                // `.fieldChrome` — see `FieldChrome` in `DesignStyles.swift`. Resting state is a
+                // `border-strong` line at `field-border-width`, which is what makes the field read
+                // as an input at a glance (issue #32); focus swaps to the accent at
+                // `border-focus-width` plus the `accent-200` glow.
+                .fieldChrome(isFocused: isFocused)
                 .focused($isFocused)
                 .disabled(isDisabled)
                 .accessibilityIdentifier(fieldIdentifier)
@@ -90,11 +77,9 @@ struct MasterPasswordField: View {
                 reveal.toggle()
             } label: {
                 Image(systemName: reveal.isRevealed ? "eye.slash" : "eye")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
+            .buttonStyle(.tokenGlyph)
+            .padding(.trailing, Spacing.s3)
             .disabled(isDisabled)
             .help(reveal.isRevealed ? "Hide password" : "Reveal password")
             .accessibilityLabel(reveal.isRevealed ? "Hide password" : "Reveal password")
@@ -117,9 +102,10 @@ struct MasterPasswordField: View {
     @ViewBuilder
     private var fieldContent: some View {
         // A custom `prompt` instead of the plain-string initializer: the system's default
-        // placeholder gray reads as a whisper (the owner's other complaint). `.secondary` still
-        // reads unambiguously as "nothing typed yet" rather than real content, just not this faint.
-        let prompt = Text(placeholder).foregroundStyle(.secondary)
+        // placeholder gray reads as a whisper (the owner's other complaint). `text-3` is the
+        // palette's placeholder tone, and it sits on `surface` — the one ground it clears WCAG AA
+        // against (see design/BRAND.md).
+        let prompt = Text(placeholder).foregroundStyle(Palette.textTertiary)
 
         if reveal.isRevealed {
             // Revealed mode is the only place a master password is ever rendered as plaintext, so

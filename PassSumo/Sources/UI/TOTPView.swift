@@ -34,8 +34,8 @@ struct TOTPView: View {
             switch generatorResult {
             case .failure:
                 Label("Invalid one-time code", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.warning)
             case .success(let generator):
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     // `try?` rather than propagating: the config already parsed successfully in
@@ -45,19 +45,28 @@ struct TOTPView: View {
                     let code = (try? generator.code(at: context.date)) ?? "······"
                     let remaining = generator.secondsRemaining(at: context.date)
 
-                    HStack(spacing: 10) {
+                    // The mockup renders this as its own inset card (`.otp`) rather than as one
+                    // more field row: the code is the only value on the screen that expires, and
+                    // the well plus the countdown is what says so.
+                    HStack(spacing: Spacing.s5) {
+                        Text("One-time")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.textSecondary)
+
                         Text(Self.grouped(code))
-                            .font(.system(.title3, design: .monospaced))
+                            .font(Typography.monoTitle3)
+                            .foregroundStyle(Palette.text)
+                            .tracking(Spacing.s1)
 
                         ProgressView(value: Double(remaining), total: Double(generator.config.period))
                             .progressViewStyle(.linear)
-                            .frame(width: 40)
-                            .tint(remaining <= 5 ? .red : .accentColor)
+                            .frame(width: Spacing.s10)
+                            .tint(remaining <= 5 ? Palette.totpExpiring : Palette.accent600)
 
                         Text("\(remaining)s")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, alignment: .leading)
+                            .font(Typography.monoCaption)
+                            .foregroundStyle(Palette.textSecondary)
+                            .frame(width: Metrics.glyphButtonSize, alignment: .leading)
 
                         Button {
                             // `code` is the value already computed above for THIS tick — copying
@@ -68,10 +77,13 @@ struct TOTPView: View {
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.tokenGlyph)
                         .help("Copy one-time code")
                         .accessibilityLabel("Copy one-time code")
                     }
+                    .padding(.horizontal, Spacing.s5)
+                    .padding(.vertical, Spacing.s4)
+                    .sunkenWell()
                 }
             }
         }

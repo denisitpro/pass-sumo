@@ -31,43 +31,70 @@ struct StatusBar: View {
     let backupWarning: String?
 
     var body: some View {
-        HStack(spacing: 16) {
-            Label(databasePath, systemImage: "lock.doc")
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .accessibilityIdentifier("statusbar.path")
-
-            if let backupWarning {
-                Label(backupWarning, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+        HStack(spacing: Spacing.s5) {
+            // The path is monospaced and middle-truncated: this is machinery the product shows on
+            // purpose, and the tail (the filename) is the half worth keeping when it doesn't fit.
+            Label {
+                Text(databasePath)
+                    .font(Typography.monoCaption2)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help(backupWarning)
-                    .accessibilityIdentifier("statusbar.backupWarning")
+            } icon: {
+                Image(systemName: "lock.doc")
+            }
+            .accessibilityIdentifier("statusbar.path")
+
+            if let backupWarning {
+                // `warning` tints the ICON only. It measures 4.41:1 against this band's `sidebar`
+                // ground — below WCAG AA for normal text — so the sentence itself stays in `text`
+                // (14.6:1). See design/BRAND.md's contrast note.
+                Label {
+                    Text(backupWarning)
+                        .foregroundStyle(Palette.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Palette.warning)
+                }
+                .help(backupWarning)
+                .accessibilityIdentifier("statusbar.backupWarning")
             }
 
             if isDirty {
-                Label("Unsaved changes", systemImage: "circle.fill")
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("statusbar.dirty")
+                Label {
+                    Text("Unsaved changes")
+                } icon: {
+                    Image(systemName: "circle.fill")
+                        .foregroundStyle(Palette.warning)
+                }
+                .accessibilityIdentifier("statusbar.dirty")
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: Spacing.s4)
 
             if let secondsUntilClipboardClear {
-                Label("\(secondsUntilClipboardClear)s", systemImage: "doc.on.clipboard")
-                    .accessibilityIdentifier("statusbar.clipboardCountdown")
+                Label {
+                    Text("\(secondsUntilClipboardClear)s").font(Typography.monoCaption2)
+                } icon: {
+                    Image(systemName: "doc.on.clipboard")
+                }
+                .accessibilityIdentifier("statusbar.clipboardCountdown")
             }
 
             if let secondsUntilAutoLock {
-                Label(Self.formatted(secondsUntilAutoLock), systemImage: "lock.rotation")
-                    .accessibilityIdentifier("statusbar.autoLockCountdown")
+                Label {
+                    Text(Self.formatted(secondsUntilAutoLock)).font(Typography.monoCaption2)
+                } icon: {
+                    Image(systemName: "lock.rotation")
+                }
+                .accessibilityIdentifier("statusbar.autoLockCountdown")
             }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .font(Typography.caption)
+        .foregroundStyle(Palette.textSecondary)
+        .padding(.horizontal, Spacing.s5)
+        .statusBarBand()
         .accessibilityIdentifier("statusbar")
     }
 
