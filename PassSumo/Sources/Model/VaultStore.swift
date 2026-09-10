@@ -131,13 +131,28 @@ final class VaultStore {
     /// is cleared because a freshly picked file has not failed at anything yet; leaving a previous
     /// file's error set would make `UnlockView` open with a red message about a database the user
     /// is no longer looking at.
-    func select(url: URL) {
+    ///
+    /// **Refuses, rather than silently discarding, when the open vault has unsaved edits (issue
+    /// #84).** Dropping `decodedOrigin` is exactly what "close the open database" means here, so
+    /// with `isDirty` set this method destroys work the user never agreed to lose. That was
+    /// unreachable while "Open Database…" was greyed out for anything but `.empty` and
+    /// `WelcomeView` was unmounted the moment a vault opened — routing a Finder open request into
+    /// a live vault makes it reachable, so the guard lives HERE and not only in the UI that
+    /// prompts. Pass `discardingUnsavedChanges: true` only after the user has actually answered
+    /// "Discard" (see `VaultOpenRouter`); the default is what any other caller gets.
+    ///
+    /// Returns whether the selection happened. `false` means "refused, unsaved changes" — the
+    /// store is untouched.
+    @discardableResult
+    func select(url: URL, discardingUnsavedChanges: Bool = false) -> Bool {
+        guard !isDirty || discardingUnsavedChanges else { return false }
         credentials = nil
         decodedOrigin = nil
         isDirty = false
         lastError = nil
         currentURL = url
         state = .locked(url)
+        return true
     }
 
     /// The open database's own stable identity, as the codec understands it, or `nil` when nothing

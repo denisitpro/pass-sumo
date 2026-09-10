@@ -4,8 +4,10 @@ import SwiftUI
 /// A one-shot nudge from the menu bar to whichever view owns the UI a command needs but this file
 /// does not: an editor sheet, a focused search field, a file-picker flow. Set by `AppCommands`,
 /// observed and cleared (`environment.menuRequest = nil`) by the view that can act on it —
-/// `WelcomeView` for the two database-picking cases, `VaultBrowserView` (owned separately) for the
-/// entry/search ones. A menu command that can act entirely on its own (Save, Lock, Delete Entry,
+/// `RootView` for `.openDatabase` (it is the only view mounted in every store state, and since
+/// issue #84 that item is enabled while a vault is open), `WelcomeView` for `.newDatabase`,
+/// `VaultBrowserView` (owned separately) for the entry/search ones. A menu command that can act
+/// entirely on its own (Save, Lock, Delete Entry,
 /// Copy Username/Password) never goes through this — it calls straight into `VaultStore` /
 /// `ClipboardService` instead. This exists only for the commands that need a specific view's own
 /// state (a sheet's presentation flag, a `@FocusState`) to do their job.
@@ -37,10 +39,10 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Database…") { environment.menuRequest = .newDatabase }
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(!canStartNewOrOpen)
+                .disabled(!canCreateNewDatabase)
             Button("Open Database…") { environment.menuRequest = .openDatabase }
                 .keyboardShortcut("o", modifiers: .command)
-                .disabled(!canStartNewOrOpen)
+                .disabled(!canOpenDatabase)
         }
 
         CommandGroup(replacing: .saveItem) {
@@ -137,14 +139,31 @@ struct AppCommands: Commands {
         return false
     }
 
-    /// New/Open are scoped to "nothing open yet" — v1's `VaultStore` holds exactly one vault at a
-    /// time and has no "replace the open one" flow, so offering these while a database is already
-    /// picked, open, or mid-unlock would be a shortcut that either does nothing useful or needs a
-    /// discard-changes prompt this app shell does not implement. A single `case .empty` check is
-    /// enough now that picking a file goes through `VaultStore.select(url:)` and immediately lands
-    /// in `.locked` — it used to also have to consult an app-level bridge that held the picked URL
-    /// while `store.state` still read `.empty`.
-    var canStartNewOrOpen: Bool {
+    /// "Open Database…" is no longer scoped to "nothing open yet" (issue #84).
+    ///
+    /// It used to be, on the grounds that `VaultStore` holds one vault and had no "replace the open
+    /// one" flow — but the app also declares itself the Launch Services owner of `.kdbx`, so the
+    /// system hands it that exact request whether or not a menu item was enabled for it. There is
+    /// now a replace-the-open-one flow (`VaultOpenRouter`, including the Save/Discard/Cancel prompt
+    /// the old comment said this shell did not implement), and the menu goes through the same one,
+    /// so greying the item out would only hide a capability the app already has.
+    ///
+    /// Still disabled mid-unlock: `VaultOpenRouter` drops a request that arrives while Argon2 is
+    /// running (see `Decision.ignore`), and a menu item that is enabled but provably does nothing
+    /// is worse than one that is greyed out.
+    var canOpenDatabase: Bool {
+        if case .unlocking = environment.store.state { return false }
+        return true
+    }
+
+    /// "New Database…" stays scoped to "nothing open yet", deliberately.
+    ///
+    /// Creating a database while one is open would blow the open vault away through
+    /// `VaultStore.createNew`, which — unlike `select` — has no unsaved-changes guard, and its
+    /// sheet lives inside `WelcomeView`, which is unmounted whenever a vault is open. Issue #84 is
+    /// about *opening* an existing file; giving Create the same treatment is its own change, with
+    /// its own prompt and its own tests, not a side effect of this one.
+    var canCreateNewDatabase: Bool {
         if case .empty = environment.store.state { return true }
         return false
     }

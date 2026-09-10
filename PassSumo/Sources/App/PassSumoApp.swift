@@ -1,7 +1,13 @@
+import AppKit
 import SwiftUI
 
 @main
 struct PassSumoApp: App {
+    /// Installs `DocumentOpenReceiver` as the app delegate, which is what finally gives the app
+    /// somewhere to receive the Launch Services open requests it has been advertising for
+    /// (`LSHandlerRank: Owner` on `app.passsumo.kdbx`) and dropping on the floor — issue #84.
+    @NSApplicationDelegateAdaptor(DocumentOpenReceiver.self) private var openReceiver
+
     // Launch argument contract with Sources/UITests: `-ui-testing 1` sets the `ui-testing` default,
     // which is how the XCUITest runner tells the app under test to boot against fakes and skip
     // Touch ID instead of a real vault (see `AppEnvironment.uiTesting()`). `UserDefaults.standard`
@@ -45,6 +51,11 @@ struct PassSumoApp: App {
                 // context. A no-op under a real launch and a no-op on every render after the first
                 // (`loadUITestingFixture()` guards on `store.state` still being `.empty`).
                 .task { await environment.loadUITestingFixture() }
+                // Wired here rather than at `DocumentOpenReceiver`'s construction because the
+                // adaptor builds it before this scene's `environment` exists. The receiver buffers
+                // a URL that arrives before this runs (a cold launch by double-click does exactly
+                // that), so nothing is lost in the gap — see its doc comment.
+                .task { openReceiver.onOpen { requestOpen($0) } }
                 // Keeps `AutoLockController` honest about the vault's real state regardless of which
                 // path changed it — `UnlockView` unlocking, `-ui-testing`'s fixture load, "Lock
                 // Database", the idle timer itself. The controller's own `lock(reason:)` already
@@ -83,5 +94,22 @@ struct PassSumoApp: App {
                 // appearance would be the one dark surface in an otherwise light app.
                 .preferredColorScheme(contentColorScheme)
         }
+    }
+
+    /// Hands a Launch Services open request to the one type that decides what it means, and does
+    /// the single part of the answer that needs a window.
+    ///
+    /// `.alreadyOpen` is why this is not a bare call into the router: the acceptance criterion is
+    /// that re-opening the front database brings the window forward and changes *nothing else* —
+    /// no lock, no reload, no lost selection. Launch Services activates the app on its own, but not
+    /// a window the user had minimised, so that half is done here. Every other branch is already
+    /// complete by the time `requestOpen` returns.
+    @MainActor
+    private func requestOpen(_ url: URL) {
+        guard case .alreadyOpen = environment.openRouter.requestOpen(url) else { return }
+        NSApp.activate()
+        guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
     }
 }

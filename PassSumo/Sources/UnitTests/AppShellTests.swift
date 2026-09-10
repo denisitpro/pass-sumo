@@ -127,21 +127,37 @@ final class AppShellTests: XCTestCase {
         XCTAssertNil(AppCommands(environment: environment).selectedEntry)
     }
 
-    func testNewAndOpenDatabaseDisabledOnceAVaultIsOpen() async {
+    func testNewDatabaseDisabledOnceAVaultIsOpen() async {
         let environment = AppEnvironment.uiTesting()
-        XCTAssertTrue(AppCommands(environment: environment).canStartNewOrOpen)
+        XCTAssertTrue(AppCommands(environment: environment).canCreateNewDatabase)
 
         await environment.loadUITestingFixture()
-        XCTAssertFalse(AppCommands(environment: environment).canStartNewOrOpen)
+        XCTAssertFalse(AppCommands(environment: environment).canCreateNewDatabase)
     }
 
-    func testNewAndOpenDatabaseDisabledOnceAFileIsPicked() {
+    func testNewDatabaseDisabledOnceAFileIsPicked() {
         // Picking a file used to leave `store.state` at `.empty` (the URL lived in an app-level
         // bridge), so this check had to consult that bridge separately. `VaultStore.select(url:)`
         // now lands in `.locked` immediately, which is what makes the single state check correct.
         let environment = AppEnvironment.uiTesting()
         environment.store.select(url: URL(fileURLWithPath: "/tmp/example.kdbx"))
-        XCTAssertFalse(AppCommands(environment: environment).canStartNewOrOpen)
+        XCTAssertFalse(AppCommands(environment: environment).canCreateNewDatabase)
+    }
+
+    func testOpenDatabaseStaysEnabledWhileAVaultIsOpen() async {
+        // The inverse of the rule above, and the menu-bar half of issue #84: the app owns the
+        // `.kdbx` type, so the system hands it "open this other database" whether or not the item
+        // was enabled. Greying it out only hid a capability `VaultOpenRouter` now provides.
+        let picked = AppEnvironment.uiTesting()
+        XCTAssertTrue(AppCommands(environment: picked).canOpenDatabase)
+        picked.store.select(url: URL(fileURLWithPath: "/tmp/example.kdbx"))
+        XCTAssertTrue(AppCommands(environment: picked).canOpenDatabase)
+
+        // A separate environment for the unlocked case: `loadUITestingFixture()` only runs from
+        // `.empty`, so it would no-op on the one above.
+        let unlocked = AppEnvironment.uiTesting()
+        await unlocked.loadUITestingFixture()
+        XCTAssertTrue(AppCommands(environment: unlocked).canOpenDatabase)
     }
 
     // MARK: - Biometric identity
