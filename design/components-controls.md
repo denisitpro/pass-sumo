@@ -1,6 +1,6 @@
 # Components — controls
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 The things the user operates. Implemented in `PassSumo/Sources/UI/DesignStyles.swift` and
 `MasterPasswordField.swift`; token values are in `design/BRAND.md`.
@@ -50,6 +50,11 @@ button *does*, never by where it sits.
   the committing action when there is no Use, and secondary when there is.
 - A glyph button is a square hit target of `glyph-button-size` at radius `xs`, so it stays a
   consistent size whatever symbol it carries.
+- **A cell of the icon picker's grid is not one of the five roles**, and deliberately so: it needs a
+  *selected* state, which no role has, because "which icon is in effect" is the one thing that grid
+  has to show at rest. It borrows the glyph button's square and radius so it still measures like the
+  rest of the app, and paints selection with `row-sel-bg` / `row-sel-text` — the same pair a
+  selected row uses, rather than a sixth appearance invented for it. See `design/screens.md`.
 - Adding a role means adding a `ButtonAppearance` value plus a two-line `ButtonStyle`. It never
   means editing the shared drawing code.
 

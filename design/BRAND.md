@@ -146,6 +146,7 @@ here so the views never carry them as literals:
 | `field-height` | 38 | `.pw-field` |
 | `field-glyph-inset` | 34 | `.pw-field` padding-right, room for the reveal glyph |
 | `glyph-button-size` | 24 | `.icon-btn` |
+| `row-icon-slot` | 20 | invented — see below |
 | `field-label-width` | 90 | `.field` grid's first column |
 | `hero-glyph-size` | 40 | `.big-lock`, the glyph heading a centred card |
 | `search-field-width` | 252 | `.search`, the toolbar's search well |
@@ -153,8 +154,17 @@ here so the views never carry them as literals:
 
 **`control-disabled-opacity` = 0.4 has no counterpart in the mockup.** The mockup draws no disabled
 state, and a custom SwiftUI `ButtonStyle` gets no automatic dimming, so a disabled primary action
-would otherwise look pressable. It is the one invented value in the set; issue #60 decides it
-properly.
+would otherwise look pressable. Issue #60 decides it properly.
+
+**`row-icon-slot` = 20 has no counterpart in the mockup either** — the mockup draws one folder glyph
+per sidebar row and no icon at all on an entry row, so it never had to answer the question issue #89
+asks: a row's icon is now one of 69 the user picks. Measured at `caption`, the catalogue's SF Symbols
+run 8pt (`key`) to 21pt (`signature`) wide, so a row laid out on intrinsic width starts its title at
+a different x on every row. The slot is the fixed square the glyph is centred in, so the title column
+does not move. 20 rather than 21+: it holds every glyph but the widest to within half a point per
+side, and sizing to the extreme would push every title 4pt right for one outlier.
+
+Those two are the only invented values in the set.
 
 ## Elevation
 

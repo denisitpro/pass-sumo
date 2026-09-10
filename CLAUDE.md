@@ -113,7 +113,10 @@ copied into the test bundle as a folder reference).
 - `Sources/KDBX` — the real `VaultCodec` implementation, wrapping KDBXKit, including attachment
   handling (`KDBXAttachments.swift`).
 - `Sources/Icons` — `StandardIconCatalog`, the 0…68 KDBX built-in icon index → SF Symbol table
-  (issue #89). Pure data, no SwiftUI/AppKit import, so it sits outside `Sources/UI`.
+  (issue #89), plus the `VaultEntry.symbolName` / `VaultGroup.symbolName` resolvers that give each
+  kind of item its own fallback for an index this build cannot draw. Pure data, no SwiftUI/AppKit
+  import, so it sits outside `Sources/UI` — and outside `Sources/Model`, which the durability
+  helper compiles and which has no business knowing about an SF Symbol.
 - `Sources/Security` — password generator, TOTP, clipboard handling, auto-lock, Keychain/Touch ID.
 - `Sources/App` — composition root, menu commands.
 - `Sources/UI` — SwiftUI views.

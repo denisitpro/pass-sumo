@@ -75,6 +75,14 @@ struct VaultBrowserView: View {
     /// the current name for a rename — rather than being derived, because a `TextField` needs
     /// somewhere of its own to put what the user types.
     @State private var groupNameDraft = ""
+    /// The folder whose icon picker is open (issue #89). The folder itself rather than its id, so
+    /// the sheet can read the icon currently in effect without looking it up again — and
+    /// `Identifiable`, so it drives `.sheet(item:)` and cannot re-present a folder that has since
+    /// been deleted, the same reason `editingEntry` is shaped that way.
+    ///
+    /// A sheet rather than a submenu of 69 items inside the context menu already open: a menu that
+    /// long is unusable, and a grid is the shape the choice has.
+    @State private var groupIconTarget: VaultGroup?
     /// What the Focus Search command (⌘F, declared once in `AppCommands`) moves focus TO, and what
     /// `searchField` draws its focus ring from. It was already this view's own `@FocusState` when
     /// the field was `.searchable`'s; replacing that with a hand-rolled field (issue #87) swapped
@@ -398,6 +406,17 @@ struct VaultBrowserView: View {
                     onDismiss: { editingEntry = nil }
                 )
             }
+            // A folder's icon commits straight through the store, unlike an entry's, which the
+            // edit form holds as a draft until Save. That is not an inconsistency in the picker: a
+            // folder has no form and no Save, so its context menu behaves the way "Move to" beside
+            // it already does — the click IS the commit, and Esc backs out having changed nothing.
+            .sheet(item: $groupIconTarget) { group in
+                IconPickerSheet(
+                    title: "Folder Icon",
+                    selectedIconID: group.iconID,
+                    onPick: { store.setGroupIcon(group.id, to: $0) }
+                )
+            }
             .confirmationDialog(
                 "Delete Permanently?",
                 isPresented: Binding(
@@ -658,6 +677,8 @@ struct VaultBrowserView: View {
             guard let group = vault.group(id) else { return }
             groupNameDraft = group.name
             groupNamePrompt = .rename(id)
+        case .changeIcon(let id):
+            groupIconTarget = vault.group(id)
         case .move(let id, let parentID):
             store.moveGroup(id, under: parentID)
         case .delete(let id):

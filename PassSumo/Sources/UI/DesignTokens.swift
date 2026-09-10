@@ -223,6 +223,16 @@ enum Metrics {
     static let fieldGlyphInset: CGFloat = 34
     /// A borderless icon button's hit target.
     static let glyphButtonSize: CGFloat = 24
+    /// The fixed square a list row's leading icon is centred in — the sidebar's folder glyph and
+    /// the entry list's (issue #89).
+    ///
+    /// A fixed slot rather than the symbol's own width, because the symbol is now chosen by the
+    /// user out of 69: measured at `caption`, the catalogue's glyphs run from 8pt (`key`) to 21pt
+    /// (`signature`), so laying rows out on intrinsic width would start each title at a different
+    /// x and leave a dense column visibly ragged. 20 holds all but the widest one to within half a
+    /// point per side, where a slot sized to the extreme would push every title 4pt further right
+    /// for the sake of a glyph almost nothing uses.
+    static let rowIconSlot: CGFloat = 20
     /// The large lock/shield glyph a centred card is headed by — the mockup's `.big-lock`.
     static let heroGlyphSize: CGFloat = 40
     /// The label column of a label/value field row.

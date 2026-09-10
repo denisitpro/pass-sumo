@@ -220,8 +220,24 @@ struct EntryListView: View {
         let isSelected = entry.id == selectedEntryID
         // Title and sub-line are pushed together into the mockup's 34pt row: 13/17 over 11/13, so
         // both fit without the row growing. Dense on purpose — hundreds of entries is the expected
-        // scale (repo CLAUDE.md positioning notes).
+        // scale (repo CLAUDE.md positioning notes). The icon added in front of them is why the row
+        // height is worth restating: it costs width, not height, and the two-line stack is
+        // unchanged.
         return HStack(spacing: Spacing.s4) {
+            // The entry's own built-in KDBX icon (issue #89). Drawn at `caption`, the same size the
+            // sidebar's folder glyph uses, so the two list surfaces read as one system rather than
+            // as two columns that each decided how big an icon is; and in the fixed
+            // `row-icon-slot` square, because the symbol is one of 69 the user picks and their
+            // widths differ enough to leave the title column visibly ragged otherwise.
+            //
+            // No accessibility label: the icon is decoration of the title beside it, not a second
+            // fact about the entry, and VoiceOver reading "key, Router" on every row is noise. The
+            // TOTP glyph below IS labelled, because it says something the row does not otherwise.
+            Image(systemName: entry.symbolName)
+                .font(Typography.caption)
+                .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
+                .frame(width: Metrics.rowIconSlot)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 Text(entry.title.isEmpty ? "Untitled" : entry.title)
                     .font(isSelected ? Typography.bodyMedium : Typography.body)

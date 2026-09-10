@@ -417,6 +417,31 @@ final class VaultStore {
         commit(vault)
     }
 
+    /// Sets a folder's built-in KDBX icon (issue #89).
+    ///
+    /// Modelled on `renameGroup` rather than on `upsert`, and for the same three reasons: nothing
+    /// unlocked, no such folder, or the icon it already has are all no-ops that leave the vault
+    /// clean. The last one matters most — re-picking the icon a folder is already wearing would
+    /// otherwise leave the user with an unsaved-changes flag and a save to make for nothing.
+    ///
+    /// Any `UInt32` is accepted, deliberately, including one outside KeePass's 0…68. This app can
+    /// only ever offer the 69 it can draw, but the setter is not the place to enforce that: the
+    /// value's contract is `VaultEntry.iconID`'s — whatever integer is in play round-trips
+    /// untouched — and a guard here would be a second, weaker copy of a rule the picker already
+    /// keeps by construction.
+    ///
+    /// The bin is not exempted. Nothing in this app offers to re-icon it (the sidebar's context
+    /// menu leaves the item out), but a store method that silently refused one particular id would
+    /// be a rule with no caller and no way to discover it.
+    func setGroupIcon(_ groupID: UUID, to iconID: UInt32) {
+        guard case .unlocked(var vault) = state,
+              let index = vault.groups.firstIndex(where: { $0.id == groupID }),
+              vault.groups[index].iconID != iconID
+        else { return }
+        vault.groups[index].iconID = iconID
+        commit(vault)
+    }
+
     /// Re-parents a folder, subtree and all, and reports whether it moved.
     ///
     /// **A move into the folder's own descendant is refused** — see `Vault.canMoveGroup` for why
