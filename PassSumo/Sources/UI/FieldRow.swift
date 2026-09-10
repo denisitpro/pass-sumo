@@ -120,7 +120,7 @@ struct FieldRow: View {
 #Preview {
     VStack(alignment: .leading, spacing: 12) {
         FieldRow(label: "Title", value: "GitHub")
-        FieldRow(label: "Username", value: "denisitpro", onCopy: {}, copyIdentifier: "detail.copyUsername")
+        FieldRow(label: "Username", value: "samplecoder", onCopy: {}, copyIdentifier: "detail.copyUsername")
         FieldRow(
             label: "Password", value: "Tr0ub4dor&3", isMonospaced: true,
             isRevealed: .constant(false), onCopy: {}, copyIdentifier: "detail.copyPassword",
