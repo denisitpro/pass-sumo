@@ -16,7 +16,13 @@ final class BrowserLogicTests: XCTestCase {
         )
     }
 
-    private func makeEntry(_ id: String, group: String?, title: String, password: String = "") -> VaultEntry {
+    private func makeEntry(
+        _ id: String,
+        group: String?,
+        title: String,
+        password: String = "",
+        passwordLastChanged: Date? = nil
+    ) -> VaultEntry {
         VaultEntry(
             id: UUID(uuidString: id)!,
             groupID: group.map { UUID(uuidString: $0)! },
@@ -28,7 +34,8 @@ final class BrowserLogicTests: XCTestCase {
             otpAuthURL: nil,
             customFields: [:],
             created: Date(timeIntervalSince1970: 0),
-            modified: Date(timeIntervalSince1970: 0)
+            modified: Date(timeIntervalSince1970: 0),
+            passwordLastChanged: passwordLastChanged
         )
     }
 
@@ -180,6 +187,104 @@ final class BrowserLogicTests: XCTestCase {
         )
         let result = EntryListFilter.apply(to: vault, groupID: nil, query: "")
         XCTAssertEqual(result.map(\.title), ["Apple", "mango", "zebra"])
+    }
+
+    // MARK: - EntryListFilter and issue #34 (search query survives opening an entry)
+
+    /// `EntryListFilter.apply` is a pure function of `(vault, groupID, query)` — nothing about
+    /// "an entry is currently open for editing" or "an entry was just selected" is part of its
+    /// input, which is exactly why `VaultBrowserView.openForEdit`/row selection have no way to
+    /// perturb it: there is no shared state between them to perturb. This test pins the query and
+    /// the result set across the same edit-and-return round trip the issue describes — saving an
+    /// edit runs through `VaultStore.upsert`, which replaces the entry in place and bumps
+    /// `modified`, so the fixture mirrors that mutation rather than only re-calling `apply` with
+    /// nothing changed at all.
+    func testSearchResultSurvivesOpeningAndSavingAnEntryFromWithinTheResults() throws {
+        let query = "git"
+        var vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000080", group: nil, title: "GitHub"),
+                makeEntry("00000000-0000-0000-0000-000000000081", group: nil, title: "GitLab"),
+                makeEntry("00000000-0000-0000-0000-000000000082", group: nil, title: "Unrelated"),
+            ]
+        )
+
+        let before = EntryListFilter.apply(to: vault, groupID: nil, query: query)
+        XCTAssertEqual(before.map(\.title), ["GitHub", "GitLab"], "fixture precondition")
+
+        // Simulate "opened GitHub for editing, changed nothing that affects the filter, saved" —
+        // the one thing `upsert` unconditionally does even on a no-op edit.
+        let openedIndex = try XCTUnwrap(vault.entries.firstIndex { $0.title == "GitHub" })
+        vault.entries[openedIndex].modified = Date()
+
+        let after = EntryListFilter.apply(to: vault, groupID: nil, query: query)
+        XCTAssertEqual(query, "git", "the query itself must never be touched by opening an entry")
+        XCTAssertEqual(after.map(\.title), before.map(\.title), "the result set must survive unchanged")
+    }
+
+    // MARK: - EntryListFilter and password-change sorting (issue #33)
+
+    func testSortingByPasswordChangedNewestFirstOrdersKnownDatesDescending() {
+        let vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000070", group: nil, title: "Older",
+                          passwordLastChanged: Date(timeIntervalSince1970: 100)),
+                makeEntry("00000000-0000-0000-0000-000000000071", group: nil, title: "Newer",
+                          passwordLastChanged: Date(timeIntervalSince1970: 200)),
+            ]
+        )
+        let result = EntryListFilter.apply(
+            to: vault, groupID: nil, query: "", sortOrder: .passwordChangedNewestFirst
+        )
+        XCTAssertEqual(result.map(\.title), ["Newer", "Older"])
+    }
+
+    func testSortingByPasswordChangedOldestFirstOrdersKnownDatesAscending() {
+        let vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000072", group: nil, title: "Newer",
+                          passwordLastChanged: Date(timeIntervalSince1970: 200)),
+                makeEntry("00000000-0000-0000-0000-000000000073", group: nil, title: "Older",
+                          passwordLastChanged: Date(timeIntervalSince1970: 100)),
+            ]
+        )
+        let result = EntryListFilter.apply(
+            to: vault, groupID: nil, query: "", sortOrder: .passwordChangedOldestFirst
+        )
+        XCTAssertEqual(result.map(\.title), ["Older", "Newer"])
+    }
+
+    /// The honest-edge-case requirement from the issue: an entry with no derivable date must not
+    /// be silently treated as the oldest (sorting to the bottom of "newest first") or the newest
+    /// (sorting to the top of "oldest first") — it goes into its own trailing bucket in BOTH
+    /// directions instead, alphabetically ordered since it carries no date to rank it by.
+    func testEntriesWithNoDerivableDateFormATrailingUnknownBucketInBothDirections() {
+        let vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000074", group: nil, title: "Zebra Unknown"),
+                makeEntry("00000000-0000-0000-0000-000000000075", group: nil, title: "Apple Unknown"),
+                makeEntry("00000000-0000-0000-0000-000000000076", group: nil, title: "Known",
+                          passwordLastChanged: Date(timeIntervalSince1970: 100)),
+            ]
+        )
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, groupID: nil, query: "", sortOrder: .passwordChangedNewestFirst)
+                .map(\.title),
+            ["Known", "Apple Unknown", "Zebra Unknown"]
+        )
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, groupID: nil, query: "", sortOrder: .passwordChangedOldestFirst)
+                .map(\.title),
+            ["Known", "Apple Unknown", "Zebra Unknown"]
+        )
     }
 
     // MARK: - EntryListFilter and the recycle bin

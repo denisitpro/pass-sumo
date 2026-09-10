@@ -25,6 +25,23 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     var attachments: [VaultAttachment] = []
     var created: Date
     var modified: Date
+    /// When the PASSWORD itself last changed, derived from the entry's KDBX `<History>` — never
+    /// from `modified`, which bumps on any field edit at all (issue #33). `nil` means "no
+    /// derivable date": either the entry has no history to walk (never resaved by a second
+    /// client, or another client's `HistoryMaxItems` trimmed it away entirely) or history exists
+    /// but every recorded value is unavailable. This is deliberately NOT a substitute for
+    /// `created` when history is empty — an entry manufactured with no evidence at all sorts into
+    /// an explicit "unknown" bucket rather than silently pretending to be exactly as old as the
+    /// entry itself.
+    ///
+    /// Computed ONCE, by `KDBXVaultProjection` at decode time (see `KDBXPasswordHistory`), not
+    /// recomputed per render — deriving it means revealing the `Password` field of every history
+    /// snapshot, which is exactly the protected-field decryption the entry list must not repeat
+    /// on every row draw. Consequently this field is only as fresh as the last decode: an in-app
+    /// password edit does not update it until the vault is saved and reopened, the same way the
+    /// rest of `entry.history` only reaches the file through `KDBXContentMerge`'s preserved
+    /// original rather than through anything `Vault` models live.
+    var passwordLastChanged: Date? = nil
 }
 
 // MARK: - Attachments
@@ -253,7 +270,11 @@ struct VaultGroup: Identifiable, Sendable, Equatable {
 /// Fully decrypted database content — everything the app can show or edit. Deliberately does NOT
 /// model anything a KDBX file can carry that pass-sumo has no UI for yet (entry history, custom
 /// icons, unknown header/XML data); that unmodeled remainder is the codec's job to round-trip via
-/// `DecodedVault.opaque`, not this type's job to represent.
+/// `DecodedVault.opaque`, not this type's job to represent. The one deliberate exception is
+/// `VaultEntry.passwordLastChanged`: history itself still isn't modeled (no list of past
+/// snapshots exists here), but the single date derived from walking it is, because issue #33
+/// needs a sort key and computing that key once at decode time is what keeps the entry list from
+/// re-decrypting history on every render.
 struct Vault: Sendable, Equatable {
     var name: String                          // Meta/DatabaseName
     var groups: [VaultGroup]
