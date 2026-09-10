@@ -109,13 +109,6 @@ struct UnlockView: View {
         }
     }
 
-    /// The content column's width. A minimum with no maximum (the pre-#32 behaviour) let a wide
-    /// window stretch a single-line password field into an unreadable hairline running edge to
-    /// edge — nothing on this screen benefits from being wider than this, so it is now a cap, and
-    /// the `.frame(maxWidth: .infinity)` below centres that capped column in whatever window the
-    /// user has.
-    private static let contentWidth: CGFloat = 360
-
     var body: some View {
         VStack(spacing: Spacing.s6) {
             Image(systemName: "lock.doc")
@@ -217,7 +210,15 @@ struct UnlockView: View {
             }
         }
         .padding(Spacing.s9)
-        .frame(maxWidth: Self.contentWidth)
+        // The content column's width breathes with the window (issue #102) — the same treatment as
+        // `WelcomeView`'s card, and its doc comment there says why this can't instead cap the
+        // *window*. It still stays an upper bound, never unlimited: #32's original complaint was a
+        // `minWidth`-only frame that let a wide window stretch the master-password field into an
+        // unreadable hairline running edge to edge, and `Metrics.authCardMaxWidth` is what keeps
+        // that from coming back at any window size.
+        .containerRelativeFrame(.horizontal) { width, _ in
+            min(max(width * Metrics.authCardWidthFraction, Metrics.authCardMinWidth), Metrics.authCardMaxWidth)
+        }
         // The card the mockup centres on the canvas — `surface` ground, hairline edge, card shadow.
         .cardSurface()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

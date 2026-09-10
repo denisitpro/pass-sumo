@@ -66,7 +66,15 @@ struct WelcomeView: View {
         .padding(Spacing.s10)
         .cardSurface()
         .padding(Spacing.s10)
-        .frame(minWidth: 420, minHeight: 360)
+        // The card's width breathes with the window instead of being pinned to one fixed size in
+        // an unbounded canvas (issue #102) — see `Metrics.authCardWidthFraction`'s doc comment for
+        // why this, and not a capped window, is the fix: this view shares `PassSumoApp`'s
+        // `WindowGroup` with the vault browser, which needs the window free to be much larger than
+        // this screen's content.
+        .containerRelativeFrame(.horizontal) { width, _ in
+            min(max(width * Metrics.authCardWidthFraction, Metrics.authCardMinWidth), Metrics.authCardMaxWidth)
+        }
+        .frame(minHeight: Metrics.authCardMinHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.canvas)
         .task { loadRecents() }
