@@ -161,6 +161,32 @@ struct VaultBrowserView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
                 .accessibilityIdentifier("browser.detail")
+                // On the inspector's CONTENT, which is where this modifier is read from — not on
+                // the view carrying `.inspector` itself.
+                //
+                // Without a width range the inspector sits at SwiftUI's unconfigured default and
+                // its divider does not drag at all (issue #86). The three numbers are measured
+                // against what `EntryDetailView` actually renders, not copied from another app:
+                //
+                // **min 400.** The pane's one row that cannot reflow is `TOTPView`: an `HStack` of
+                // fixed-size parts with no flexible member. At the widest code an `otpauth://` URI
+                // may ask for (8 digits) it measures 343pt — "One-time" 53 + `s5` + the code 111
+                // plus 18 of `tracking` + `s5` + the 40pt progress bar + `s5` + the 24pt seconds
+                // slot + `s5` + a 24pt copy glyph + `s5` of well padding each side — and the pane
+                // adds `s7` of its own padding on both sides, putting the clipping floor at 383.
+                // 400 is that floor rounded up. Everything else reflows: a `FieldRow` value wraps,
+                // an attachment preview is capped at 220, the header title truncates to one line.
+                //
+                // **ideal 480.** The width `EntryDetailView`'s own `#Preview` frames at, i.e. the
+                // one this layout was eyeballed against. It is also where the Metadata section's
+                // KDBX entry UUID — 289pt of 13pt monospace, the longest fixed string in the pane
+                // — first fits beside its 90pt label on one line (431pt needed).
+                //
+                // **max 640.** Past this the extra width reaches only wrapped prose: at 640 a
+                // Notes value already runs about 81 characters per line, which is past a
+                // comfortable measure rather than short of one. Everything else — labels, glyphs,
+                // the preview cap — is fixed and stops using the room long before.
+                .inspectorColumnWidth(min: 400, ideal: 480, max: 640)
             }
         }
         // The toolbar shares the sidebar's tone, as the mockup's `.toolbar` does — otherwise the
