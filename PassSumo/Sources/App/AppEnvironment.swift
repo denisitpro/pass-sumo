@@ -30,6 +30,11 @@ final class AppEnvironment {
     /// `let`, and not `@Observable`-observed: nothing renders from it, it is consulted from a
     /// `.task` and re-armed from `PassSumoApp`'s state mirror.
     let automaticBiometricUnlock: AutomaticBiometricUnlockPolicy
+    /// Where every "open this `.kdbx`" request goes, whoever asked — Launch Services, the menu
+    /// item, `WelcomeView`'s button. Constructed here rather than by any of them because none of
+    /// those three can see the others, and the rule they share (issue #84) must have exactly one
+    /// implementation. See `VaultOpenRouter`.
+    let openRouter: VaultOpenRouter
     // `var`, not `let`: `SettingsView` reaches it as `$environment.settings.autoLockTimeout` via
     // `@Bindable`, and a keypath-derived `Binding` requires every component along the path to be
     // settable — even though `settings` itself is never reassigned, and even though it is a
@@ -96,6 +101,10 @@ final class AppEnvironment {
         isUITesting: Bool
     ) {
         self.store = store
+        // Built here from `store` rather than taken as a parameter: a router pointed at a
+        // different store than the one this environment publishes would route open requests into
+        // a vault nothing on screen is showing, and there is no reason any caller would want that.
+        self.openRouter = VaultOpenRouter(store: store)
         self.clipboard = clipboard
         self.autoLock = autoLock
         self.generator = generator
