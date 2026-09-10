@@ -24,6 +24,43 @@ struct RootView: View {
             // explicitly below rather than fished out of the environment, so the view stays
             // constructible in a preview with no environment at all.
             .environment(environment)
+            // "Open Database…" is handled HERE, not in `WelcomeView`, because since issue #84 the
+            // item is enabled while a vault is open — and `WelcomeView` is unmounted in every state
+            // but `.empty`. `RootView` is the only view that exists in all of them.
+            .onChange(of: environment.menuRequest) { _, request in
+                guard request == .openDatabase else { return }
+                environment.menuRequest = nil
+                guard let url = DatabaseFilePicker.chooseExistingDatabase() else { return }
+                environment.openRouter.requestOpen(url)
+            }
+            .confirmationDialog(
+                "Save changes before opening another database?",
+                isPresented: Binding(
+                    get: { environment.openRouter.unsavedChangesPrompt != nil },
+                    // Anything that dismisses the dialog without picking a button (Esc, a click
+                    // outside) means Cancel, and Cancel is a true no-op: the request is dropped and
+                    // the open vault keeps its state, its edits and its selection.
+                    set: { if !$0 { environment.openRouter.cancelPending() } }
+                ),
+                presenting: environment.openRouter.unsavedChangesPrompt
+            ) { _ in
+                // The presented URL is named in the message below, not on a button: a button label
+                // carrying a filename would make the destructive choice the widest one on screen.
+                Button("Save") { Task { await environment.openRouter.saveThenOpenPending() } }
+                    .accessibilityIdentifier("root.openRequest.save")
+                Button("Discard", role: .destructive) {
+                    environment.openRouter.discardThenOpenPending()
+                }
+                .accessibilityIdentifier("root.openRequest.discard")
+                Button("Cancel", role: .cancel) { environment.openRouter.cancelPending() }
+            } message: { requested in
+                // Both filenames, because "unsaved changes" alone does not say which database is
+                // about to be closed — and with two databases in play that is the whole question.
+                Text(
+                    "“\(environment.store.currentURL?.lastPathComponent ?? "The open database")” "
+                        + "has unsaved changes. Opening “\(requested.lastPathComponent)” closes it."
+                )
+            }
     }
 
     @ViewBuilder
