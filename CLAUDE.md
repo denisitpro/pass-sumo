@@ -224,6 +224,17 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   intact database unopenable (issue #30). The writer still emits the conventional length. Before
   adding any `count == N` guard on parsed bytes, check whether the value is hashed or used raw —
   raw (cipher nonces, the AES-KDF seed) is a genuine constraint, hashed is not.
+- **Never the owner's real personal data in fixtures, sample data, mockups, or screenshots.**
+  `Sources/Model` is a shipping app target, not a test target — `Vault.sample`'s entries render in
+  the running app, in SwiftUI previews, and in the `-ui-testing` seeded fixture that App Store
+  screenshots come from, so anything in there is user-visible, not test-only. A real personal email
+  address (several providers, plus a real GitHub handle and a real employer domain) was committed
+  here as "realistic" sample data and shipped on that path before it was caught. Placeholder
+  convention: `example.com`/`example.org` (RFC 2606 — reserved, so they can never collide with a
+  real address), `Sample`, `user@example.com`-style locals. `PassSumoUnitTests/ModelDomainTests
+  .testFixtureDataUsesOnlyReservedPlaceholderEmailDomains` enforces this on every `make test` run —
+  it is a domain ALLOWLIST (not a denylist naming the leak), so it catches any real email domain
+  reintroduced later without needing to hardcode anyone's real name.
 - **A `VaultError` message must not name a cause the error does not carry.** `KDBXErrorMapping`
   reports the stage that failed, never a guessed why: `corruptedInnerHeader` was mapped to "the
   database's attachment table is damaged" and told the owner his attachments were broken when the
