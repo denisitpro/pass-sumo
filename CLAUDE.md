@@ -202,8 +202,9 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   derive a stable per-database identifier. The stable identity is a UUID in `Meta/CustomData`.
 - `ITSAppUsesNonExemptEncryption` is `true` here, unlike the sibling app ShotSumo — pass-sumo
   implements its own confidentiality encryption (KDBX's AES-256/ChaCha20 payload cipher under an
-  Argon2-derived key), which is not covered by the "authentication-only" exemption. This is a
-  legal declaration with downstream self-classification obligations; see issue #4.
+  Argon2-derived key), which is not covered by the "authentication-only" exemption. This
+  declaration is confirmed correct: no CCATS is required, and an annual BIS self-classification
+  report is due by February 1 each year — see `docs/publish/export-compliance.md`.
 - `PassSumo/LICENSE` (decided 2026-08-30): PolyForm Noncommercial License 1.0.0, same as the
   sibling app ShotSumo. Source-available, not OSI open source. Permissive third-party components
   (KDBXKit and its transitive dependencies, see `THIRD-PARTY-NOTICES.md`) remain shippable inside
