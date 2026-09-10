@@ -1,6 +1,6 @@
 # pass-sumo — repo context for AI agents
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 ## What this is
 
@@ -8,7 +8,7 @@ pass-sumo is a native Swift (SwiftUI/AppKit, App Store-distributed) password man
 KeePass KDBX 4.x format. macOS-first, possibly iOS later.
 
 **Status: alpha.** The app builds and runs (placeholder-ish SwiftUI, no design pass yet — see
-issue #3). `make test` currently passes 244 tests (1 skipped, 0 failures) and `make durability`
+issue #3). `make test` currently passes 246 tests (1 skipped, 0 failures) and `make durability`
 22 tests (1 skipped, 0 failures), both verified by running them in this repo. The unit suite's
 single skip, `testRealKeychainIsNotExercisedByThisSuite`, is deliberate: reading
 a `.biometryCurrentSet` keychain item always prompts for Touch ID, which cannot be satisfied
