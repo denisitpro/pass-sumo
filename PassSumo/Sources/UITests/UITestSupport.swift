@@ -25,7 +25,7 @@ enum SampleVault {
     // silently never match. Sticking to all-digit UUIDs sidesteps that footgun entirely.
     static let gmailPersonalID = "20000000-0000-0000-0000-000000000001"
     static let gmailPersonalTitle = "Gmail Personal"
-    static let gmailPersonalUsername = "den.larkin@gmail.com"
+    static let gmailPersonalUsername = "sample.user@example.com"
     static let gmailPersonalURL = "https://accounts.google.com"
     static let gmailPersonalPassword = "Tr0ub4dor&3-gmail"
 

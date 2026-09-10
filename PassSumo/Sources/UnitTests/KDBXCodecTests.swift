@@ -638,9 +638,9 @@ final class KDBXCodecTests: XCTestCase {
         created.vault.groups = [group]
         created.vault.entries = [
             VaultEntry(
-                id: UUID(), groupID: group.id, title: "GitHub", username: "denisitpro",
+                id: UUID(), groupID: group.id, title: "GitHub", username: "samplecoder",
                 password: "hunter2-but-longer", url: "https://github.com/login", notes: "written by PassSumo",
-                otpAuthURL: "otpauth://totp/GitHub:denisitpro?secret=JBSWY3DPEHPK3PXP&period=30&digits=6",
+                otpAuthURL: "otpauth://totp/GitHub:samplecoder?secret=JBSWY3DPEHPK3PXP&period=30&digits=6",
                 customFields: [:], created: Date(), modified: Date()
             ),
             VaultEntry(
