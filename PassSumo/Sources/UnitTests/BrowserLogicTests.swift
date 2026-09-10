@@ -120,6 +120,83 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.group.name), ["Apple", "Zebra"])
     }
 
+    // MARK: - GroupSelection (issue #85)
+
+    /// The defect this type exists to remove: "All Entries" used to be spelled `nil`, which is also
+    /// what a macOS `List(selection:)` writes for "nothing is selected", so the two were literally
+    /// the same value and the row could not be picked again once a group had been. Being able to
+    /// distinguish them is the whole fix, so it is asserted directly rather than inferred from the
+    /// filter's output.
+    func testAllEntriesIsADistinctValueFromAnEmptySelection() {
+        let selected: GroupSelection? = .allEntries
+        XCTAssertNotNil(selected)
+        XCTAssertNotEqual(selected, GroupSelection?.none)
+    }
+
+    func testAllEntriesIsADistinctValueFromEveryGroup() {
+        let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        XCTAssertNotEqual(GroupSelection.allEntries, .group(groupID))
+        XCTAssertEqual(GroupSelection.group(groupID), .group(groupID))
+        XCTAssertNotEqual(
+            GroupSelection.group(groupID),
+            .group(UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)
+        )
+    }
+
+    /// `containingGroupID` is where a new entry lands, NOT a filter argument — and its `nil` is
+    /// `VaultEntry.groupID`'s "no group, top level", the meaning `EntryListFilter` deliberately
+    /// does not use. See `GroupSelection`'s doc comment on the two `nil`s.
+    func testContainingGroupIDIsNilForAllEntriesAndTheGroupOtherwise() {
+        let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+        XCTAssertNil(GroupSelection.allEntries.containingGroupID)
+        XCTAssertEqual(GroupSelection.group(groupID).containingGroupID, groupID)
+    }
+
+    /// Selecting a group and then coming back to "All Entries" — the exact round trip the owner
+    /// could not perform. What the filter returns for the second `.allEntries` must be what it
+    /// returned for the first, not what the group filter returned.
+    func testSelectingAGroupAndReturningToAllEntriesRestoresTheUnfilteredList() {
+        let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000090")!
+        let vault = Vault(
+            name: "Test",
+            groups: [makeGroup("00000000-0000-0000-0000-000000000090", parent: nil, name: "Email")],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000091", group: groupID.uuidString, title: "InGroup"),
+                makeEntry("00000000-0000-0000-0000-000000000092", group: nil, title: "Ungrouped"),
+            ]
+        )
+
+        let atStart = EntryListFilter.apply(to: vault, selection: .allEntries, query: "")
+        XCTAssertEqual(atStart.map(\.title), ["InGroup", "Ungrouped"], "fixture precondition")
+
+        let inGroup = EntryListFilter.apply(to: vault, selection: .group(groupID), query: "")
+        XCTAssertEqual(inGroup.map(\.title), ["InGroup"], "fixture precondition")
+
+        let backToAll = EntryListFilter.apply(to: vault, selection: .allEntries, query: "")
+        XCTAssertEqual(backToAll.map(\.title), atStart.map(\.title))
+    }
+
+    /// The collision the refactor had to preserve rather than tidy away: "All Entries" shows
+    /// everything, whereas `entries(inGroup: nil)` — which is what a `.group` selection would mean
+    /// if the two `nil`s had been merged — shows only the entries with no group at all.
+    func testAllEntriesIsNotTheSameFilterAsTheTopLevelGroup() {
+        let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000095")!
+        let vault = Vault(
+            name: "Test",
+            groups: [],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000096", group: groupID.uuidString, title: "InGroup"),
+                makeEntry("00000000-0000-0000-0000-000000000097", group: nil, title: "Ungrouped"),
+            ]
+        )
+
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "").map(\.title),
+            ["InGroup", "Ungrouped"]
+        )
+        XCTAssertEqual(vault.entries(inGroup: nil).map(\.title), ["Ungrouped"])
+    }
+
     // MARK: - EntryListFilter
 
     func testEntryListFilterWithNoGroupAndNoQueryReturnsEverything() {
@@ -128,7 +205,7 @@ final class BrowserLogicTests: XCTestCase {
             groups: [],
             entries: [makeEntry("00000000-0000-0000-0000-000000000010", group: nil, title: "Alpha")]
         )
-        let result = EntryListFilter.apply(to: vault, groupID: nil, query: "")
+        let result = EntryListFilter.apply(to: vault, selection: .allEntries, query: "")
         XCTAssertEqual(result.map(\.title), ["Alpha"])
     }
 
@@ -142,7 +219,7 @@ final class BrowserLogicTests: XCTestCase {
                 makeEntry("00000000-0000-0000-0000-000000000022", group: nil, title: "OutsideGroup"),
             ]
         )
-        let result = EntryListFilter.apply(to: vault, groupID: groupID, query: "")
+        let result = EntryListFilter.apply(to: vault, selection: .group(groupID), query: "")
         XCTAssertEqual(result.map(\.title), ["InGroup"])
     }
 
@@ -159,7 +236,7 @@ final class BrowserLogicTests: XCTestCase {
                 makeEntry("00000000-0000-0000-0000-000000000034", group: otherGroupID.uuidString, title: "GitHub Actions"),
             ]
         )
-        let result = EntryListFilter.apply(to: vault, groupID: groupID, query: "git")
+        let result = EntryListFilter.apply(to: vault, selection: .group(groupID), query: "git")
         XCTAssertEqual(Set(result.map(\.title)), ["GitHub", "GitLab"])
     }
 
@@ -171,7 +248,7 @@ final class BrowserLogicTests: XCTestCase {
             groups: [],
             entries: [makeEntry("00000000-0000-0000-0000-000000000040", group: nil, title: "Anything", password: "sunsetHarbor88")]
         )
-        let result = EntryListFilter.apply(to: vault, groupID: nil, query: "sunsetharbor")
+        let result = EntryListFilter.apply(to: vault, selection: .allEntries, query: "sunsetharbor")
         XCTAssertEqual(result.map(\.title), ["Anything"])
     }
 
@@ -185,13 +262,13 @@ final class BrowserLogicTests: XCTestCase {
                 makeEntry("00000000-0000-0000-0000-000000000052", group: nil, title: "mango"),
             ]
         )
-        let result = EntryListFilter.apply(to: vault, groupID: nil, query: "")
+        let result = EntryListFilter.apply(to: vault, selection: .allEntries, query: "")
         XCTAssertEqual(result.map(\.title), ["Apple", "mango", "zebra"])
     }
 
     // MARK: - EntryListFilter and issue #34 (search query survives opening an entry)
 
-    /// `EntryListFilter.apply` is a pure function of `(vault, groupID, query)` — nothing about
+    /// `EntryListFilter.apply` is a pure function of `(vault, selection, query)` — nothing about
     /// "an entry is currently open for editing" or "an entry was just selected" is part of its
     /// input, which is exactly why `VaultBrowserView.openForEdit`/row selection have no way to
     /// perturb it: there is no shared state between them to perturb. This test pins the query and
@@ -211,7 +288,7 @@ final class BrowserLogicTests: XCTestCase {
             ]
         )
 
-        let before = EntryListFilter.apply(to: vault, groupID: nil, query: query)
+        let before = EntryListFilter.apply(to: vault, selection: .allEntries, query: query)
         XCTAssertEqual(before.map(\.title), ["GitHub", "GitLab"], "fixture precondition")
 
         // Simulate "opened GitHub for editing, changed nothing that affects the filter, saved" —
@@ -219,7 +296,7 @@ final class BrowserLogicTests: XCTestCase {
         let openedIndex = try XCTUnwrap(vault.entries.firstIndex { $0.title == "GitHub" })
         vault.entries[openedIndex].modified = Date()
 
-        let after = EntryListFilter.apply(to: vault, groupID: nil, query: query)
+        let after = EntryListFilter.apply(to: vault, selection: .allEntries, query: query)
         XCTAssertEqual(query, "git", "the query itself must never be touched by opening an entry")
         XCTAssertEqual(after.map(\.title), before.map(\.title), "the result set must survive unchanged")
     }
@@ -238,7 +315,7 @@ final class BrowserLogicTests: XCTestCase {
             ]
         )
         let result = EntryListFilter.apply(
-            to: vault, groupID: nil, query: "", sortOrder: .passwordChangedNewestFirst
+            to: vault, selection: .allEntries, query: "", sortOrder: .passwordChangedNewestFirst
         )
         XCTAssertEqual(result.map(\.title), ["Newer", "Older"])
     }
@@ -255,7 +332,7 @@ final class BrowserLogicTests: XCTestCase {
             ]
         )
         let result = EntryListFilter.apply(
-            to: vault, groupID: nil, query: "", sortOrder: .passwordChangedOldestFirst
+            to: vault, selection: .allEntries, query: "", sortOrder: .passwordChangedOldestFirst
         )
         XCTAssertEqual(result.map(\.title), ["Older", "Newer"])
     }
@@ -276,12 +353,12 @@ final class BrowserLogicTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            EntryListFilter.apply(to: vault, groupID: nil, query: "", sortOrder: .passwordChangedNewestFirst)
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "", sortOrder: .passwordChangedNewestFirst)
                 .map(\.title),
             ["Known", "Apple Unknown", "Zebra Unknown"]
         )
         XCTAssertEqual(
-            EntryListFilter.apply(to: vault, groupID: nil, query: "", sortOrder: .passwordChangedOldestFirst)
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "", sortOrder: .passwordChangedOldestFirst)
                 .map(\.title),
             ["Known", "Apple Unknown", "Zebra Unknown"]
         )
@@ -306,7 +383,7 @@ final class BrowserLogicTests: XCTestCase {
         let recycledID = vault.entries[1].id
         XCTAssertTrue(vault.moveToRecycleBin(entryID: recycledID))
 
-        let result = EntryListFilter.apply(to: vault, groupID: nil, query: "")
+        let result = EntryListFilter.apply(to: vault, selection: .allEntries, query: "")
         XCTAssertEqual(result.map(\.title), ["Live"], "a recycled entry must leave the list")
     }
 
@@ -327,7 +404,7 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertEqual(vault.entries.count, 2, "the recycled entry is still IN the vault, just not live")
         XCTAssertEqual(
             vault.liveEntries.count,
-            EntryListFilter.apply(to: vault, groupID: nil, query: "").count,
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "").count,
             "the badge and the list it labels must never disagree"
         )
     }
@@ -347,10 +424,10 @@ final class BrowserLogicTests: XCTestCase {
         let binID = try XCTUnwrap(vault.recycleBin.groupID)
 
         XCTAssertEqual(
-            EntryListFilter.apply(to: vault, groupID: binID, query: "").map(\.title), ["Deleted"]
+            EntryListFilter.apply(to: vault, selection: .group(binID), query: "").map(\.title), ["Deleted"]
         )
         XCTAssertEqual(
-            EntryListFilter.apply(to: vault, groupID: binID, query: "delet").map(\.title), ["Deleted"],
+            EntryListFilter.apply(to: vault, selection: .group(binID), query: "delet").map(\.title), ["Deleted"],
             "searching WITHIN the selected bin must still reach its contents"
         )
     }
@@ -368,7 +445,7 @@ final class BrowserLogicTests: XCTestCase {
         )
         XCTAssertTrue(vault.recycleBinGroupIDs.isEmpty, "fixture precondition: no bin group")
         XCTAssertEqual(
-            EntryListFilter.apply(to: vault, groupID: nil, query: "").map(\.title),
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "").map(\.title),
             ["Alpha", "Beta"]
         )
         XCTAssertEqual(vault.liveEntries.count, 2)
@@ -385,7 +462,7 @@ final class BrowserLogicTests: XCTestCase {
         vault.recycleBin.isEnabled = false
         XCTAssertFalse(vault.moveToRecycleBin(entryID: vault.entries[0].id))
 
-        XCTAssertEqual(EntryListFilter.apply(to: vault, groupID: nil, query: "").map(\.title), ["Only"])
+        XCTAssertEqual(EntryListFilter.apply(to: vault, selection: .allEntries, query: "").map(\.title), ["Only"])
         XCTAssertEqual(vault.liveEntries.count, 1)
     }
 
@@ -403,11 +480,11 @@ final class BrowserLogicTests: XCTestCase {
         let binID = try XCTUnwrap(vault.recycleBin.groupID)
 
         XCTAssertFalse(
-            EntryListFilter.apply(to: vault, groupID: nil, query: "").contains { $0.id == id },
+            EntryListFilter.apply(to: vault, selection: .allEntries, query: "").contains { $0.id == id },
             "All Entries: the row must go, which is what drops the selection"
         )
         XCTAssertTrue(
-            EntryListFilter.apply(to: vault, groupID: binID, query: "").contains { $0.id == id },
+            EntryListFilter.apply(to: vault, selection: .group(binID), query: "").contains { $0.id == id },
             "the bin itself: the entry is right there, so the selection follows it"
         )
     }

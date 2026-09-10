@@ -12,9 +12,9 @@ import SwiftUI
 /// system-provided show/hide for free, plus a natural place to hang a toolbar toggle and a
 /// keyboard shortcut. `isDetailPaneVisible` is that binding.
 ///
-/// Owns ALL cross-column state itself (`selectedGroupID`, `selectedEntryID`, `searchText`) rather
+/// Owns ALL cross-column state itself (`selectedGroup`, `selectedEntryID`, `searchText`) rather
 /// than letting each column keep its own — a group change has to clear which entry is selected
-/// (see the `.onChange(of: selectedGroupID)` below), and that coordination only works if one view
+/// (see the `.onChange(of: selectedGroup)` below), and that coordination only works if one view
 /// is the single source of truth for both.
 struct VaultBrowserView: View {
     let store: VaultStore
@@ -34,7 +34,11 @@ struct VaultBrowserView: View {
     /// which a preview has no menu bar for anyway.
     @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
 
-    @State private var selectedGroupID: UUID?
+    /// Optional because that is what a macOS `List(selection:)` binds to — `nil` is its "nothing is
+    /// selected", which ⌘-clicking the selected row produces. It starts at `.allEntries` so the
+    /// screen opens on the unfiltered list with that row visibly picked; see `GroupSelection` for
+    /// why "All Entries" is a case of its own rather than the `nil` it used to be (issue #85).
+    @State private var selectedGroup: GroupSelection? = .allEntries
     @State private var selectedEntryID: UUID?
     /// **Issue #34: nothing in this file may clear this as a side effect of opening an entry.**
     /// `openForEdit(_:)` only ever assigns `editingEntry`; selecting a row only ever assigns
@@ -100,6 +104,11 @@ struct VaultBrowserView: View {
         return true
     }
 
+    /// The selection the rest of the screen filters by. An empty sidebar selection resolves to
+    /// "show everything" — that is what the list showed before anything was picked, and it is the
+    /// only answer that cannot leave the user staring at a column filtered to nothing they chose.
+    private var groupSelection: GroupSelection { selectedGroup ?? .allEntries }
+
     private var selectedEntry: VaultEntry? {
         guard let selectedEntryID else { return nil }
         return vault.entries.first { $0.id == selectedEntryID }
@@ -109,14 +118,14 @@ struct VaultBrowserView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             GroupSidebar(
                 vault: vault,
-                selectedGroupID: $selectedGroupID,
+                selection: $selectedGroup,
                 onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true }
             )
             .accessibilityIdentifier("browser.sidebar")
         } detail: {
             EntryListView(
                 vault: vault,
-                groupID: selectedGroupID,
+                selection: groupSelection,
                 searchText: $searchText,
                 selectedEntryID: $selectedEntryID,
                 onOpenEntry: { id in openForEdit(id) },
@@ -163,7 +172,7 @@ struct VaultBrowserView: View {
         .onChange(of: isDetailPaneVisible) { _, newValue in
             appEnvironment?.settings.detailPaneVisible = newValue
         }
-        .onChange(of: selectedGroupID) {
+        .onChange(of: selectedGroup) {
             // Switching groups can leave `selectedEntryID` pointing at an entry that's no longer
             // in view (or, for "All Entries", pointing at nothing new) — clear it so the detail
             // column never shows an entry the list column doesn't have selected any more.
@@ -401,7 +410,7 @@ struct VaultBrowserView: View {
             // existing `onChange(of: vault.entries.count)` cleanup cannot catch this: the count
             // did not change, only the placement did.
             let stillVisible = EntryListFilter
-                .apply(to: vault, groupID: selectedGroupID, query: searchText)
+                .apply(to: vault, selection: groupSelection, query: searchText)
                 .contains { $0.id == id }
             if !stillVisible { selectedEntryID = nil }
         case .permanent:
@@ -425,7 +434,7 @@ struct VaultBrowserView: View {
         let now = Date()
         return VaultEntry(
             id: UUID(),
-            groupID: selectedGroupID,
+            groupID: groupSelection.containingGroupID,
             title: "",
             username: "",
             password: "",

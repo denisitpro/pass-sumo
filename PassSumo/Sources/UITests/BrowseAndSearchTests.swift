@@ -16,9 +16,9 @@ final class BrowseAndSearchTests: XCTestCase {
     func testSelectingAGroupFiltersTheList() {
         let app = launchUITestingApp(self)
 
-        // Nothing is selected in the sidebar yet, so "All Entries" is implicitly in effect
-        // (`VaultBrowserView`'s `selectedGroupID` starts `nil`) — both Email's own entry and
-        // Finance's own entry are visible up front.
+        // The sidebar opens on "All Entries" (`VaultBrowserView`'s `selectedGroup` starts at
+        // `.allEntries` — issue #85), so both Email's own entry and Finance's own entry are
+        // visible up front.
         XCTAssertTrue(app.byID("list.entry.\(SampleVault.gmailPersonalID)").waitForExistence(timeout: 5))
         XCTAssertTrue(app.byID("list.entry.\(SampleVault.payPalID)").waitForExistence(timeout: 5))
 

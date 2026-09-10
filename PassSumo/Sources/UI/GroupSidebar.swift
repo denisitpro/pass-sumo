@@ -62,16 +62,42 @@ enum GroupTreeBuilder {
     }
 }
 
+/// What the sidebar's selection can be: the unfiltered "All Entries" row, or one group.
+///
+/// **An explicit case rather than `nil` for "All Entries" (issue #85).** A macOS `List(selection:)`
+/// bound to an `Optional` writes `nil` to mean *deselected*, so a `nil` that ALSO meant "All
+/// Entries" gave the list no way to tell "the user picked that row" from "the selection was
+/// cleared" — and the row could not reliably become, or stay, the selection once a group had been
+/// picked. Binding the list to `GroupSelection?` gives `nil` back its one real meaning.
+///
+/// `nil` still means something else again one layer down, and deliberately so:
+/// `Vault.entries(inGroup: nil)` means "entries with no group at all" (see that method's doc
+/// comment), which is not what "All Entries" promises. The two were never the same thing; this type
+/// is what stops them being spelled the same way.
+enum GroupSelection: Hashable {
+    case allEntries
+    case group(UUID)
+
+    /// The group something created "here" belongs to — `nil` for `allEntries`, which is
+    /// `VaultEntry.groupID`'s own "no group, top level".
+    ///
+    /// Deliberately NOT used as a filter argument: `EntryListFilter` switches on the case instead,
+    /// so the two meanings of `nil` above never meet again in one value.
+    var containingGroupID: UUID? {
+        switch self {
+        case .allEntries: return nil
+        case .group(let id): return id
+        }
+    }
+}
+
 /// The left column: "All Entries" plus the group outline, each row showing its own entry count.
 ///
-/// Selecting "All Entries" clears `selectedGroupID` to `nil`. That's a DIFFERENT meaning of `nil`
-/// than `Vault.entries(inGroup:)` uses (there, `nil` means "top-level entries with no group at
-/// all" — see that method's doc comment) — this view and `EntryListView` deliberately treat
-/// `selectedGroupID == nil` as "no filter, show everything" instead, which is what the "All
-/// Entries" label actually promises.
+/// The selection is a `GroupSelection?` rather than a `UUID?` — see that type's doc comment for
+/// what went wrong when "All Entries" was spelled `nil`.
 struct GroupSidebar: View {
     let vault: Vault
-    @Binding var selectedGroupID: UUID?
+    @Binding var selection: GroupSelection?
     /// Asks the owner to empty the recycle bin. A closure rather than a `VaultStore` reference
     /// because emptying is destructive and needs a confirmation, and the confirmation belongs
     /// where the rest of this screen's alerts live (`VaultBrowserView`) — a sidebar that could
@@ -86,7 +112,7 @@ struct GroupSidebar: View {
     private var recycleBinID: UUID? { vault.recycleBin.groupID }
 
     var body: some View {
-        List(selection: $selectedGroupID) {
+        List(selection: $selection) {
             sidebarRow(
                 label: "All Entries",
                 systemImage: "tray.full",
@@ -95,10 +121,13 @@ struct GroupSidebar: View {
                 // row actually reveals (`EntryListFilter` hides them too). Counting them would
                 // leave the count unchanged when an entry is deleted — the same "nothing
                 // happened" signal that makes a user press ⌫ a second time.
-                isSelected: selectedGroupID == nil,
+                isSelected: selection == .allEntries,
                 isMuted: false
             )
-            .tag(UUID?.none)
+            // `Optional(_:)`, matching the group rows below: the tag's type must be the binding's
+            // `GroupSelection?`, not `GroupSelection`, or the row is tagged with a value the
+            // selection can never hold and clicking it does nothing.
+            .tag(Optional(GroupSelection.allEntries))
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar.allEntries")
@@ -162,13 +191,13 @@ struct GroupSidebar: View {
             // `EntryListView` uses for the same group filter, so the number shown here always
             // equals what selecting this row actually reveals.
             count: vault.entries(inGroup: node.group.id).count,
-            isSelected: selectedGroupID == node.group.id,
+            isSelected: selection == .group(node.group.id),
             // The bin's row is de-emphasised (`.side-row.is-muted`): it is the one group whose
             // contents are not live credentials, and a user who cannot tell it apart at a glance
             // is exactly the user who copies a password out of it.
             isMuted: isRecycleBin
         )
-        .tag(Optional(node.group.id))
+        .tag(Optional(GroupSelection.group(node.group.id)))
         .accessibilityIdentifier(
             isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"
         )
@@ -182,9 +211,9 @@ struct GroupSidebar: View {
 }
 
 #Preview {
-    @Previewable @State var selection: UUID?
+    @Previewable @State var selection: GroupSelection? = .allEntries
     return NavigationSplitView {
-        GroupSidebar(vault: .sample, selectedGroupID: $selection, onEmptyRecycleBin: {})
+        GroupSidebar(vault: .sample, selection: $selection, onEmptyRecycleBin: {})
     } detail: {
         Text("Detail")
     }
