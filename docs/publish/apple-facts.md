@@ -1,6 +1,6 @@
 # Apple requirements — verified facts (Mac App Store)
 
-> Status: living · Last verified: 2026-08-29 · [AI - claude-sonnet-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-sonnet-5]
 
 Every claim below carries a confidence label, inherited from the 2026-08-29 research pass:
 **VERIFIED (url)** = read directly on an Apple (or BIS/government) primary source; **INFERRED** =
@@ -116,71 +116,13 @@ to reverse-engineer from generic search results.
 
 ## Export compliance
 
-This is the single biggest divergence from ShotSumo's precedent, and the item most likely to be
-misjudged. ShotSumo set `ITSAppUsesNonExemptEncryption = false` because it has zero networking and
-no custom crypto — **not directly transferable to pass-sumo**, which does implement its own
-encryption (AES-256/ChaCha20 with an Argon2 KDF for the KDBX format).
+Owned entirely by [`export-compliance.md`](export-compliance.md) — the encryption declaration,
+what Apple requires, the BIS annual self-classification report, and the French ANSSI declaration.
+Read that doc rather than this section; do not restate its reasoning here.
 
-- Apple's export-compliance questionnaire lists specific exemption categories, one of which is
-  encryption "limited to authentication, digital signature, or the decryption of data or files"
-  (plus carve-outs for medical use, IP/copyright protection, banking, fixed data compression).
-  **UNVERIFIED as an exact Apple quote** — found via a secondary aggregator citing Apple's
-  questionnaire wording, not fetched from developer.apple.com directly in this session (WebFetch
-  retrieved only the page title, not the body). Re-read the live App Store Connect export-compliance
-  questionnaire text directly at submission time.
-- **The careful answer for pass-sumo:** the "limited to authentication" exemption applies to
-  encryption whose *only* cryptographic function is authenticating a user or signing/verifying —
-  not to encryption whose function is protecting the *confidentiality* of stored user data. A KDBX
-  vault's AES-256/ChaCha20 encryption of entry contents (Argon2/AES-KDF deriving the key from the
-  master password) is confidentiality encryption of user data — a different cryptographic function
-  from "authentication." **INFERRED, but with reasonably high confidence** — this distinction
-  (authentication/signing vs. confidentiality) is the actual dividing line under the US Export
-  Administration Regulations' Category 5 Part 2 Note 4, corroborated by a BIS-focused source
-  describing self-classification for products "limited to authentication and digital signature
-  functions," explicitly contrasted with general confidentiality encryption.
-- **Conclusion: pass-sumo almost certainly cannot claim the "limited to authentication" exemption**
-  and should expect `ITSAppUsesNonExemptEncryption = true`, not `false`.
-
-What `true` obligates the developer to do, layered:
-
-1. The export-compliance questionnaire in App Store Connect asks follow-up questions at every
-   submission — separate from, and in addition to, the Info.plist key.
-2. A KDBX-format local password vault almost certainly qualifies as **"mass market"** under EAR
-   Category 5 Part 2 (ECCN 5D992.c — retail-available software, user cannot modify the
-   cryptographic functionality) — mass-market items can be **self-classified** (no CCATS required),
-   but the exporter must file an **annual self-classification report** with BIS (due by February 1
-   each year for the prior calendar year's exports) to specific BIS/NSA addresses (`crypt@bis.doc.gov`,
-   `crypt-supp8@bis.doc.gov`, `enc@nsa.gov`, per secondary sourcing). **VERIFIED at the
-   BIS-regulatory level** (bis.gov mass-market page confirms self-classification + annual reporting
-   mechanism exists for 5A992.c/5D992.c) — **INFERRED that pass-sumo specifically qualifies**, since
-   that determination requires reviewing the actual product against BIS's Note 3 criteria, which
-   this research did not do in detail.
-3. Apple's App Store Connect flow: if the developer says the app is not exempt and has (or needs)
-   no CCATS, Apple in some cases asks for either a copy of a CCATS if one exists, or a short
-   letter/attestation confirming the developer understands their obligation to file the annual BIS
-   self-classification report themselves. **Apple does not do the BIS filing on the developer's
-   behalf** — the annual report is the developer/legal-entity's own regulatory obligation.
-   **UNVERIFIED as exact current wording** — corroborated by multiple developer-forum threads, not
-   confirmed by fetching Apple's live "Export compliance documentation for encryption" help page
-   body in this session (WebFetch retrieved only the title).
-4. **France-specific:** France separately controls import of apps in specific categories including
-   explicitly **"Secure Storage"** (alongside Secure Communications and Security Anti-Virus) — a
-   KDBX password manager is squarely a "Secure Storage" app. If/when pass-sumo is distributed in
-   the French App Store storefront, Apple requires an ANSSI encryption declaration, which can now
-   be submitted through App Store Connect rather than directly to ANSSI. **VERIFIED that this
-   category and requirement exist** (developer.apple.com's export-compliance-documentation-for-encryption
-   help page is the authoritative source, confirmed via search-result synthesis of that page's
-   content — the page body itself could not be fetched directly in this session; re-verify by
-   reading it live before the first French submission).
-
-**Bottom line:** pass-sumo should plan, from alpha onward, to set `ITSAppUsesNonExemptEncryption =
-true`, expect to answer "yes, non-exempt, but mass-market self-classified, no CCATS" in App Store
-Connect's questionnaire at every submission, expect an annual BIS self-classification report to
-become a real recurring legal/compliance task once the app ships, and expect an additional French
-ANSSI "Secure Storage" declaration step for French availability. None of this blocks alpha
-development work — it is a submission-time / first-real-release concern — but it needs a
-decision-owner and a plan before the first submission, not discovery at submission time. **This is
-a legal declaration the developer/legal entity makes, not a build flag** — see OPEN QUESTIONS below.
+**Conclusion:** `ITSAppUsesNonExemptEncryption = true`, confirmed correct; no CCATS required; an
+annual BIS self-classification report is required; a French declaration is required only if France
+is in the app's availability.
 
 ## Privacy manifest & required-reason APIs
 
@@ -278,35 +220,26 @@ template.
 Everything here must be resolved — or at minimum explicitly decided — before the first App Store
 submission.
 
-1. **`ITSAppUsesNonExemptEncryption` classification.** The current plan is `true`, because pass-sumo
-   implements its own confidentiality encryption (KDBX AES-256/ChaCha20 with an Argon2 KDF), which
-   is not the "limited to authentication" exemption. But the classification itself is INFERRED, the
-   BIS annual self-classification report obligation is INFERRED, and the French ANSSI declaration
-   requirement is INFERRED in its applicability details (though VERIFIED to exist as a category).
-   **This is a legal declaration, not a build flag** — it needs a human/legal sign-off, not just a
-   code change. What would settle it: read the live App Store Connect export-compliance
-   questionnaire text directly at submission time, and get legal/compliance confirmation of the BIS
-   self-classification and (if shipping to France) ANSSI declaration obligations.
-2. **`NSFaceIDUsageDescription` / Touch ID Info.plist keys.** Currently UNVERIFIED, sourced only
+1. **`NSFaceIDUsageDescription` / Touch ID Info.plist keys.** Currently UNVERIFIED, sourced only
    from secondary articles. What would settle it: check the live Xcode Info.plist key reference
    before writing any `LAContext`/biometric code.
-3. **Keychain-access-group entitlement requirement for biometric-gated Keychain access on macOS.**
+2. **Keychain-access-group entitlement requirement for biometric-gated Keychain access on macOS.**
    Currently UNVERIFIED, sourced from a single forum report. What would settle it: test directly
    against a real signed build.
-4. **Required Reason API verbatim reason codes** (UserDefaults, File Timestamp, Disk Space).
+3. **Required Reason API verbatim reason codes** (UserDefaults, File Timestamp, Disk Space).
    Apple's canonical reference page 404'd in this research pass. What would settle it: re-locate and
    read the current page directly before implementing any of these APIs — citing the wrong code is
    a validation failure, not a style nit.
-5. **Primary category: Utilities vs. Productivity.** Not yet decided. What would settle it: a
+4. **Primary category: Utilities vs. Productivity.** Not yet decided. What would settle it: a
    product decision, not further research — pick one and set `LSApplicationCategoryType` in the
    build config early so it's never a last-minute surprise (cf. ShotSumo's error 90242).
-6. **Review-logistics affordance for "open a vault."** Sample vault + password in Review Notes, vs.
+5. **Review-logistics affordance for "open a vault."** Sample vault + password in Review Notes, vs.
    an in-app "create a new empty vault" flow available at first launch. What would settle it: a
    product-design decision, made now — it's cheaper to build the affordance in from the start than
    retrofit it under review-rejection pressure the way ShotSumo had to twice.
-7. **Hardened Runtime for plain MAS uploads.** Whether Xcode's App Store upload flow actually
+6. **Hardened Runtime for plain MAS uploads.** Whether Xcode's App Store upload flow actually
    enforces it is UNVERIFIED. What would settle it: attempt an upload without it and see if it's
    blocked — or just enable it regardless, since ShotSumo found it costs nothing.
-8. **iCloud Drive file access without ubiquity entitlements.** Currently INFERRED from forum
+7. **iCloud Drive file access without ubiquity entitlements.** Currently INFERRED from forum
    corroboration only. What would settle it: pick a file that lives only in iCloud Drive, not yet
    locally cached, and confirm the read succeeds and triggers a download under App Sandbox.
