@@ -1,75 +1,61 @@
 #!/usr/bin/env python3
-"""Generate the PassSumo macOS AppIcon.appiconset — procedural mark, palette C.
+"""Generate the PassSumo macOS AppIcon.appiconset -- the azure padlock+sumo mark (#18).
 
-The mark is drawn from geometry in this file, not extracted from source art, so
-every edge stays crisp at every exported size and the whole icon is one command
-away from being re-rendered in a different colour or proportion.
+Decision history (full detail in design/logo/README.md):
+  - `8ab8f02` (2026-08-30): the approved padlock+sumo mark, extracted from generated art.
+  - `b88fd32` / `b6a0e40` (2026-09-09): replaced it with a "Keyhole P" monogram -- a redraw
+    the owner never asked for. Rejected.
+  - This script (#18): restores `8ab8f02`'s own mark-extraction pipeline (copied verbatim,
+    not re-derived) and recolours it azure, per the owner's original instruction. The owner
+    picked `azure-shaded` (of the 4 candidates in `make-icon-variants.py`) for the large
+    tiers, and asked for a simplified drawing -- not the full mark -- at the sizes where the
+    full mark stops reading.
 
-Three concepts are implemented; pick one with --concept:
-
-  c1  "Keyhole P" — a bold monoline capital P whose counter *is* a keyhole:
-      a bore concentric with the bowl, plus a slot tapering into the bowl's
-      lower stroke and stopping short of its outer edge, so the bowl stays
-      closed and the letter stays a letter. Shipped.
-
-  c3  "Thin P" — the same idea in a thin constructed weight. A thin stroke
-      cannot carry a keyhole as its counter (see `letter_p`), so the counter
-      is a plain circle with a small keyhole nested inside it.
-
-  c2  "Padlock" — no letter. A symmetric solid padlock with the keyhole
-      punched through, under a constant-width shackle arc. Kept as the safe
-      fallback; it is the system lock glyph in brand colours.
-
-All sit on a deep navy tile (palette C accent-800 -> accent-900) with the mark
-in an azure gradient and a light upper-left edge highlight. There is no drop
-shadow: it greyed the tile and cost a whole art tier. See design/logo/README.md
-for the colour tokens and their provenance, and for the verified Apple geometry
-the CANVAS/TILE/CORNER_RADIUS numbers encode.
-
-Small sizes get different, simpler art on purpose (normal macOS practice — the
-asset catalog supports per-size art), and that art is deliberately larger and
-heavier than the full-art mark, so shrinking the large mark for air costs
-nothing at 16px.
+What this script does:
+  1. Extracts the padlock+sumo silhouette from the source art, exactly as `8ab8f02` did:
+     `sample_source_colors` / `extract_mark_alpha` / `crop_to_content`, unchanged.
+  2. Large tiers (>= LARGE_TIER_PX, currently 64) get the full mark: `azure` (#25C9ED)
+     gradating to `accent-400`, on an `accent-800` -> `accent-900` gradient tile. This is
+     the owner-approved `azure-shaded` candidate, unmodified.
+  3. Small tiers get `8ab8f02`'s own procedural padlock-only glyph (no sumo -- it degrades
+     into a blob below LARGE_TIER_PX, `8ab8f02`'s own finding, re-confirmed by this round's
+     renders), flat `azure` on a flat `accent-900` tile:
+       - 32px keeps the punched keyhole detail -- verified legible at that size.
+       - 16px drops the keyhole punch entirely: at true 16x16 pixels the punch's circle+
+         wedge collapses into a confusing blob rather than reading as a hole (verified by
+         rendering both ways and comparing nearest-neighbour zooms -- see README.md). A
+         solid body+shackle silhouette reads as "a padlock" at 16px; the punched version
+         does not.
+  4. Writes the full AppIcon.appiconset (10 PNGs + Contents.json), a full-resolution
+     `appicon-1024.png`, and a labelled contact-sheet preview.
 
 Usage:
-    python3 design/logo/make-appicon.py --concept c1
-    python3 design/logo/make-appicon.py --concept c3 --out /tmp/c3-appiconset
-
-    # preview only, no asset catalog written:
-    python3 design/logo/make-appicon.py --concept c3 --skip-appicon
+    python3 design/logo/make-appicon.py
 
 Requires: Pillow (no numpy).
 """
 from __future__ import annotations
 
-import argparse
 import json
-import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOGO_DIR = Path(__file__).resolve().parent
-DEFAULT_OUT = REPO_ROOT / "PassSumo/Resources/Assets.xcassets/AppIcon.appiconset"
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[1]
+SOURCE = HERE / "grok-image-b89c2f82-0acc-4776-b1ac-78ebd36e8f9d.jpg"
+OUT_DIR = REPO_ROOT / "PassSumo/Resources/Assets.xcassets/AppIcon.appiconset"
+HERO_1024 = HERE / "appicon-1024.png"
+PREVIEW = HERE / "appicon-preview.png"
 
-# --- Apple macOS app-icon geometry -----------------------------------------
-# Canvas 1024x1024pt with the icon tile as an ~824x824 rounded rectangle
-# centered on it (~100px transparent margin each side), corner radius ~185.4
-# ("Big Sur" squircle template, still the operative shape for a classic,
-# non-Icon-Composer AppIcon.appiconset). See design/logo/README.md for the
-# verified source URLs — do not change these numbers without re-checking
-# that doc.
+# --- Apple macOS app-icon geometry, unchanged since 8ab8f02 --------------------------
 CANVAS = 1024
 TILE = 824
 CORNER_RADIUS_RATIO = 185.4 / 824  # ~0.225
 
-# Every macOS "mac" idiom (point size, scale) pair Xcode's asset catalog
-# expects, and the exported filename Contents.json will point at. Some
-# point-size/scale pairs land on the same pixel size (e.g. 16pt@2x and
-# 32pt@1x are both 32px) — each still gets its own file, matching what
-# Xcode itself generates when you drop a 1024px image into the icon well.
+# Every macOS "mac" idiom (point size, scale) pair Xcode's asset catalog expects.
 ICON_SPECS = [
+    # (point_size, scale, filename)
     (16, 1, "icon_16x16.png"),
     (16, 2, "icon_16x16@2x.png"),
     (32, 1, "icon_32x32.png"),
@@ -82,660 +68,312 @@ ICON_SPECS = [
     (512, 2, "icon_512x512@2x.png"),
 ]
 
-# Art tiers, by exported pixel size. Chosen by rendering all three and looking
-# at them — see design/logo/README.md.
-FULL_FROM_PX = 128      # >= this: gradient + shadow + edge highlight
-MINIMAL_BELOW_PX = 32   # <  this: flat art with no keyhole
-
-# The master tile is drawn at 3x the 824pt tile and downsampled, which is what
-# antialiases the mitres and the arc (ImageDraw itself does not antialias).
-SUPERSAMPLE = 824 * 3
-
-# --- Colour ----------------------------------------------------------------
-# Palette C ("Steel Cyan"), the app's approved accent ramp, plus one sampled
-# token. Never invent a hex here; see design/logo/README.md.
-A = {
-    50: "#ECF6F9", 100: "#D2E9EF", 200: "#A4D4DF", 300: "#6CB7C8", 400: "#3A96AB",
-    500: "#1B7A90", 600: "#14657A", 700: "#0F5163", 800: "#0B3E4C", 900: "#072C36",
-}
-# Sampled, not invented: the most frequent saturated-blue pixel value in the
-# sibling app finsumo's AppIcon-1024.png (n=299). Its hue (0.530) is the same
-# hue as palette C's accent ramp — it is that hue at full chroma, which is why
-# it sits inside the brand rather than beside it. Provenance in README.md.
-AZURE = "#25C9ED"
-
-# Tile: a diagonal from a light top-left corner into the ramp's darkest step,
-# which most of the tile sits at. Deep enough to read as material rather than
-# as a slab, without inventing a hex darker than the ramp holds.
-TILE_STOPS = [(0.0, A[800]), (0.62, A[900]), (1.0, A[900])]
-TILE_AXIS = ((0.0, 0.0), (1.0, 1.0))
-
-# Mark: the full ramp, accent-500 at the mark's bottom-left corner to the
-# measured azure at its top-right. Spent across the mark's own bounding box
-# (see render_master), so it is visible at 256px instead of nearly flat.
-# accent-500 rather than the darker accent-700 the ramp offers: at accent-700
-# the stem's foot sinks into the tile it sits on.
-MARK_STOPS = [(0.0, A[500]), (1.0, AZURE)]
-# The tile's outermost band, darkened rather than lit: a lighter rim (tried at
-# accent-700) reads as a drawn outline around the icon, which dates it. Landing
-# on the gradient's own dark end instead just deepens the edge.
-TILE_EDGE = A[900]
-EDGE_HIGHLIGHT = A[200]
-FLAT_TILE = A[900]
-FLAT_MARK = AZURE
-
-
-def rgb(h: str) -> tuple[int, int, int]:
-    h = h.lstrip("#")
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-
-# --- Gradients -------------------------------------------------------------
-
-
-def _sample_stops(stops: list[tuple[float, str]], t: float) -> tuple[int, int, int]:
-    if t <= stops[0][0]:
-        return rgb(stops[0][1])
-    if t >= stops[-1][0]:
-        return rgb(stops[-1][1])
-    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
-        if t0 <= t <= t1:
-            f = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
-            a, b = rgb(c0), rgb(c1)
-            return tuple(int(round(a[i] + (b[i] - a[i]) * f)) for i in range(3))  # type: ignore[return-value]
-    return rgb(stops[-1][1])
-
-
-def linear_gradient(
-    size: int,
-    stops: list[tuple[float, str]],
-    p0: tuple[float, float],
-    p1: tuple[float, float],
-) -> Image.Image:
-    """RGB image of `size`^2 holding a linear gradient. p0/p1 are in tile-
-    normalised [0,1] coordinates (y down). Generated small and scaled up — a
-    linear ramp survives bicubic resampling exactly."""
-    small = 320
-    im = Image.new("RGB", (small, small))
-    px = im.load()
-    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
-    denom = dx * dx + dy * dy or 1.0
-    for y in range(small):
-        v = (y + 0.5) / small
-        for x in range(small):
-            u = (x + 0.5) / small
-            t = ((u - p0[0]) * dx + (v - p0[1]) * dy) / denom
-            px[x, y] = _sample_stops(stops, t)
-    return im.resize((size, size), Image.BICUBIC)
-
-
-# --- Ribbon strokes with mitred corners ------------------------------------
-
-
-def _unit(v: tuple[float, float]) -> tuple[float, float]:
-    length = math.hypot(v[0], v[1])
-    return (v[0] / length, v[1] / length) if length else (0.0, 0.0)
-
-
-def stroke_path(
-    draw: ImageDraw.ImageDraw,
-    pts: list[tuple[float, float]],
-    half: float,
-    closed: bool = False,
-) -> None:
-    """Fill a constant-width ribbon along `pts` with mitred joins.
-
-    Drawn as a union of per-segment quads plus a mitre patch at every joint,
-    rather than as one offset outline polygon: a single polygon would be
-    self-intersecting wherever the path doubles back, and ImageDraw's scanline
-    fill would punch holes in it.
-    """
-    if closed and pts[0] == pts[-1]:
-        pts = pts[:-1]
-    n = len(pts)
-    if n < 2:
-        return
-    seg_count = n if closed else n - 1
-    dirs = []
-    for k in range(seg_count):
-        a, b = pts[k], pts[(k + 1) % n]
-        dirs.append(_unit((b[0] - a[0], b[1] - a[1])))
-
-    for k in range(seg_count):
-        a, b = pts[k], pts[(k + 1) % n]
-        dx, dy = dirs[k]
-        nx, ny = -dy, dx
-        draw.polygon(
-            [
-                (a[0] + nx * half, a[1] + ny * half),
-                (b[0] + nx * half, b[1] + ny * half),
-                (b[0] - nx * half, b[1] - ny * half),
-                (a[0] - nx * half, a[1] - ny * half),
-            ],
-            fill=255,
-        )
-
-    joints = range(n) if closed else range(1, n - 1)
-    for j in joints:
-        k_in = (j - 1) % seg_count
-        k_out = j % seg_count
-        d1, d2 = dirs[k_in], dirs[k_out]
-        n1 = (-d1[1], d1[0])
-        n2 = (-d2[1], d2[0])
-        m = _unit((n1[0] + n2[0], n1[1] + n2[1]))
-        dot = m[0] * n1[0] + m[1] * n1[1]
-        if abs(dot) < 1e-6:
-            continue
-        length = min(half / dot, half * 4.0)  # mitre limit
-        p = pts[j]
-        # Both sides: the outer patch fills the wedge the butt quads leave
-        # open; the inner one lands exactly on the quads' shared boundary, so
-        # drawing it is a no-op rather than an overshoot.
-        for s in (1.0, -1.0):
-            draw.polygon(
-                [
-                    p,
-                    (p[0] + s * n1[0] * half, p[1] + s * n1[1] * half),
-                    (p[0] + s * m[0] * length, p[1] + s * m[1] * length),
-                    (p[0] + s * n2[0] * half, p[1] + s * n2[1] * half),
-                ],
-                fill=255,
-            )
-
-
-def arc_points(
-    cx: float, cy: float, r: float, a0_deg: float, a1_deg: float, steps: int = 96
-) -> list[tuple[float, float]]:
-    """Polyline along a circular arc, in y-down coordinates. 180deg -> 0deg
-    traces the upper half from the left end, over the apex, to the right end."""
-    out = []
-    for i in range(steps + 1):
-        a = math.radians(a0_deg + (a1_deg - a0_deg) * i / steps)
-        out.append((cx + r * math.cos(a), cy - r * math.sin(a)))
-    return out
-
-
-# --- Concept geometry ------------------------------------------------------
-# All coordinates are tile-normalised [0,1], y down. Primitives:
-#   ("rect", x0, y0, x1, y1, corner_radius)
-#   ("stroke", points, closed, width)
-#   ("keyhole", cx, cy, r, slot_bottom)
-# `add` is unioned into the mark mask, `punch` is subtracted from it.
-
-CONCEPTS = {
-    "c1": "Keyhole P",
-    "c2": "Padlock",
-    "c3": "Thin P",
-}
-
-
-# Keyhole slot half-widths, as a fraction of the bore radius: where it leaves
-# the bore, and where it ends. Kept slim — a wide flare eats into whatever the
-# keyhole is cut from and reads as damage rather than as a keyhole.
-SLOT_TOP, SLOT_BOTTOM = 0.46, 0.68
-
-
-def keyhole_shapes(cx: float, cy: float, r: float, slot_bottom: float) -> list:
-    """A keyhole as a circular bore plus a slot that widens downward."""
-    return [
-        ("ellipse", cx - r, cy - r, cx + r, cy + r),
-        (
-            "polygon",
-            [
-                (cx - r * SLOT_TOP, cy),
-                (cx + r * SLOT_TOP, cy),
-                (cx + r * SLOT_BOTTOM, slot_bottom),
-                (cx - r * SLOT_BOTTOM, slot_bottom),
-            ],
-        ),
-    ]
-
-
-def letter_p(
-    cap_h: float,
-    stroke: float,
-    bowl_ratio: float,
-    slot_inset: float | None = None,
-    nested: tuple[float, float, float] | None = None,
-) -> tuple[list, float]:
-    """A monoline capital P, laid out with the stem's left edge at x=0 and the
-    cap line at y=0. Returns (ops, width).
-
-    One construction serves every weight. `stroke` is both the stem width and
-    the bowl's stroke — equal by design, which is what makes the letterform
-    read as deliberate rather than drawn. The bowl is a D: the disc plus the
-    block bridging it to the stem. All terminals are flat and square; there is
-    exactly one terminal treatment and no corner rounding anywhere.
-
-    The counter is concentric with the bowl disc at `bowl_r - stroke`. That
-    single choice keeps the bowl's weight even all the way round *and* puts the
-    stem's right edge exactly tangent to the counter, which is where a P's stem
-    belongs in type.
-
-    Two ways to get the keyhole into it:
-
-    `slot_inset` — the counter itself is punched as a keyhole: bore plus a slot
-    tapering into the bowl's lower stroke, ending `slot_inset` above its outer
-    edge so the bowl stays closed. This needs a heavy stroke to work at all:
-    slot depth is only ever `stroke - slot_inset`, while the bore radius is
-    `bowl_r - stroke`, so a readable keyhole requires stroke ~= half the bowl
-    radius. A thin letterform structurally cannot carry a keyhole as its
-    counter — hence the second mode.
-
-    `nested` — (bore_r, slot_len, dy): the counter is a plain circle and a
-    small solid keyhole is placed inside it, offset by `dy`. This is the thin
-    weight's only option.
-    """
-    bowl_h = cap_h * bowl_ratio
-    bowl_r = bowl_h / 2
-    counter_r = bowl_r - stroke
-    if counter_r <= 0:
-        raise ValueError("stroke is too heavy for this bowl — counter would vanish")
-    bowl_cx = stroke + counter_r
-    bowl_cy = bowl_r
-    width = bowl_cx + bowl_r
-
-    ops: list[tuple[str, list]] = [
-        (
-            "add",
-            [
-                ("rect", 0.0, 0.0, stroke, cap_h, 0.0),
-                ("ellipse", bowl_cx - bowl_r, 0.0, bowl_cx + bowl_r, bowl_h),
-                ("rect", 0.0, 0.0, bowl_cx, bowl_h, 0.0),
-            ],
-        )
-    ]
-    if slot_inset is not None:
-        ops.append(("punch", [("keyhole", bowl_cx, bowl_cy, counter_r, bowl_h - slot_inset)]))
-    else:
-        ops.append(
-            (
-                "punch",
-                [("ellipse", bowl_cx - counter_r, bowl_cy - counter_r,
-                  bowl_cx + counter_r, bowl_cy + counter_r)],
-            )
-        )
-        if nested is not None:
-            bore_r, slot_len, dy = nested
-            cy = bowl_cy + dy
-            ops.append(("add", [("keyhole", bowl_cx, cy, bore_r, cy + slot_len)]))
-    return ops, width
-
-
-# Per-tier letterform parameters. The small tiers are deliberately *larger and
-# heavier* than the full-art tier — standard practice, and what lets the
-# large-size mark shrink for air without costing 16px legibility.
-P_PARAMS = {
-    "c1": {
-        "full": dict(cap_h=0.650, stroke=0.115, bowl_ratio=0.64, slot_inset=0.045),
-        "simplified": dict(cap_h=0.680, stroke=0.122, bowl_ratio=0.66, slot_inset=0.040),
-        "minimal": dict(cap_h=0.700, stroke=0.130, bowl_ratio=0.70),
-    },
-    # C3's identity — the thin constructed line — exists only at the full-art
-    # sizes. Below that the stroke and the nested keyhole both fall under a
-    # pixel, so its small tiers converge on C1's. That is a real cost of the
-    # thin direction, not a shortcut.
-    "c3": {
-        "full": dict(cap_h=0.660, stroke=0.070, bowl_ratio=0.62,
-                     nested=(0.048, 0.105, -0.030)),
-        "simplified": dict(cap_h=0.680, stroke=0.100, bowl_ratio=0.64, slot_inset=0.035),
-        "minimal": dict(cap_h=0.700, stroke=0.130, bowl_ratio=0.70),
-    },
-}
-
-
-def geometry_p(concept: str, tier: str) -> list[tuple[str, list]]:
-    ops, width = letter_p(**P_PARAMS[concept][tier])
-    cap_h = P_PARAMS[concept][tier]["cap_h"]
-    ops = translate_ops(ops, (1.0 - width) / 2, (1.0 - cap_h) / 2)
-    dx, dy = optical_correction(ops)
-    return translate_ops(ops, dx, dy)
-
-
-def geometry_c2(tier: str) -> list[tuple[str, list]]:
-    """A padlock, symmetric and solid: a rounded body with the keyhole punched
-    clean through to the tile, under a constant-width shackle arc."""
-    width = 0.145 if tier == "minimal" else 0.125
-    arc_cx, arc_cy, arc_r = 0.500, 0.290, 0.170
-    shackle = (
-        [(arc_cx - arc_r, 0.500)]
-        + arc_points(arc_cx, arc_cy, arc_r, 180, 0)
-        + [(arc_cx + arc_r, 0.500)]
-    )
-    ops = [
-        ("add", [("rect", 0.175, 0.470, 0.825, 0.870, 0.075),
-                 ("stroke", shackle, False, width)]),
-    ]
-    if tier != "minimal":
-        ops.append(("punch", [("keyhole", 0.500, 0.612, 0.072, 0.782)]))
-    return ops
-
-
-GEOMETRY = {
-    "c1": lambda tier: geometry_p("c1", tier),
-    "c2": geometry_c2,
-    "c3": lambda tier: geometry_p("c3", tier),
-}
-
-
-# --- Placement -------------------------------------------------------------
-
-# A P is left-heavy: the stem is full-height ink on the left, the bowl mass is
-# upper-right, and the lower-right quadrant is empty. Centring its bounding box
-# therefore puts its centre of *ink* left of the tile's centre and the mark
-# looks shoved sideways, so it is nudged right by part of that offset (the full
-# offset overshoots — the classic optical-centring overcorrection).
-#
-# Horizontally only. A P is also top-heavy, but the eye places a letter
-# vertically by its cap and baseline, not by its mass: correcting vertically
-# too pushed the mark visibly low in the tile (bottom margin measurably
-# smaller than the top). Cap height and baseline stay box-centred.
-OPTICAL_CORRECTION_X = 0.55
-
-
-def translate_ops(ops: list[tuple[str, list]], dx: float, dy: float) -> list[tuple[str, list]]:
-    def move(prim):
-        kind = prim[0]
-        if kind == "rect":
-            return (kind, prim[1] + dx, prim[2] + dy, prim[3] + dx, prim[4] + dy, prim[5])
-        if kind == "ellipse":
-            return (kind, prim[1] + dx, prim[2] + dy, prim[3] + dx, prim[4] + dy)
-        if kind == "keyhole":
-            return (kind, prim[1] + dx, prim[2] + dy, prim[3], prim[4] + dy)
-        if kind == "stroke":
-            return (kind, [(x + dx, y + dy) for x, y in prim[1]], prim[2], prim[3])
-        raise ValueError(f"unknown primitive {kind!r}")
-
-    return [(mode, [move(p) for p in prims]) for mode, prims in ops]
-
-
-def optical_correction(ops: list[tuple[str, list]], ss: int = 320) -> tuple[float, float]:
-    """How far to move an already box-centred mark so its centre of ink lands
-    nearer the tile centre. Measured from the rendered mask, not guessed."""
-    mask = compose_mask(ops, ss)
-    px = mask.load()
-    weight = mx = 0
-    for y in range(ss):
-        for x in range(ss):
-            a = px[x, y]
-            if a:
-                weight += a
-                mx += a * x
-    if not weight:
-        raise RuntimeError("mark mask is empty — check the geometry parameters")
-    cx = (mx / weight + 0.5) / ss
-    return OPTICAL_CORRECTION_X * (0.5 - cx), 0.0
-
-
-# --- Mask assembly ---------------------------------------------------------
-
-
-def _draw_primitives(draw: ImageDraw.ImageDraw, prims: list, ss: int) -> None:
-    for prim in prims:
-        kind = prim[0]
-        if kind == "rect":
-            _, x0, y0, x1, y1, r = prim
-            draw.rounded_rectangle(
-                [x0 * ss, y0 * ss, x1 * ss, y1 * ss], radius=r * ss, fill=255
-            )
-        elif kind == "ellipse":
-            draw.ellipse([c * ss for c in prim[1:]], fill=255)
-        elif kind == "stroke":
-            _, pts, closed, w = prim
-            stroke_path(draw, [(x * ss, y * ss) for x, y in pts], w * ss / 2, closed)
-        elif kind == "keyhole":
-            _, cx, cy, r, sb = prim
-            for shape in keyhole_shapes(cx, cy, r, sb):
-                if shape[0] == "ellipse":
-                    draw.ellipse([c * ss for c in shape[1:]], fill=255)
-                else:
-                    draw.polygon([(x * ss, y * ss) for x, y in shape[1]], fill=255)
-        else:  # pragma: no cover - guards a typo in the geometry tables
-            raise ValueError(f"unknown primitive {kind!r}")
-
-
-def compose_mask(ops: list[tuple[str, list]], ss: int) -> Image.Image:
-    """Apply add/punch layers in order. Order matters: C3 punches its counter
-    and then adds a keyhole inside it, which a single add-then-punch pass would
-    erase."""
-    mask = Image.new("L", (ss, ss), 0)
-    for mode, prims in ops:
-        layer = Image.new("L", (ss, ss), 0)
-        _draw_primitives(ImageDraw.Draw(layer), prims, ss)
-        mask = ImageChops.lighter(mask, layer) if mode == "add" else ImageChops.subtract(mask, layer)
-    return mask
-
-
-def mark_mask(concept: str, tier: str, ss: int) -> Image.Image:
-    return compose_mask(GEOMETRY[concept](tier), ss)
-
-
-# --- Tile composition ------------------------------------------------------
-
-
-def rounded_tile_alpha(size: int, ss: int = SUPERSAMPLE) -> Image.Image:
-    """The tile's rounded-rectangle alpha, drawn supersampled and downsampled
-    to `size` on its own.
-
-    It is kept out of the master deliberately. Resizing an RGBA master makes
-    LANCZOS ring the four channels independently, so just outside the corners
-    the alpha lands on 1-3 while the colour channels undershoot to values the
-    tile never contained (measured: #00007F at alpha 2). Downsampling the mask
-    alone cannot do that — the colour it reveals is always real tile colour.
-    """
-    mask = Image.new("L", (ss, ss), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        [0, 0, ss - 1, ss - 1], radius=int(round(ss * CORNER_RADIUS_RATIO)), fill=255
-    )
-    return mask.resize((size, size), Image.LANCZOS)
-
-
-def render_master(concept: str, tier: str, ss: int = SUPERSAMPLE) -> Image.Image:
-    """One tile at supersampled resolution, opaque RGB — the rounded corners
-    are applied by `render_size` after downsampling."""
-    radius = int(round(ss * CORNER_RADIUS_RATIO))
-    full = tier == "full"
-    if full:
-        layer = linear_gradient(ss, TILE_STOPS, *TILE_AXIS)
-    else:
-        layer = Image.new("RGB", (ss, ss), rgb(FLAT_TILE))
-
-    edge_w = max(1, int(round(ss * 0.0040)))
-    ImageDraw.Draw(layer).rounded_rectangle(
-        [edge_w / 2, edge_w / 2, ss - 1 - edge_w / 2, ss - 1 - edge_w / 2],
-        radius=radius,
-        outline=rgb(TILE_EDGE),
-        width=edge_w,
+# Pixel size below which the full padlock+sumo mark degrades into an unreadable blob --
+# 8ab8f02's own cutover, re-confirmed this round by rendering azure-shaded at 96/72/64/
+# 56/48/32px and looking: at 64px the padlock is crisp and the sumo figure still reads as
+# a figure (soft, but a figure); at 48px the sumo starts fusing into the lock body; at 32
+# it is mush. 64 is kept, not lowered -- the evidence doesn't support going smaller.
+LARGE_TIER_PX = 64
+
+# Pixel size below which even the simplified padlock's punched keyhole stops reading and
+# is dropped, leaving a solid body+shackle silhouette. Verified by rendering the punched
+# glyph at 16px and looking at the true, unsmoothed pixels (nearest-neighbour zoom): the
+# circle+wedge punch collapses into a mask-like blob rather than a hole. At 32px the same
+# punch is still legible, so only 16px drops it.
+KEYHOLE_LEGIBLE_ABOVE_PX = 16
+
+# Palette C (design/BRAND.md) tokens, plus the one measured token `azure` (see
+# design/logo/README.md "Recolour candidates" for its provenance).
+ACCENT_400 = (0x3A, 0x96, 0xAB)
+ACCENT_800 = (0x0B, 0x3E, 0x4C)
+ACCENT_900 = (0x07, 0x2C, 0x36)
+AZURE = (0x25, 0xC9, 0xED)
+
+
+# --- Mark extraction, copied verbatim from 8ab8f02 ------------------------------------
+
+
+def sample_source_colors(im: Image.Image) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Return (background_color, mark_color) sampled from the flat source art."""
+    quant = im.convert("RGB").quantize(colors=6, method=Image.MEDIANCUT)
+    colors = quant.convert("RGB").getcolors(maxcolors=1_000_000)
+    if not colors:
+        raise RuntimeError("could not quantize source colors")
+    colors.sort(key=lambda c: -c[0])
+    bg = colors[0][1]
+
+    def luma(rgb: tuple[int, int, int]) -> float:
+        r, g, b = rgb
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    bg_luma = luma(bg)
+    candidates = [c for c in colors[1:] if bg_luma - luma(c[1]) > 40]
+    if not candidates:
+        raise RuntimeError("could not find a distinct mark color in source art")
+    mark = candidates[0][1]
+    return bg, mark
+
+
+def extract_mark_alpha(im: Image.Image, bg: tuple[int, int, int], mark: tuple[int, int, int]) -> Image.Image:
+    """Antialiased alpha mask of `mark`-colored pixels, by projecting each pixel onto the
+    bg->mark color axis."""
+    vx, vy, vz = (mark[0] - bg[0], mark[1] - bg[1], mark[2] - bg[2])
+    denom = float(vx * vx + vy * vy + vz * vz) or 1.0
+    px = im.convert("RGB").load()
+    w, h = im.size
+    alpha = Image.new("L", (w, h), 0)
+    apx = alpha.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b = px[x, y]
+            t = ((r - bg[0]) * vx + (g - bg[1]) * vy + (b - bg[2]) * vz) / denom
+            if t <= 0:
+                continue
+            apx[x, y] = 255 if t >= 1 else int(round(t * 255))
+    return alpha.filter(ImageFilter.GaussianBlur(radius=1.2))
+
+
+def crop_to_content(alpha: Image.Image, threshold: int = 12) -> Image.Image:
+    bbox = alpha.point(lambda a: 255 if a >= threshold else 0).getbbox()
+    if bbox is None:
+        raise RuntimeError("extracted alpha mask is empty -- check source colors")
+    return alpha.crop(bbox)
+
+
+# --- Padlock-only small-size glyph, copied verbatim from 8ab8f02 ----------------------
+
+
+def draw_padlock_glyph(size: int, color: tuple[int, int, int]) -> Image.Image:
+    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(im)
+
+    body_w = size * 0.62
+    body_h = size * 0.50
+    body_left = size * 0.19
+    body_top = size * 0.42
+    body_radius = body_w * 0.16
+    draw.rounded_rectangle(
+        [body_left, body_top, body_left + body_w, body_top + body_h],
+        radius=body_radius,
+        fill=(*color, 255),
     )
 
-    mask = mark_mask(concept, tier, ss)
-
-    # No drop shadow. It was the one thing greying the tile, and it is what
-    # pushed the full-art cutover up to 128px; without it the full art holds
-    # at 64px (verified by rendering both). The edge highlight below is the
-    # only dimensional cue, and it costs the tile nothing.
-    if full:
-        # The gradient axis is taken from the mark's own bounding box, corner
-        # to corner, so the whole ramp is spent on the mark instead of on empty
-        # tile. That is what makes the gradient actually visible at 256px.
-        x0, y0, x1, y1 = (v / ss for v in mask.getbbox())
-        fill = linear_gradient(ss, MARK_STOPS, (x0, y1), (x1, y0))
-    else:
-        fill = Image.new("RGB", (ss, ss), rgb(FLAT_MARK))
-    layer.paste(fill, (0, 0), mask)
-
-    if full:
-        # Upper-left edge highlight: the mark minus itself shifted down-right,
-        # which leaves a band along exactly the contours a light from the
-        # top-left would catch. Kept narrow and soft — a sheen, not a stroke.
-        off = max(1, int(round(ss * 0.0045)))
-        band = ImageChops.subtract(mask, ImageChops.offset(mask, off, off))
-        band = band.filter(ImageFilter.GaussianBlur(ss * 0.0022))
-        band = band.point(lambda a: int(a * 0.40))
-        layer.paste(Image.new("RGB", (ss, ss), rgb(EDGE_HIGHLIGHT)), (0, 0), band)
-
-    return layer
-
-
-def tier_for(px: int) -> str:
-    if px < MINIMAL_BELOW_PX:
-        return "minimal"
-    if px < FULL_FROM_PX:
-        return "simplified"
-    return "full"
-
-
-def render_size(masters: dict[str, Image.Image], px: int) -> Image.Image:
-    """Place the tier's master tile on the transparent 1024-proportion canvas
-    and downsample to `px`."""
-    master = masters[tier_for(px)]
-    tile_px = max(1, int(round(px * TILE / CANVAS)))
-    tile = master.resize((tile_px, tile_px), Image.LANCZOS).convert("RGBA")
-    tile.putalpha(rounded_tile_alpha(tile_px))
-    canvas = Image.new("RGBA", (px, px), (0, 0, 0, 0))
-    canvas.alpha_composite(tile, ((px - tile_px) // 2, (px - tile_px) // 2))
-    return canvas
-
-
-# --- Contact sheet ---------------------------------------------------------
-
-SHEET_W = 1360
-TRUE_SIZES = [256, 128, 64, 32, 16]
-ZOOMS = [(16, 8), (32, 5), (64, 3), (128, 2)]
-
-
-def _font(size: int) -> ImageFont.ImageFont:
-    for path in ("/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/Geneva.ttf"):
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def _checker(w: int, h: int, step: int = 16) -> Image.Image:
-    im = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-    d = ImageDraw.Draw(im)
-    for y in range(0, h, step):
-        for x in range(0, w, step):
-            if (x // step + y // step) % 2 == 0:
-                d.rectangle([x, y, x + step, y + step], fill=(214, 214, 214, 255))
+    shackle_outer = size * 0.34
+    shackle_stroke = size * 0.12
+    shackle_cx = body_left + body_w * 0.46
+    shackle_top = size * 0.16
+    bbox = [
+        shackle_cx - shackle_outer,
+        shackle_top,
+        shackle_cx + shackle_outer,
+        shackle_top + shackle_outer * 2,
+    ]
+    draw.arc(bbox, start=180, end=360, fill=(*color, 255), width=int(round(shackle_stroke)))
+    cap_r = shackle_stroke / 2
+    for cx in (bbox[0] + shackle_stroke / 2, bbox[2] - shackle_stroke / 2):
+        draw.ellipse(
+            [cx - cap_r, shackle_top + shackle_outer - cap_r, cx + cap_r, shackle_top + shackle_outer + cap_r],
+            fill=(*color, 255),
+        )
     return im
 
 
-def build_contact_sheet(
-    concept: str, renders: dict[int, Image.Image], out_path: Path
-) -> None:
-    f_title = _font(20)
-    f_label = _font(13)
-    f_head = _font(14)
-
-    hero = 384
-    rows_y = [64, 372]
-    row_bg = [(232, 232, 234, 255), (38, 40, 42, 255)]
-    row_txt = [(40, 40, 44, 255), (216, 216, 220, 255)]
-    row_head = ["true pixel size, light background", "true pixel size, dark background"]
-    zoom_y = 700
-    sheet_h = zoom_y + 300
-
-    sheet = Image.new("RGBA", (SHEET_W, sheet_h), (248, 248, 249, 255))
-    d = ImageDraw.Draw(sheet)
-    d.text(
-        (32, 20),
-        f"PassSumo app icon — concept {concept.upper()} “{CONCEPTS[concept]}”",
-        fill=(24, 24, 28, 255),
-        font=f_title,
+def punch_keyhole(glyph: Image.Image, hole_color: tuple[int, int, int]) -> Image.Image:
+    size = glyph.width
+    draw = ImageDraw.Draw(glyph)
+    cx, cy = size * 0.50, size * 0.575
+    r = size * 0.075
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*hole_color, 255))
+    wedge_top_w = r * 0.9
+    wedge_bottom_w = r * 1.7
+    wedge_top_y = cy + r * 0.35
+    wedge_bottom_y = size * 0.80
+    draw.polygon(
+        [
+            (cx - wedge_top_w, wedge_top_y),
+            (cx + wedge_top_w, wedge_top_y),
+            (cx + wedge_bottom_w, wedge_bottom_y),
+            (cx - wedge_bottom_w, wedge_bottom_y),
+        ],
+        fill=(*hole_color, 255),
     )
-
-    # Hero: the 1024 render, scaled down, on a checkerboard so the transparent
-    # margin around the tile is visible.
-    sheet.alpha_composite(_checker(hero, hero), (32, rows_y[0]))
-    sheet.alpha_composite(renders[1024].resize((hero, hero), Image.LANCZOS), (32, rows_y[0]))
-    d.text((32, rows_y[0] + hero + 6), "1024px (shown at 384)", fill=(60, 60, 64, 255), font=f_label)
-
-    x_right = 32 + hero + 40
-    panel_w = SHEET_W - x_right - 32
-    for row in range(2):
-        panel_h = 276
-        d.rectangle(
-            [x_right, rows_y[row], x_right + panel_w, rows_y[row] + panel_h],
-            fill=row_bg[row],
-        )
-        d.text(
-            (x_right + 12, rows_y[row] + 8), row_head[row], fill=row_txt[row], font=f_head
-        )
-        x = x_right + 16
-        for size in TRUE_SIZES:
-            top = rows_y[row] + 34
-            sheet.alpha_composite(renders[size], (x, top))
-            d.text((x, top + 258), f"{size}px", fill=row_txt[row], font=f_label)
-            x += size + 26
-
-    d.text(
-        (32, zoom_y - 26),
-        "nearest-neighbour zoom — what pixels are actually there at the small sizes",
-        fill=(40, 40, 44, 255),
-        font=f_head,
-    )
-    x = 32
-    for size, factor in ZOOMS:
-        w = size * factor
-        d.rectangle([x, zoom_y, x + w, zoom_y + w], fill=(38, 40, 42, 255))
-        sheet.alpha_composite(renders[size].resize((w, w), Image.NEAREST), (x, zoom_y))
-        d.text((x, zoom_y + w + 6), f"{size}px @{factor}x", fill=(40, 40, 44, 255), font=f_label)
-        x += w + 26
-
-    sheet.convert("RGB").save(out_path)
+    return glyph
 
 
-# --- Entry point -----------------------------------------------------------
+# --- Colour treatments (azure-shaded, the owner-approved candidate) -------------------
+
+
+def diagonal_gradient(size: tuple[int, int], color_a: tuple[int, int, int], color_b: tuple[int, int, int]) -> Image.Image:
+    """A top-left -> bottom-right linear gradient, color_a to color_b, at `size`."""
+    base = 256
+    g = Image.linear_gradient("L")  # 0 (top) -> 255 (bottom), base x base
+    g = g.rotate(-45, resample=Image.BICUBIC, expand=True)
+    gw, gh = g.size
+    left = (gw - base) // 2
+    top = (gh - base) // 2
+    g = g.crop((left, top, left + base, top + base)).resize(size, Image.BICUBIC)
+    img_a = Image.new("RGB", size, color_a)
+    img_b = Image.new("RGB", size, color_b)
+    return Image.composite(img_b, img_a, g)
+
+
+def recolor_flat(alpha: Image.Image, color: tuple[int, int, int]) -> Image.Image:
+    rgba = Image.new("RGBA", alpha.size, (*color, 0))
+    rgba.putalpha(alpha)
+    return rgba
+
+
+def recolor_gradient(alpha: Image.Image, color_a: tuple[int, int, int], color_b: tuple[int, int, int]) -> Image.Image:
+    grad = diagonal_gradient(alpha.size, color_a, color_b).convert("RGBA")
+    grad.putalpha(alpha)
+    return grad
+
+
+def rounded_tile(size: int, fill: Image.Image | tuple[int, int, int]) -> Image.Image:
+    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    mask = Image.new("L", (size, size), 0)
+    mdraw = ImageDraw.Draw(mask)
+    radius = int(round(size * CORNER_RADIUS_RATIO))
+    mdraw.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=255)
+    field = Image.new("RGB", (size, size), fill) if isinstance(fill, tuple) else fill.convert("RGB")
+    tile.paste(field, (0, 0))
+    tile.putalpha(mask)
+    return tile
+
+
+def paste_centered(canvas: Image.Image, glyph: Image.Image, box_size: int, fill_ratio: float) -> None:
+    target = int(round(box_size * fill_ratio))
+    gw, gh = glyph.size
+    scale = target / max(gw, gh)
+    new_size = (max(1, int(round(gw * scale))), max(1, int(round(gh * scale))))
+    resized = glyph.resize(new_size, Image.LANCZOS)
+    ox = (canvas.width - new_size[0]) // 2
+    oy = (canvas.height - new_size[1]) // 2
+    canvas.alpha_composite(resized, (ox, oy))
+
+
+def place_on_canvas(tile: Image.Image, canvas_size: int) -> Image.Image:
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    target = int(round(canvas_size * (TILE / CANVAS)))
+    resized = tile.resize((target, target), Image.LANCZOS)
+    offset = (canvas_size - target) // 2
+    canvas.alpha_composite(resized, (offset, offset))
+    return canvas
+
+
+def render_large_tier(alpha_mark: Image.Image, px: int) -> Image.Image:
+    mark = recolor_gradient(alpha_mark, AZURE, ACCENT_400)
+    tile_field = diagonal_gradient((px, px), ACCENT_800, ACCENT_900)
+    tile = rounded_tile(px, tile_field)
+    paste_centered(tile, mark, px, fill_ratio=0.70)
+    return place_on_canvas(tile, px)
+
+
+def render_small_tier(px: int) -> Image.Image:
+    tile = rounded_tile(px, ACCENT_900)
+    glyph = draw_padlock_glyph(px, AZURE)
+    if px > KEYHOLE_LEGIBLE_ABOVE_PX:
+        glyph = punch_keyhole(glyph, ACCENT_900)
+    tile.alpha_composite(glyph, (0, 0))
+    return place_on_canvas(tile, px)
+
+
+def render(alpha_mark: Image.Image, px: int) -> Image.Image:
+    if px >= LARGE_TIER_PX:
+        return render_large_tier(alpha_mark, px)
+    return render_small_tier(px)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("--concept", choices=sorted(CONCEPTS), default="c1")
-    parser.add_argument("--out", type=Path, default=None, help="AppIcon.appiconset directory")
-    parser.add_argument("--preview", type=Path, default=None, help="contact-sheet PNG")
-    parser.add_argument("--hero", type=Path, default=None, help="full-resolution 1024 PNG")
-    parser.add_argument(
-        "--skip-appicon", action="store_true", help="render previews only, write no asset catalog"
-    )
-    args = parser.parse_args()
+    im = Image.open(SOURCE)
+    bg, mark = sample_source_colors(im)
+    print(f"sampled source colors: background={bg} mark={mark}")
+    alpha_mark = crop_to_content(extract_mark_alpha(im, bg, mark))
+    print(f"extracted mark silhouette, cropped bbox size={alpha_mark.size}")
 
-    concept = args.concept
-    out_dir = args.out or DEFAULT_OUT
-    preview = args.preview or LOGO_DIR / f"appicon-{concept}-preview.png"
-    hero = args.hero or LOGO_DIR / f"appicon-{concept}-1024.png"
-
-    masters = {tier: render_master(concept, tier) for tier in ("full", "simplified", "minimal")}
-    print(f"concept {concept} ({CONCEPTS[concept]}): rendered {len(masters)} master tiles")
-
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    contents = {"images": [], "info": {"author": "xcode", "version": 1}}
     renders: dict[int, Image.Image] = {}
-    for px in sorted({p * s for p, s, _ in ICON_SPECS} | {1024}):
-        renders[px] = render_size(masters, px)
 
-    if not args.skip_appicon:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        contents: dict = {"images": [], "info": {"author": "xcode", "version": 1}}
-        for point_size, scale, filename in ICON_SPECS:
-            renders[point_size * scale].save(out_dir / filename)
-            contents["images"].append(
-                {
-                    "idiom": "mac",
-                    "scale": f"{scale}x",
-                    "size": f"{point_size}x{point_size}",
-                    "filename": filename,
-                }
+    for point_size, scale, filename in ICON_SPECS:
+        px = point_size * scale
+        if px not in renders:
+            renders[px] = render(alpha_mark, px)
+            tier = "large (full mark)" if px >= LARGE_TIER_PX else (
+                "small (padlock, keyhole)" if px > KEYHOLE_LEGIBLE_ABOVE_PX else "small (padlock, no keyhole)"
             )
-        (out_dir / "Contents.json").write_text(json.dumps(contents, indent=2) + "\n")
-        print(f"wrote {len(ICON_SPECS)} PNGs + Contents.json to {out_dir}")
+            print(f"rendered {px}px -- {tier}")
+        renders[px].save(OUT_DIR / filename)
+        contents["images"].append(
+            {"idiom": "mac", "scale": f"{scale}x", "size": f"{point_size}x{point_size}", "filename": filename}
+        )
 
-    renders[1024].save(hero)
-    build_contact_sheet(concept, renders, preview)
-    print(f"wrote {hero}\nwrote {preview}")
-    print("tiers: " + ", ".join(f"{px}={tier_for(px)}" for px in sorted(renders)))
+    (OUT_DIR / "Contents.json").write_text(json.dumps(contents, indent=2) + "\n")
+    print(f"wrote {len(ICON_SPECS)} PNGs + Contents.json to {OUT_DIR}")
+
+    hero = render_large_tier(alpha_mark, CANVAS)
+    hero.save(HERO_1024)
+    print(f"wrote hero render to {HERO_1024}")
+
+    build_preview(renders, hero, PREVIEW)
+    print(f"wrote preview contact sheet to {PREVIEW}")
+
+
+def zoomed(img: Image.Image, display_size: int) -> Image.Image:
+    return img.resize((display_size, display_size), Image.NEAREST)
+
+
+def checkerboard(size: int, step: int = 8) -> Image.Image:
+    board = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(board)
+    for cy in range(0, size, step):
+        for cx in range(0, size, step):
+            if (cx // step + cy // step) % 2 == 0:
+                draw.rectangle([cx, cy, cx + step, cy + step], fill=(210, 210, 210, 255))
+    return board
+
+
+def build_preview(renders: dict[int, Image.Image], hero: Image.Image, out_path: Path) -> None:
+    """Two rows: true pixel size (on a checkerboard, so fidelity is honest), and a
+    nearest-neighbour zoom of the small sizes so the actual pixels can be judged without
+    a viewer's own smoothing making a bad render look plausible."""
+    sizes = [1024] + sorted(s for s in renders if s != 1024)
+    display = 200
+    pad = 20
+    label_h = 20
+    cols = len(sizes)
+    sheet_w = pad + cols * (display + pad)
+    sheet_h = pad * 3 + (display + label_h) * 2
+
+    sheet = Image.new("RGBA", (sheet_w, sheet_h), (235, 235, 235, 255))
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 13)
+    except OSError:
+        font = ImageFont.load_default()
+
+    all_renders = dict(renders)
+    all_renders[1024] = hero
+
+    for i, size in enumerate(sizes):
+        x = pad + i * (display + pad)
+        img = all_renders[size]
+
+        y0 = pad
+        native = img.resize((display, display), Image.LANCZOS) if img.width != display else img
+        checker = checkerboard(display)
+        checker.alpha_composite(native, (0, 0))
+        sheet.alpha_composite(checker, (x, y0))
+        draw.text((x, y0 + display + 2), f"{size}px true size", fill=(40, 40, 40, 255), font=font)
+
+        y1 = pad * 2 + display + label_h
+        z = zoomed(img, display)
+        checker2 = checkerboard(display)
+        checker2.alpha_composite(z, (0, 0))
+        sheet.alpha_composite(checker2, (x, y1))
+        draw.text((x, y1 + display + 2), f"{size}px nearest-neighbour zoom", fill=(40, 40, 40, 255), font=font)
+
+    sheet.convert("RGB").save(out_path)
 
 
 if __name__ == "__main__":
