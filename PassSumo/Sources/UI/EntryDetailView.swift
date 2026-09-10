@@ -306,6 +306,12 @@ struct EntryDetailView: View {
             // dots-plus-an-eye and plain text. The flag is the file's own marking (or the user's
             // choice in the edit sheet) carried through `VaultFieldValue` — this view does not
             // guess which fields are secrets, and must not start.
+            //
+            // Copy is on EVERY row, secret or not, and concealing a field without it would have
+            // inverted the rule concealment exists to serve (`design/ux-rules.md`): copy up front
+            // is what keeps the normal path from ever putting plaintext on screen, so a concealed
+            // row whose only affordance is the eye forces exactly the disclosure the dots prevent.
+            // A plain custom field gets one too — Username is not a secret and has always had it.
             ForEach(entry.customFields.keys.sorted(), id: \.self) { key in
                 let field = entry.customFields[key] ?? .plain("")
                 FieldRow(
@@ -313,6 +319,8 @@ struct EntryDetailView: View {
                     value: field.value,
                     isMonospaced: true,
                     isRevealed: field.isProtected ? revealBinding(forCustomField: key) : nil,
+                    onCopy: { clipboard.copy(field.value) },
+                    copyIdentifier: "detail.copyCustomField.\(key)",
                     revealIdentifier: "detail.revealCustomField.\(key)"
                 )
             }
