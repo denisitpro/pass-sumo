@@ -50,6 +50,10 @@ struct UnlockView: View {
     /// for why a checkbox rather than a post-unlock modal, and why it is not offered on every unlock.
     @State private var rememberWithTouchID = false
 
+    /// Read once per screen, the same way `SettingsView` reads it (issue #51's `AppVersionInfo` is
+    /// the one accessor onto `Bundle.main`'s git-stamped keys) — never a second, hardcoded literal.
+    private let versionInfo = AppVersionInfo.current()
+
     private var isUnlocking: Bool {
         if case .unlocking = environment.store.state { return true }
         return false
@@ -128,6 +132,14 @@ struct UnlockView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityIdentifier("unlock.path")
+
+            // The one-line instruction Strongbox stacks between the database identity and the
+            // field (issue #107) — this screen otherwise jumps straight from "which file" to "type
+            // here" with nothing saying what the field is for.
+            Text("Enter password to unlock.")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .accessibilityIdentifier("unlock.instruction")
 
             // The field sits next to the button that submits it (issue #32: the old `Spacer()`
             // pinned "Unlock" to the far right edge of a wide window, metres from the field).
@@ -208,6 +220,15 @@ struct UnlockView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("unlock.biometricUnavailable")
             }
+
+            // The version the owner asked for first (issue #107): "which build am I running,"
+            // visible on the screen he actually looks at before unlocking, not buried a click away
+            // in Settings. Read straight through `AppVersionInfo`, never a literal — see the doc
+            // comment on `versionInfo` above.
+            Text("PassSumo \(versionInfo.shortVersion) (\(versionInfo.build))")
+                .font(Typography.caption2)
+                .foregroundStyle(Palette.textTertiary)
+                .accessibilityIdentifier("unlock.version")
         }
         .padding(Spacing.s9)
         // The content column's width breathes with the window (issue #102) — the same treatment as
@@ -345,5 +366,7 @@ struct UnlockView: View {
 }
 
 #Preview("Empty") {
-    UnlockView(environment: .uiTesting(), url: URL(fileURLWithPath: "/Users/den/Documents/Personal.kdbx"))
+    // A synthetic path — never one of the owner's real databases (repo CLAUDE.md's hard rule on
+    // sample data) — chosen to also exercise the middle-truncating path label.
+    UnlockView(environment: .uiTesting(), url: URL(fileURLWithPath: "/Users/demo/Documents/Family Passwords.kdbx"))
 }
