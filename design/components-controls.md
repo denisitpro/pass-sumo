@@ -22,7 +22,7 @@ button *does*, never by where it sits.
 | hover | role's hover fill / border / label |
 | pressed | **the same as hover** — deliberate: the mockup defines a hover treatment and no pressed one, and reusing hover avoids inventing a third appearance |
 | disabled | the whole surface at `control-disabled-opacity`, hover suppressed |
-| focus | **nothing is drawn** — the mockup's `.btn:focus-visible` glow is not implemented (issue #64) |
+| focus | the same `accent-200` ring at `focus-glow-width` the text field draws on focus, via the shared `focusRing` modifier; orthogonal to hover/pressed, so a focused-and-hovered control shows both |
 
 `loading`, `selected`, `error` and `empty` do not apply: no button in the app carries a spinner (a
 `ProgressView` is placed beside it instead — see `design/screens.md`), and none is a toggle.

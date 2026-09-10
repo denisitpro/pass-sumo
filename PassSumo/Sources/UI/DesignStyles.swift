@@ -11,6 +11,55 @@ import SwiftUI
 // change a one-file edit.
 // ============================================================================
 
+// MARK: - Focus
+
+/// The focus glow shared by every focusable control on the canvas — a field, a bordered button, or
+/// a glyph button. The mockup draws it as the same box-shadow spread (`0 0 0 3px var(--accent-200)`)
+/// on `.pw-field.is-focused`, `.btn:focus-visible` and `.icon-btn:focus-visible`; this is one
+/// `ViewModifier` for that ring's geometry so a future focusable role inherits it rather than
+/// re-declaring the inset/stroke arithmetic a third time (issue #64).
+private struct FocusRing: ViewModifier {
+    let isFocused: Bool
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return content.overlay(
+            shape
+                .inset(by: -Metrics.focusGlowWidth / 2)
+                .strokeBorder(isFocused ? Palette.accent200 : .clear, lineWidth: Metrics.focusGlowWidth)
+        )
+    }
+}
+
+private extension View {
+    /// The `accent-200` ring at `focus-glow-width`, drawn outside `cornerRadius`'s edge while
+    /// `isFocused`, and invisible otherwise.
+    func focusRing(isFocused: Bool, cornerRadius: CGFloat) -> some View {
+        modifier(FocusRing(isFocused: isFocused, cornerRadius: cornerRadius))
+    }
+}
+
+/// The four independent facts `TokenButtonSurface` and `GlyphButtonSurface` render from, pulled out
+/// as a pure value so their combination is unit-testable without driving SwiftUI's real hover or
+/// focus system. Not `private`, unlike its two callers, precisely so a test target can construct one
+/// directly.
+struct ButtonSurfaceState {
+    var isEnabled: Bool
+    var isHovered: Bool
+    var isPressed: Bool
+    var isFocused: Bool
+
+    /// Hover and press share one appearance — the mockup defines a hover treatment and no pressed
+    /// one — and a disabled control shows neither, regardless of the pointer.
+    var isHighlighted: Bool { isEnabled && (isHovered || isPressed) }
+
+    /// Whether the focus ring is drawn. Orthogonal to `isHighlighted` on purpose: the mockup's
+    /// `:focus-visible` is a separate pseudo-class from `:hover`, so a control can be focused and
+    /// hovered at once and show both treatments together.
+    var showsFocusRing: Bool { isFocused }
+}
+
 // MARK: - Buttons
 
 /// Everything that distinguishes one button kind from another, as data.
@@ -38,16 +87,25 @@ private struct TokenButtonSurface: View {
     let appearance: ButtonAppearance
 
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
     @State private var isHovered = false
 
-    private var isHighlighted: Bool { isEnabled && (isHovered || configuration.isPressed) }
+    private var state: ButtonSurfaceState {
+        ButtonSurfaceState(
+            isEnabled: isEnabled,
+            isHovered: isHovered,
+            isPressed: configuration.isPressed,
+            isFocused: isFocused
+        )
+    }
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: appearance.cornerRadius, style: .continuous)
     }
 
     var body: some View {
-        configuration.label
+        let isHighlighted = state.isHighlighted
+        return configuration.label
             .font(appearance.font)
             .foregroundStyle(isHighlighted ? appearance.hoverLabel : appearance.label)
             .padding(.horizontal, appearance.horizontalPadding)
@@ -62,6 +120,10 @@ private struct TokenButtonSurface: View {
             .contentShape(shape)
             .opacity(isEnabled ? 1 : Metrics.disabledOpacity)
             .onHover { isHovered = $0 }
+            // `.focusable()` puts the button in SwiftUI's own focus/tab order explicitly, rather
+            // than leaving it to whatever macOS decides on its own — see issue #64.
+            .focusable()
+            .focusRing(isFocused: state.showsFocusRing, cornerRadius: appearance.cornerRadius)
     }
 }
 
@@ -153,9 +215,19 @@ private struct GlyphButtonSurface: View {
     let isDestructive: Bool
 
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
     @State private var isHovered = false
 
-    private var isHighlighted: Bool { isEnabled && (isHovered || configuration.isPressed) }
+    private var state: ButtonSurfaceState {
+        ButtonSurfaceState(
+            isEnabled: isEnabled,
+            isHovered: isHovered,
+            isPressed: configuration.isPressed,
+            isFocused: isFocused
+        )
+    }
+
+    private var isHighlighted: Bool { state.isHighlighted }
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Radius.xs, style: .continuous)
@@ -170,6 +242,9 @@ private struct GlyphButtonSurface: View {
             .contentShape(shape)
             .opacity(isEnabled ? 1 : Metrics.disabledOpacity)
             .onHover { isHovered = $0 }
+            // Same reasoning as `TokenButtonSurface` above — see issue #64.
+            .focusable()
+            .focusRing(isFocused: state.showsFocusRing, cornerRadius: Radius.xs)
     }
 
     private var highlightForeground: Color {
@@ -280,16 +355,7 @@ private struct FieldChrome: ViewModifier {
                     lineWidth: isFocused ? Metrics.focusRingWidth : Metrics.fieldBorderWidth
                 )
             )
-            // The soft outer glow, drawn only on focus — `0 0 0 3px var(--accent-200)` in the
-            // mockup, which is a spread with no blur, i.e. a ring rather than a shadow.
-            .overlay(
-                shape
-                    .inset(by: -Metrics.focusGlowWidth / 2)
-                    .strokeBorder(
-                        isFocused ? Palette.accent200 : .clear,
-                        lineWidth: Metrics.focusGlowWidth
-                    )
-            )
+            .focusRing(isFocused: isFocused, cornerRadius: Radius.md)
     }
 }
 

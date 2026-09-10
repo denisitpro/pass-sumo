@@ -86,9 +86,6 @@ Full map in `design/keyboard-map.md`. What matters here:
 
 Stated plainly rather than left to be discovered:
 
-- **No focus indicator on any custom button.** The mockup defines a focus ring for `.btn` and
-  `.icon-btn`; only the text field implements one. A keyboard user cannot see where focus is
-  (issue #64).
 - **No focus movement between panes.** Nothing takes focus from the sidebar to the list to the
   inspector.
 - **Text does not scale.** The whole type scale is `.system(size:)`, so it ignores the system text

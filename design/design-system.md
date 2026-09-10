@@ -70,6 +70,5 @@ the contracts describe it, they do not replace it.
 | The password-strength meter: the mockup's segmented bar vs the shipped `ProgressView`, and two different threshold sets | #61 |
 | The unlock screen never says why the vault locked, though the reason is recorded | #62 |
 | No approved mockup for Welcome, the entry-edit sheet, or Settings | #63 |
-| Keyboard focus is invisible on every custom button style | #64 |
 | Custom fields have no protected flag, so a secret custom field renders in plaintext | #65 |
 | The running app's own pixels (row rhythm, the inset hairline, the unlock card, the generator sheet, Settings) are still unverified against the mockup | #66 |
