@@ -493,6 +493,35 @@ final class BrowserLogicTests: XCTestCase {
         ))
     }
 
+    /// The set-valued form used for protected custom fields (issue #65). It must obey the same
+    /// rule the single `Bool` does, which is why it delegates — a revealed recovery code is no
+    /// less a revealed secret than a revealed password.
+    func testRevealPolicyKeepsCustomFieldRevealsForTheSameEntryWhileUnlocked() {
+        let id = UUID()
+        XCTAssertEqual(
+            RevealPolicy.revealsAfterSelectionChange(
+                ["Security Answer"], previousEntryID: id, currentEntryID: id, isLocked: false
+            ),
+            ["Security Answer"]
+        )
+    }
+
+    func testRevealPolicyClearsCustomFieldRevealsOnSelectionChangeAndOnLock() {
+        let id = UUID()
+        XCTAssertEqual(
+            RevealPolicy.revealsAfterSelectionChange(
+                ["Security Answer"], previousEntryID: UUID(), currentEntryID: UUID(), isLocked: false
+            ),
+            []
+        )
+        XCTAssertEqual(
+            RevealPolicy.revealsAfterSelectionChange(
+                ["Security Answer"], previousEntryID: id, currentEntryID: id, isLocked: true
+            ),
+            []
+        )
+    }
+
     // MARK: - GeneratorSheet's optional "Use" (issue #45)
 
     /// `VaultBrowserView`'s toolbar presentation has no field to fill, so it passes no `onUse` at

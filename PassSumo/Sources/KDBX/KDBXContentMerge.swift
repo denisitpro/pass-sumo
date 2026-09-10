@@ -311,10 +311,14 @@ enum KDBXEntryStrings {
             // with either, but adding five empty elements to an entry that had two is gratuitous
             // churn in someone else's file.
             if result.contains(where: { $0.key == field.rawValue }) || !value.isEmpty {
+                // `.fromFile`, never `.chosen`: `VaultEntry` carries no per-field protection
+                // flag for the five standard fields, so there is no user intent here to honour —
+                // an existing field keeps the exact class the file gave it, and a newly added one
+                // follows the database's own `MemoryProtection` preference.
                 result.setValue(
                     value,
                     forKey: field.rawValue,
-                    defaultProtected: memoryProtection.protects(field)
+                    protection: .fromFile(whenNew: memoryProtection.protects(field))
                 )
             }
         }
@@ -328,13 +332,16 @@ enum KDBXEntryStrings {
             result = KDBXTOTPConvention.write(entry.otpAuthURL, into: result)
         }
 
-        // Custom fields. New ones default to protected-on-disk: a password manager's custom
-        // attributes hold recovery codes and security answers far more often than they hold trivia,
-        // and both KeePass and KeePassXC read a protected attribute transparently, so there is no
-        // interop cost to erring this way. Existing fields keep whatever class the file gave them.
+        // Custom fields carry their own protection flag, so this is the one place that passes
+        // `.chosen`: the user can mark a field secret or unmark it in the edit sheet, and either
+        // has to reach the file. A field whose flag still agrees with what the file said keeps its
+        // exact original class — that is what stops a `ProtectInMemory` attribute another client
+        // wrote from being rewritten as something else just because the value was edited. New
+        // fields still default to protected, but now in the edit sheet's draft rather than here,
+        // so the default is overridable instead of forced.
         let reserved = KDBXStandardField.allKeys.union(KDBXTOTPConvention.reservedKeys)
-        for (key, value) in entry.customFields where !reserved.contains(key) {
-            result.setValue(value, forKey: key, defaultProtected: true)
+        for (key, field) in entry.customFields where !reserved.contains(key) {
+            result.setValue(field.value, forKey: key, protection: .chosen(field.isProtected))
         }
         // A custom field the user removed has to actually go. Scoped to non-reserved keys so this
         // can never delete a standard field or a TOTP field the model does not carry.

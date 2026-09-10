@@ -19,6 +19,24 @@ enum RevealPolicy {
         if isLocked { return false }
         return previousEntryID == currentEntryID
     }
+
+    /// The same rule for the per-field reveals of an entry's protected custom fields, which are
+    /// tracked as a set of field names rather than one `Bool`. It delegates rather than restating
+    /// the rule: a revealed custom field is a revealed secret, and there is no reason for it to
+    /// outlive a lock or a selection change when a revealed password does not.
+    static func revealsAfterSelectionChange(
+        _ revealed: Set<String>,
+        previousEntryID: UUID?,
+        currentEntryID: UUID?,
+        isLocked: Bool
+    ) -> Set<String> {
+        revealAfterSelectionChange(
+            wasRevealed: !revealed.isEmpty,
+            previousEntryID: previousEntryID,
+            currentEntryID: currentEntryID,
+            isLocked: isLocked
+        ) ? revealed : []
+    }
 }
 
 /// Decides whether an attachment's bytes may be handed to an image decoder for an inline preview.
@@ -137,6 +155,10 @@ struct EntryDetailView: View {
     var onEdit: () -> Void
 
     @State private var isPasswordRevealed = false
+    /// Names of the protected custom fields currently revealed. A set of names rather than one
+    /// flag per row so revealing one secret does not reveal the rest, and so the reveal state
+    /// clears wholesale on a lock or a selection change (see `RevealPolicy`).
+    @State private var revealedCustomFields: Set<String> = []
     @State private var lastSeenEntryID: UUID?
     /// Payload-derived row state, keyed by `VaultAttachment.id`. Rebuilt only when the attachment
     /// list itself changes — never inside `body`; see `rebuildAttachmentRows()`.
@@ -199,11 +221,23 @@ struct EntryDetailView: View {
                 currentEntryID: newValue,
                 isLocked: isLocked
             )
+            revealedCustomFields = RevealPolicy.revealsAfterSelectionChange(
+                revealedCustomFields,
+                previousEntryID: oldValue,
+                currentEntryID: newValue,
+                isLocked: isLocked
+            )
             lastSeenEntryID = newValue
         }
         .onChange(of: isLocked) { _, locked in
             isPasswordRevealed = RevealPolicy.revealAfterSelectionChange(
                 wasRevealed: isPasswordRevealed,
+                previousEntryID: lastSeenEntryID,
+                currentEntryID: entry.id,
+                isLocked: locked
+            )
+            revealedCustomFields = RevealPolicy.revealsAfterSelectionChange(
+                revealedCustomFields,
                 previousEntryID: lastSeenEntryID,
                 currentEntryID: entry.id,
                 isLocked: locked
@@ -267,15 +301,38 @@ struct EntryDetailView: View {
     private var customFieldsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.s3) {
             sectionHeading("Custom Fields")
-            // No per-field "protected" flag survives into `VaultEntry.customFields` — it's a flat
-            // `[String: String]` (see `Domain.swift`) — so unlike Password above there is no
-            // signal here to conceal any of these by default; every custom field renders plainly.
-            // Concealing protected custom fields too needs that flag carried into the domain model
-            // first, which is a KDBX-layer change, not something this view can invent on its own.
+            // A protected custom field is concealed exactly like Password above: `isRevealed` is
+            // non-nil only for those, which is the single signal `FieldRow` uses to decide between
+            // dots-plus-an-eye and plain text. The flag is the file's own marking (or the user's
+            // choice in the edit sheet) carried through `VaultFieldValue` — this view does not
+            // guess which fields are secrets, and must not start.
             ForEach(entry.customFields.keys.sorted(), id: \.self) { key in
-                FieldRow(label: key, value: entry.customFields[key] ?? "", isMonospaced: true)
+                let field = entry.customFields[key] ?? .plain("")
+                FieldRow(
+                    label: key,
+                    value: field.value,
+                    isMonospaced: true,
+                    isRevealed: field.isProtected ? revealBinding(forCustomField: key) : nil,
+                    revealIdentifier: "detail.revealCustomField.\(key)"
+                )
             }
         }
+    }
+
+    /// Reveal state for one custom field, projected out of `revealedCustomFields`. A computed
+    /// `Binding` rather than a `@State` per row because the rows are a `ForEach` over a dictionary
+    /// whose keys change as the user edits the entry.
+    private func revealBinding(forCustomField key: String) -> Binding<Bool> {
+        Binding(
+            get: { revealedCustomFields.contains(key) },
+            set: { isRevealed in
+                if isRevealed {
+                    revealedCustomFields.insert(key)
+                } else {
+                    revealedCustomFields.remove(key)
+                }
+            }
+        )
     }
 
     /// The entry's attachments: name, size, an inline preview for a payload that is allowed one,
