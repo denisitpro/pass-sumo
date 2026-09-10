@@ -41,6 +41,7 @@ final class EntryEditSaveTests: XCTestCase {
             // to touch the developer's actual clipboard by accident.
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
+            generatorRecipe: PasswordGenerator.Recipe(),
             onSave: onSave,
             onDismiss: {}
         )

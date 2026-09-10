@@ -50,6 +50,14 @@ struct EntryEditView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
+    /// The user's saved generator default (`AppSettings.generatorRecipe`), read by the caller and
+    /// handed in here rather than fetched from `UserDefaults` in this file (issue #106: this used
+    /// to be silently absent, so "Generate…" always produced a password from
+    /// `PasswordGenerator.Recipe()`'s hardcoded default regardless of what Settings said). A plain
+    /// value, not a live reference, because this view is short-lived — opened and torn down for a
+    /// single edit — so a snapshot taken when the sheet opens is not at risk of the staleness a
+    /// long-lived view (`VaultBrowserView`) would have to guard against.
+    let generatorRecipe: PasswordGenerator.Recipe
     var onSave: (VaultEntry) -> Void
     var onDismiss: () -> Void
 
@@ -92,6 +100,7 @@ struct EntryEditView: View {
         store: VaultStore,
         clipboard: ClipboardService,
         generator: PasswordGenerator,
+        generatorRecipe: PasswordGenerator.Recipe,
         onSave: @escaping (VaultEntry) -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -100,6 +109,7 @@ struct EntryEditView: View {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
+        self.generatorRecipe = generatorRecipe
         self.onSave = onSave
         self.onDismiss = onDismiss
         _title = State(initialValue: entry.title)
@@ -239,7 +249,7 @@ struct EntryEditView: View {
             }
         }
         .sheet(isPresented: $showingGenerator) {
-            GeneratorSheet(generator: generator, clipboard: clipboard, onUse: { password = $0 })
+            makeGeneratorSheet()
         }
         .sheet(isPresented: $showingIconPicker) {
             // Writes into this form's draft, not into the store: an icon picked here is undone by
@@ -566,6 +576,15 @@ struct EntryEditView: View {
         onSave(entry)
         onDismiss()
     }
+
+    /// Factored out of `body`'s `.sheet(isPresented: $showingGenerator)` closure purely so the
+    /// wiring is assertable without rendering (issue #106) — a test constructs an `EntryEditView`
+    /// with a known `generatorRecipe`, calls this directly, and checks the result's
+    /// `openingRecipe`. If this ever goes back to hardcoding `GeneratorSheet(generator:, clipboard:)`
+    /// with no `recipe:`, that assertion fails instead of the bug shipping invisibly again.
+    func makeGeneratorSheet() -> GeneratorSheet {
+        GeneratorSheet(generator: generator, recipe: generatorRecipe, clipboard: clipboard, onUse: { password = $0 })
+    }
 }
 
 #Preview {
@@ -575,6 +594,7 @@ struct EntryEditView: View {
         store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
+        generatorRecipe: PasswordGenerator.Recipe(),
         onSave: { _ in },
         onDismiss: {}
     )

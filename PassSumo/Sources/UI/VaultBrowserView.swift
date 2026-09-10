@@ -27,6 +27,15 @@ struct VaultBrowserView: View {
     /// than an environment read for the same reason as before — an environment lookup that silently
     /// resolves to nothing would let the activity-reporting and the Lock button go quietly inert.
     let autoLock: AutoLockController
+    /// Read for the generator's saved recipe (`settings.generatorRecipe`, issue #106) — a
+    /// constructor parameter for the same reason as `autoLock` above rather than fished out of
+    /// `appEnvironment`, so a missing/misconfigured environment can't silently fall the generator
+    /// back to `PasswordGenerator.Recipe()`'s hardcoded default the way it already did once. A
+    /// reference to `AppSettings` itself, not a `Recipe` snapshot: this view is long-lived for the
+    /// whole unlocked session, and the generator sheet is opened fresh from a `.sheet` closure that
+    /// reads `settings.generatorRecipe` at presentation time, so a change made in Settings while the
+    /// vault stays open is picked up on the next open without this view ever needing to re-render.
+    let settings: AppSettings
 
     /// Optional on purpose: `RootView` always injects it, but the `#Preview` below (and any future
     /// one) constructs this view standalone, and a non-optional `@Environment(AppEnvironment.self)`
@@ -93,12 +102,24 @@ struct VaultBrowserView: View {
         store: VaultStore,
         clipboard: ClipboardService,
         generator: PasswordGenerator,
-        autoLock: AutoLockController
+        autoLock: AutoLockController,
+        settings: AppSettings
     ) {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
         self.autoLock = autoLock
+        self.settings = settings
+    }
+
+    /// Factored out of `body`'s `.sheet(isPresented: $showingGenerator)` closure purely so the
+    /// wiring is assertable without rendering (issue #106) — a test constructs a `VaultBrowserView`
+    /// with a `settings` whose `generatorRecipe` is known, calls this directly, and checks the
+    /// result's `openingRecipe`. If this ever goes back to hardcoding
+    /// `GeneratorSheet(generator:, clipboard:)` with no `recipe:`, that assertion fails instead of
+    /// the bug shipping invisibly again.
+    func makeGeneratorSheet() -> GeneratorSheet {
+        GeneratorSheet(generator: generator, recipe: settings.generatorRecipe, clipboard: clipboard)
     }
 
     /// What `EntryEditView` is editing right now: a brand-new entry, or an existing one opened for
@@ -438,6 +459,11 @@ struct VaultBrowserView: View {
                     store: store,
                     clipboard: clipboard,
                     generator: generator,
+                    // Read here, inside the sheet's own content closure — which SwiftUI re-invokes
+                    // fresh every time `editingEntry` becomes non-nil — so this always reflects
+                    // whatever was most recently saved in Settings, not a value snapshotted once
+                    // when `VaultBrowserView` itself was constructed (issue #106).
+                    generatorRecipe: settings.generatorRecipe,
                     onSave: { saved in selectedEntryID = saved.id },
                     onDismiss: { editingEntry = nil }
                 )
@@ -524,7 +550,7 @@ struct VaultBrowserView: View {
                 // `GeneratorSheet` hides "Use" entirely rather than offering a button that just
                 // duplicates "Copy" with no explanation (issue #45). The field-filling meaning of
                 // "Use" only exists at `EntryEditView`'s own "Generate…" call site.
-                GeneratorSheet(generator: generator, clipboard: clipboard)
+                makeGeneratorSheet()
             }
             // The clipboard countdown is a live value, not a placeholder: `ClipboardService` is
             // `@Observable` and ticks its own published second counter, so reading it straight out of
@@ -814,6 +840,7 @@ struct VaultBrowserView: View {
         store: store,
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
-        autoLock: AutoLockController(onLock: { [weak store] in store?.lock() })
+        autoLock: AutoLockController(onLock: { [weak store] in store?.lock() }),
+        settings: AppSettings()
     )
 }
