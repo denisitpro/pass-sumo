@@ -254,7 +254,11 @@ final class VaultStoreTests: XCTestCase {
         store.upsert(makeEntry(title: "Secret"))
         XCTAssertTrue(store.isDirty)
 
-        store.select(url: tempDirectory.appendingPathComponent("elsewhere.kdbx"))
+        // `discardingUnsavedChanges: true` because the vault is dirty and `select` now refuses that
+        // outright (issue #84) — this test is about what a *permitted* select drops, so it takes
+        // the answer the user would have given. `testSelectRefusesToDiscardUnsavedChanges` below
+        // covers the refusal itself.
+        store.select(url: tempDirectory.appendingPathComponent("elsewhere.kdbx"), discardingUnsavedChanges: true)
 
         XCTAssertFalse(store.isDirty)
         XCTAssertNil(store.currentDatabaseID, "select must drop the decoded origin, not keep it")
@@ -262,6 +266,27 @@ final class VaultStoreTests: XCTestCase {
         // still held them would have nothing else stopping it.
         await store.save()
         XCTAssertNil(store.lastError)
+    }
+
+    func testSelectRefusesToDiscardUnsavedChanges() async {
+        // The guard is in the store, not only in the UI that prompts (issue #84): `select` drops
+        // `decodedOrigin`, which for a dirty vault means destroying edits the user never agreed to
+        // lose. Before this, a Finder open request routed straight through here would have done
+        // exactly that, silently.
+        let vaultURL = tempDirectory.appendingPathComponent("dirty.kdbx")
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: makeFileAccess())
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        store.upsert(makeEntry(title: "Unsaved"))
+        XCTAssertTrue(store.isDirty)
+
+        let selected = store.select(url: tempDirectory.appendingPathComponent("other.kdbx"))
+
+        XCTAssertFalse(selected, "select must report the refusal, not pretend it happened")
+        XCTAssertEqual(store.currentURL, vaultURL, "the refused select must leave the store untouched")
+        XCTAssertTrue(store.isDirty)
+        guard case .unlocked = store.state else {
+            return XCTFail("a refused select must leave the vault unlocked")
+        }
     }
 
     func testCurrentDatabaseIDIsNilForACodecThatHasNoNotionOfOne() async {

@@ -50,7 +50,7 @@ struct WelcomeView: View {
                         .foregroundStyle(Palette.textSecondary)
                     ForEach(recents) { recent in
                         Button {
-                            environment.store.select(url: recent.url)
+                            environment.openRouter.requestOpen(recent.url)
                         } label: {
                             Label(recent.url.lastPathComponent, systemImage: "clock")
                                 .lineLimit(1)
@@ -70,15 +70,15 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.canvas)
         .task { loadRecents() }
+        // `.openDatabase` is deliberately absent: since issue #84 that menu item is enabled while a
+        // vault is open, i.e. while this view is unmounted, so `RootView` owns it for every state
+        // — including this one. Handling it here as well would run two open panels for one ⌘O.
         .onChange(of: environment.menuRequest) { _, request in
             switch request {
-            case .openDatabase:
-                openExistingDatabase()
-                environment.menuRequest = nil
             case .newDatabase:
                 isPresentingCreateSheet = true
                 environment.menuRequest = nil
-            case .newEntry, .editEntry, .deleteEntry, .emptyRecycleBin, .focusSearch, nil:
+            case .openDatabase, .newEntry, .editEntry, .deleteEntry, .emptyRecycleBin, .focusSearch, nil:
                 break
             }
         }
@@ -87,27 +87,16 @@ struct WelcomeView: View {
         }
     }
 
-    /// Real `NSOpenPanel`, never a pre-set default path.
-    ///
-    /// A sibling app by the same developer was rejected under App Review Guideline 2.4.5(i) for
-    /// shipping a file-access entitlement backed only by a remembered default path, with no picker
-    /// anywhere in the flow. A user-driven `NSOpenPanel` invocation is what justifies pass-sumo's
-    /// read/write file entitlement to a reviewer, so `panel.directoryURL` is deliberately never set
-    /// here — the panel must always ask, never assume.
+    /// The panel itself, including the "never a pre-set default path" rule App Review cares about,
+    /// lives in `DatabaseFilePicker` — this view and `RootView` both need it (see that type).
     private func openExistingDatabase() {
         pickerError = nil
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        if let kdbxType = UTType(filenameExtension: "kdbx") {
-            panel.allowedContentTypes = [kdbxType]
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        // `select`, not `open`: no password has been typed yet, so there is nothing to decode with.
-        // This moves the store to `.locked(url)`, which is what puts `UnlockView` on screen (see
-        // `VaultStore.select(url:)` and `RootView`).
-        environment.store.select(url: url)
+        guard let url = DatabaseFilePicker.chooseExistingDatabase() else { return }
+        // Through the router, not `store.select` directly, so this button obeys the same rule as a
+        // Finder double-click and a ⌘O — one implementation, three entry points (issue #84). From
+        // this screen the store is `.empty`, so the decision is always `.open`; routing anyway is
+        // what keeps that true by construction rather than by the caller remembering it.
+        environment.openRouter.requestOpen(url)
     }
 
     private func loadRecents() {
