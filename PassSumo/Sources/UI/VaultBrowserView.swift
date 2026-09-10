@@ -34,6 +34,16 @@ struct VaultBrowserView: View {
 
     @State private var selectedGroupID: UUID?
     @State private var selectedEntryID: UUID?
+    /// **Issue #34: nothing in this file may clear this as a side effect of opening an entry.**
+    /// `openForEdit(_:)` only ever assigns `editingEntry`; selecting a row only ever assigns
+    /// `selectedEntryID`. Neither touches `searchText`, and that absence of a code path IS the
+    /// fix — the natural "type a query, look at a result, go back, look at the next" flow needs
+    /// the query to survive every entry it opens along the way. The two moments that legitimately
+    /// DO clear it are the user's own action on the search field (`.searchable`'s built-in clear
+    /// button / Escape) and a lock, which the `.empty`/`.locked` switch in `RootView` handles for
+    /// free: it unmounts this whole view, and remounting it after the next unlock starts a fresh
+    /// `@State` at `""`. Shipping this as a preference — as Strongbox once did — is explicitly
+    /// what issue #34 rejects; there is no toggle to keep in sync.
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Whether the entry-detail inspector is shown. Seeded from `AppSettings.detailPaneVisible` on

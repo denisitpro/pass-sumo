@@ -87,10 +87,11 @@ enum KDBXVaultProjection {
         }
     }
 
-    /// Projects one entry. `entry.history` is NOT walked: history snapshots carry the same UUID as
-    /// their live entry, so surfacing them would produce duplicate `Identifiable` ids and, worse,
-    /// make the merge step think the live entry moved. History is preserved wholesale by the merge
-    /// instead.
+    /// Projects one entry. `entry.history` is NOT surfaced as entries of its own: history
+    /// snapshots carry the same UUID as their live entry, so turning them into `VaultEntry`s would
+    /// produce duplicate `Identifiable` ids and, worse, make the merge step think the live entry
+    /// moved. History is preserved wholesale by the merge instead, and the only thing read out of
+    /// it here is `KDBXPasswordHistory.lastChanged` — a single derived `Date?`, not a list.
     static func vaultEntry(
         from entry: KDBX.Entry,
         groupID: UUID?,
@@ -108,6 +109,7 @@ enum KDBXVaultProjection {
         }
 
         let title = revealed(KDBXStandardField.title.rawValue)
+        let password = revealed(KDBXStandardField.password.rawValue)
 
         var customFields: [String: String] = [:]
         for string in entry.strings
@@ -134,14 +136,19 @@ enum KDBXVaultProjection {
             groupID: groupID,
             title: title,
             username: revealed(KDBXStandardField.userName.rawValue),
-            password: revealed(KDBXStandardField.password.rawValue),
+            password: password,
             url: revealed(KDBXStandardField.url.rawValue),
             notes: revealed(KDBXStandardField.notes.rawValue),
             otpAuthURL: KDBXTOTPConvention.readOTPAuthURL(from: entry.strings, label: title),
             customFields: customFields,
             attachments: projected.attachments,
             created: times?.creationTime ?? .distantPast,
-            modified: times?.lastModificationTime ?? .distantPast
+            modified: times?.lastModificationTime ?? .distantPast,
+            passwordLastChanged: KDBXPasswordHistory.lastChanged(
+                currentPassword: password,
+                currentModified: times?.lastModificationTime,
+                history: entry.history
+            )
         )
     }
 }

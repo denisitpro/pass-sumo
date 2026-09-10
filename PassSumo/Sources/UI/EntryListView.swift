@@ -13,12 +13,39 @@ enum EntryURLResolver {
     }
 }
 
+/// How `EntryListView` orders its rows — issue #33 adds the password-change options alongside the
+/// original alphabetical one. A flat enum rather than a `(field, direction)` pair: four fixed,
+/// named combinations are simpler to reason about and to bind a `Picker` to than a cross product
+/// most of which nothing needs.
+enum EntryListSortOrder: String, CaseIterable, Identifiable, Sendable {
+    case titleAscending
+    case titleDescending
+    case passwordChangedNewestFirst
+    case passwordChangedOldestFirst
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .titleAscending: return "Title (A–Z)"
+        case .titleDescending: return "Title (Z–A)"
+        case .passwordChangedNewestFirst: return "Password Changed (Newest First)"
+        case .passwordChangedOldestFirst: return "Password Changed (Oldest First)"
+        }
+    }
+}
+
 /// Combines the sidebar's group filter with the search query into the exact list `EntryListView`
 /// shows. Pulled out as a free function (see `BrowserLogicTests`) so the one tricky bit — a group
 /// filter and a search query compose as an INTERSECTION, not as "search wins" or "group wins" — has
 /// a fast unit test instead of only being checkable by typing into the running app.
 enum EntryListFilter {
-    static func apply(to vault: Vault, groupID: UUID?, query: String) -> [VaultEntry] {
+    static func apply(
+        to vault: Vault,
+        groupID: UUID?,
+        query: String,
+        sortOrder: EntryListSortOrder = .titleAscending
+    ) -> [VaultEntry] {
         // `groupID == nil` means "All Entries" (no filter) here — NOT `entries(inGroup: nil)`'s
         // meaning of "only entries with no group at all". See `GroupSidebar`'s doc comment for why
         // the two `nil`s intentionally diverge.
@@ -47,14 +74,46 @@ enum EntryListFilter {
         )
         let filtered = candidates.filter { visible.contains($0.id) }
 
-        // Alphabetical by title, case-insensitively, tie-broken by id for a deterministic order
-        // when two entries share a title — the target user has hundreds of entries (repo
-        // CLAUDE.md positioning notes), and scanning a dense list by eye needs a stable, predictable
-        // order far more than it needs "most recently modified first".
-        return filtered.sorted { lhs, rhs in
+        return sorted(filtered, by: sortOrder)
+    }
+
+    /// Case-insensitive title comparison, tie-broken by id for a deterministic order when two
+    /// entries share a title — the target user has hundreds of entries (repo CLAUDE.md positioning
+    /// notes), and scanning a dense list by eye needs a stable, predictable order. The tie-break
+    /// always runs ascending regardless of `ascending`, so descending title order doesn't also
+    /// silently reverse which of two same-titled rows comes first.
+    private static func titleOrdering(ascending: Bool) -> (VaultEntry, VaultEntry) -> Bool {
+        { lhs, rhs in
             let comparison = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
-            if comparison != .orderedSame { return comparison == .orderedAscending }
+            if comparison != .orderedSame {
+                return ascending ? comparison == .orderedAscending : comparison == .orderedDescending
+            }
             return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    /// Issue #33: sorting by password-change date has to answer a question the alphabetical order
+    /// never faced — what to do with an entry that has NO derivable date. Silently sorting it to
+    /// either end would misrepresent it as "just changed" or "most overdue", so entries with a
+    /// `nil` `passwordLastChanged` are split into their own trailing group (alphabetical, so it is
+    /// at least scannable) rather than participating in the date ordering at all.
+    private static func sorted(_ entries: [VaultEntry], by order: EntryListSortOrder) -> [VaultEntry] {
+        switch order {
+        case .titleAscending:
+            return entries.sorted(by: titleOrdering(ascending: true))
+        case .titleDescending:
+            return entries.sorted(by: titleOrdering(ascending: false))
+        case .passwordChangedNewestFirst, .passwordChangedOldestFirst:
+            let dated = entries.filter { $0.passwordLastChanged != nil }
+            let undated = entries.filter { $0.passwordLastChanged == nil }
+            let newestFirst = order == .passwordChangedNewestFirst
+            let sortedDated = dated.sorted { lhs, rhs in
+                guard let lhsDate = lhs.passwordLastChanged, let rhsDate = rhs.passwordLastChanged
+                else { return false }
+                if lhsDate != rhsDate { return newestFirst ? lhsDate > rhsDate : lhsDate < rhsDate }
+                return titleOrdering(ascending: true)(lhs, rhs)
+            }
+            return sortedDated + undated.sorted(by: titleOrdering(ascending: true))
         }
     }
 }
@@ -79,8 +138,13 @@ struct EntryListView: View {
     var onCopyPassword: (VaultEntry) -> Void
     var onDeleteEntry: (UUID) -> Void
 
+    /// Local to this column, unlike `searchText`/`selectedEntryID`: nothing outside the list cares
+    /// how its rows are ordered, so it does not belong on `VaultBrowserView`'s cross-column state
+    /// (see that type's doc comment on what DOES have to live up there and why).
+    @State private var sortOrder: EntryListSortOrder = .titleAscending
+
     private var entries: [VaultEntry] {
-        EntryListFilter.apply(to: vault, groupID: groupID, query: searchText)
+        EntryListFilter.apply(to: vault, groupID: groupID, query: searchText, sortOrder: sortOrder)
     }
 
     var body: some View {
@@ -120,6 +184,24 @@ struct EntryListView: View {
             }
         }
         .accessibilityIdentifier("browser.list")
+        // A toolbar contribution from a middle-column view, merged by SwiftUI into the same
+        // toolbar `VaultBrowserView` populates — the sort order is this column's own concern (see
+        // `sortOrder`'s doc comment), so it is declared here rather than threaded up as one more
+        // binding on `VaultBrowserView`'s already-large cross-column state.
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    Picker("Sort By", selection: $sortOrder) {
+                        ForEach(EntryListSortOrder.allCases) { order in
+                            Text(order.label).tag(order)
+                        }
+                    }
+                } label: {
+                    Label("Sort By", systemImage: "arrow.up.arrow.down")
+                }
+                .accessibilityIdentifier("list.sortMenu")
+            }
+        }
     }
 
     private func row(for entry: VaultEntry, isLast: Bool) -> some View {
