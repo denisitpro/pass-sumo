@@ -294,3 +294,59 @@ and it is bundled.
   the other**: `KDBXCodecTests` opens it, changes the *password* of the split-form entry, saves,
   reopens, and asserts the entry still stores its TOTP as `TOTP Seed` + `TOTP Settings` and that
   the URL-form entry still stores its as `otp`.
+
+---
+
+# Icon fixture (`icons/`) — added for issue #89
+
+## `icons/kdbx3-icons.kdbx`
+
+- **KDBX version:** 3.1 · **KDF:** AES-KDF · **Cipher:** AES-256 (i.e. whatever `keepassxc-cli
+  import` produces — see the CLI section far above)
+- **Password:** `correct horse battery staple`
+- Written by `keepassxc-cli 2.7.12 import` from
+  [`icons/kdbx3-icons.source.xml`](icons/kdbx3-icons.source.xml), kept next to it so the fixture is
+  reproducible:
+  `keepassxc-cli import -p icons/kdbx3-icons.source.xml icons/kdbx3-icons.kdbx`
+- Contents — every combination of the format's **two** icon channels that matters:
+
+  | Item | `IconID` | `CustomIconUUID` |
+  |------|---------:|------------------|
+  | Root group | 48 | — |
+  | Group `Custom Icon Folder` | 0 | set |
+  | Group `Built-in Icon Folder` | 26 | — |
+  | Entry `CustomIconEntry` | 0 | set |
+  | Entry `BuiltInIconEntry` | 12 | — |
+  | Entry `DefaultIconEntry` | 0 | — |
+
+  `Meta/CustomIcons` holds the one image both custom-icon items point at: a 1×1 PNG, because the
+  test cares that the bytes come back identical, not what they depict.
+
+## What it is for
+
+`iconID` is modelled and written back (issue #89); `CustomIconUUID` and the `Meta/CustomIcons`
+pool it points into are **not**, and survive only because `KDBXContentMerge` reuses the file's own
+objects as the base for a save. This fixture is the regression guard for that:
+`KDBXCodecTests.testRoundTripPreservesCustomIconWhenIconIDIsChanged` sets a built-in icon on the
+entry and the group that already have a custom one, saves, reopens, and asserts the custom UUID and
+the image pool are untouched.
+
+## Verified: KeePassXC zeroes `IconID` when `CustomIconUUID` is set
+
+The source XML originally gave the two custom-icon items `IconID` 27 and 43. `keepassxc-cli import`
+wrote **0** for both, and the re-export confirms it — KeePassXC drops the built-in index whenever a
+custom icon shadows it. So a fixture with a *non-default* `IconID` **and** a `CustomIconUUID` on the
+same object cannot be produced with this tool at all; the source XML records the zeroes rather than
+a value the importer will not honour.
+
+That is exactly why the test *changes* `iconID` through our own model before saving instead of
+relying on the fixture to carry a non-zero one. It also has a real consequence for the app: pointing
+a built-in icon at an object that has a custom icon is a choice other clients will ignore, because
+the custom icon wins. Whether pass-sumo should clear `CustomIconUUID` when the user picks a built-in
+icon is an open question for the picker half of #89 — this half deliberately never touches the UUID.
+
+## Bundling
+
+Same folder reference as everything else here (`PassSumoUnitTests` → `sources` →
+`Sources/UnitTests/Fixtures`, `type: folder`), so this needed no `project.yml` change; the file is
+addressed as `Fixtures/icons/kdbx3-icons.kdbx`.

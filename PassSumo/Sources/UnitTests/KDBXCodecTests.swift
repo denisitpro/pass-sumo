@@ -333,6 +333,120 @@ final class KDBXCodecTests: XCTestCase {
         XCTAssertEqual(try codec.decode(fileData: second, credentials: creds).vault, decoded.vault)
     }
 
+    // MARK: - Built-in icons (issue #89)
+
+    /// `IconID` reaches the model, and the two "no icon chosen" defaults are what the format
+    /// actually writes rather than what looks plausible.
+    ///
+    /// The defaults are asserted against a real KeePassXC-written file on purpose: `VaultEntry`
+    /// and `VaultGroup` default their `iconID` to 0 and 48, and if that guess were wrong every
+    /// entry pass-sumo creates would arrive in other clients wearing the wrong icon — a bug no
+    /// test of our own encoder could catch, because it would agree with itself.
+    func testBuiltInIconIDsAreReadFromTheFile() throws {
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-icons", subdirectory: "Fixtures/icons"),
+            credentials: credentials(Self.kpxcPassword)
+        )
+        let vault = decoded.vault
+
+        XCTAssertEqual(
+            try XCTUnwrap(vault.groups.first { $0.name == "Built-in Icon Folder" }).iconID, 26
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(vault.entries.first { $0.title == "BuiltInIconEntry" }).iconID, 12
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(vault.entries.first { $0.title == "DefaultIconEntry" }).iconID,
+            VaultEntry.defaultIconID,
+            "an entry KeePassXC wrote with no icon of its own is IconID 0, the key"
+        )
+        // The root group is not a `VaultGroup` (it maps onto our `nil` parent), so the group
+        // default is checked where it is visible: in the file's own XML the root carries 48, and
+        // so does every folder KeePassXC creates without an explicit icon.
+        let content = try XCTUnwrap(Self.kdbxContent(of: decoded))
+        XCTAssertEqual(
+            content.database.root.group.iconID,
+            VaultGroup.defaultIconID,
+            "a folder with no icon of its own is IconID 48, the folder"
+        )
+    }
+
+    /// The regression guard for the whole of issue #89's first half.
+    ///
+    /// KDBX has two icon channels on the same object: the built-in `IconID` index, which is now
+    /// modelled and rewritten on every save, and `CustomIconUUID`, which points into the
+    /// `Meta/CustomIcons` image pool and is not modelled at all. The second survives only because
+    /// `KDBXContentMerge` builds each entry and group on top of the object the file was parsed
+    /// into. Writing the first must not disturb the second — if it did, a user who opened someone's
+    /// vault in pass-sumo would find their artwork silently replaced by one of KeePass's stock
+    /// glyphs, in a file we were only asked to edit.
+    ///
+    /// So this sets a built-in icon on the two items that already carry a custom one, which is the
+    /// worst case, and then asserts the custom UUIDs and the image pool came back untouched.
+    func testRoundTripPreservesCustomIconWhenIconIDIsChanged() throws {
+        let creds = credentials(Self.kpxcPassword)
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-icons", subdirectory: "Fixtures/icons"),
+            credentials: creds
+        )
+
+        let before = try XCTUnwrap(Self.kdbxContent(of: decoded))
+        let beforeEntry = try XCTUnwrap(Self.entry(titled: "CustomIconEntry", in: before))
+        let beforeGroup = try XCTUnwrap(Self.group(named: "Custom Icon Folder", in: before))
+        let customIconUUID = try XCTUnwrap(
+            beforeEntry.customIconUUID, "fixture precondition: the entry has a custom icon"
+        )
+        XCTAssertEqual(beforeGroup.customIconUUID, customIconUUID, "fixture precondition")
+        XCTAssertEqual(before.database.meta.customIcons.count, 1, "fixture precondition")
+
+        var vault = decoded.vault
+        let entryIndex = try XCTUnwrap(vault.entries.firstIndex { $0.title == "CustomIconEntry" })
+        let groupIndex = try XCTUnwrap(vault.groups.firstIndex { $0.name == "Custom Icon Folder" })
+        // 19 (EMail) and 26 (Disk) are arbitrary, but both differ from what is in the file, so a
+        // merge that quietly ignored `iconID` would fail here rather than pass by coincidence.
+        vault.entries[entryIndex].iconID = 19
+        vault.groups[groupIndex].iconID = 26
+
+        let saved = try codec.encode(vault, credentials: creds, origin: decoded)
+        let reopened = try codec.decode(fileData: saved, credentials: creds)
+
+        // 1. The chosen icons landed, and came back through a real decode of real bytes.
+        XCTAssertEqual(
+            try XCTUnwrap(reopened.vault.entries.first { $0.title == "CustomIconEntry" }).iconID, 19
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(reopened.vault.groups.first { $0.name == "Custom Icon Folder" }).iconID, 26
+        )
+
+        // 2. The unmodelled icon channel is exactly as it was.
+        let after = try XCTUnwrap(Self.kdbxContent(of: reopened))
+        XCTAssertEqual(
+            try XCTUnwrap(Self.entry(titled: "CustomIconEntry", in: after)).customIconUUID,
+            customIconUUID,
+            "writing IconID cleared the entry's CustomIconUUID"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(Self.group(named: "Custom Icon Folder", in: after)).customIconUUID,
+            customIconUUID,
+            "writing IconID cleared the group's CustomIconUUID"
+        )
+        XCTAssertEqual(
+            after.database.meta.customIcons, before.database.meta.customIcons,
+            "the Meta/CustomIcons image pool must survive byte for byte — a dangling "
+                + "CustomIconUUID is as bad as a cleared one"
+        )
+
+        // 3. Everything the round-trip test above guards is still true for the items nobody
+        //    re-iconed: an untouched entry keeps its own index, not the one we set next door.
+        XCTAssertEqual(
+            try XCTUnwrap(reopened.vault.entries.first { $0.title == "BuiltInIconEntry" }).iconID, 12
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(reopened.vault.entries.first { $0.title == "DefaultIconEntry" }).iconID,
+            VaultEntry.defaultIconID
+        )
+    }
+
     // MARK: - TOTP
 
     /// Both conventions read into `otpAuthURL`, and a save leaves each entry storing its secret the
@@ -765,6 +879,15 @@ final class KDBXCodecTests: XCTestCase {
             if found == nil, string("Title", in: entry) == title { found = entry }
         }
         return found
+    }
+
+    private static func group(named name: String, in content: KDBXContent) -> KDBX.Group? {
+        func find(_ group: KDBX.Group) -> KDBX.Group? {
+            if group.name == name { return group }
+            for child in group.groups { if let hit = find(child) { return hit } }
+            return nil
+        }
+        return find(content.database.root.group)
     }
 
     private static func string(_ key: String, in entry: KDBX.Entry) -> String? {
