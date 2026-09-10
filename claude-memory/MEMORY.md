@@ -6,3 +6,4 @@
 - [Design system docs](pass-sumo-design-system-docs.md) — the spec is an index plus focused siblings under `design/`; the mockup is a palette reference, not a keyboard or component spec.
 - [Strongbox is the reference](pass-sumo-strongbox-is-the-reference.md) — Strongbox is the эталон; copy its behaviour (especially biometric unlock), never its GPL code or its feature creep.
 - [Parallel sessions share one checkout](pass-sumo-parallel-sessions-share-a-checkout.md) — four sessions, one working tree; use your own worktree and verify peers' merge claims yourself.
+- [Parallel builds share log paths](pass-sumo-parallel-builds-share-log-paths.md) — a shared /tmp capture path makes one agent report another agent's test count.
