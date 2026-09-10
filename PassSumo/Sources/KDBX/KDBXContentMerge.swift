@@ -7,8 +7,15 @@ import KDBXKit
 /// incident. It never constructs a database from `Vault`: for every group and entry it starts from
 /// the object KDBXKit parsed out of the user's file and overwrites only the handful of fields
 /// `Vault` actually models. Everything else on that object comes along untouched — entry history,
-/// custom icons, tags, AutoType, colours, expiry, usage counts, and any `CustomData` a different
-/// KDBX client wrote and we have never heard of.
+/// user-supplied custom icons (`CustomIconUUID` and the `Meta/CustomIcons` pool it points into),
+/// tags, AutoType, colours, expiry, usage counts, and any `CustomData` a different KDBX client
+/// wrote and we have never heard of.
+///
+/// `iconID` is the newest field to move off that carried-along list (issue #89), and it is the one
+/// that most needs the base-object reuse to be understood: KDBX has TWO icon channels on the same
+/// object, and only the built-in index is modeled. Assigning `base.iconID` on an object that also
+/// carries a `customIconUUID` must leave the UUID — and the image pool in `Meta` it refers to —
+/// exactly as they were.
 ///
 /// Attachments are modelled now (see `KDBXAttachments`), so they are no longer on that
 /// carried-along list — but the same principle applies one level down: an entry whose attachment
@@ -82,6 +89,13 @@ enum KDBXContentMerge {
                 pool: &pool
             )
 
+            // Written unconditionally, and that is safe precisely because `base` is the file's own
+            // object: an entry nobody re-iconed is assigned the value it already had. What must
+            // NOT happen is clearing `base.customIconUUID` alongside it — a custom icon shadows
+            // the built-in index in every client, and dropping the UUID would replace someone's
+            // artwork with one of ours. It is simply not touched here.
+            base.iconID = entry.iconID
+
             var times = base.times ?? KDBX.Times()
             times.creationTime = restore(entry.created, into: times.creationTime)
             times.lastModificationTime = restore(entry.modified, into: times.lastModificationTime)
@@ -112,6 +126,11 @@ enum KDBXContentMerge {
                 at: now
             )
             base.name = group.name
+            // Same contract as the entry's, including the recycle bin: `makeGroup` stamps the
+            // trash icon on a bin it has to create, and this line then writes the model's value
+            // over it — which is why `Vault.ensureRecycleBinGroup` is where the bin's icon is
+            // actually decided. `base.customIconUUID` is left alone.
+            base.iconID = group.iconID
             base.entries = (entriesByGroup[group.id] ?? []).map { buildEntry($0, in: group.id) }
             base.groups = (childGroups[group.id] ?? []).compactMap { buildGroup($0, in: group.id) }
 

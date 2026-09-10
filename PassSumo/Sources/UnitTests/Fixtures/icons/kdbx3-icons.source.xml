@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<KeePassFile>
+    <Meta>
+        <DatabaseName>Icon Probe</DatabaseName>
+        <CustomIcons>
+            <Icon>
+                <UUID>/ye+cV2eSJqCE+ZBaG+VVQ==</UUID>
+                <Data>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==</Data>
+            </Icon>
+        </CustomIcons>
+    </Meta>
+    <Root>
+        <Group>
+            <UUID>gAAAAAAAAAAAAAAAAAAAAA==</UUID>
+            <Name>Root</Name>
+            <IconID>48</IconID>
+            <Group>
+                <UUID>gQAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <Name>Custom Icon Folder</Name>
+                <!-- IconID is 0, not 43, on purpose: KeePassXC's XML importer zeroes IconID
+                     whenever CustomIconUUID is present. See Fixtures/README.md. -->
+                <IconID>0</IconID>
+                <CustomIconUUID>/ye+cV2eSJqCE+ZBaG+VVQ==</CustomIconUUID>
+            </Group>
+            <Group>
+                <UUID>ggAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <Name>Built-in Icon Folder</Name>
+                <IconID>26</IconID>
+            </Group>
+            <Entry>
+                <UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <IconID>0</IconID>
+                <CustomIconUUID>/ye+cV2eSJqCE+ZBaG+VVQ==</CustomIconUUID>
+                <String><Key>Title</Key><Value>CustomIconEntry</Value></String>
+                <String><Key>Password</Key><Value ProtectInMemory="True">pw1</Value></String>
+            </Entry>
+            <Entry>
+                <UUID>AgAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <IconID>12</IconID>
+                <String><Key>Title</Key><Value>BuiltInIconEntry</Value></String>
+                <String><Key>Password</Key><Value ProtectInMemory="True">pw2</Value></String>
+            </Entry>
+            <Entry>
+                <UUID>AwAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <IconID>0</IconID>
+                <String><Key>Title</Key><Value>DefaultIconEntry</Value></String>
+                <String><Key>Password</Key><Value ProtectInMemory="True">pw3</Value></String>
+            </Entry>
+        </Group>
+    </Root>
+</KeePassFile>
