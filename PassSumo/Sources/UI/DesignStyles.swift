@@ -359,6 +359,23 @@ private struct FieldChrome: ViewModifier {
     }
 }
 
+/// The toolbar's search well — the mockup's `.search`.
+///
+/// A `sunken` sibling of `FieldChrome` above, because the design system gives the search field the
+/// inset-well tone rather than a field's `surface`, and a plain `border` hairline rather than a
+/// control's `border-strong` edge. The focus treatment is the SAME `FocusRing` every other
+/// focusable control on the canvas draws — a hand-rolled search field (issue #87) does not get a
+/// ring of its own, which is the whole reason that geometry lives in one modifier.
+private struct SearchFieldChrome: ViewModifier {
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .sunkenWell()
+            .focusRing(isFocused: isFocused, cornerRadius: Radius.sm)
+    }
+}
+
 extension View {
     /// A raised card on the canvas. `isFloating` picks the sheet shadow (and drops the hairline)
     /// for something presented over a scrim.
@@ -374,6 +391,11 @@ extension View {
     /// A text field's border, ground and focus ring.
     func fieldChrome(isFocused: Bool, isError: Bool = false) -> some View {
         modifier(FieldChrome(isFocused: isFocused, isError: isError))
+    }
+
+    /// The search well's ground, hairline and focus ring.
+    func searchFieldChrome(isFocused: Bool) -> some View {
+        modifier(SearchFieldChrome(isFocused: isFocused))
     }
 }
 

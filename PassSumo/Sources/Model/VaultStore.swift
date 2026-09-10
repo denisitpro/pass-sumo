@@ -364,6 +364,57 @@ final class VaultStore {
         markEdited()
     }
 
+    // MARK: - Groups
+
+    /// Creates a folder under `parentID` (`nil` = the vault's top level) and returns it, or `nil`
+    /// when nothing was created.
+    ///
+    /// `nil` covers three refusals: nothing is unlocked, the name is blank, or `parentID` names a
+    /// group this vault does not have. A blank name is refused rather than defaulted to something
+    /// — a folder called "" is indistinguishable from a bug in every client that opens the file
+    /// afterwards, and what to say about it is the caller's decision, not this type's.
+    @discardableResult
+    func addGroup(named name: String, parentID: UUID?) -> VaultGroup? {
+        guard case .unlocked(var vault) = state else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let parentID, !vault.groups.contains(where: { $0.id == parentID }) { return nil }
+
+        let group = VaultGroup(id: UUID(), parentID: parentID, name: trimmed)
+        vault.groups.append(group)
+        commit(vault)
+        return group
+    }
+
+    /// Renames a folder.
+    ///
+    /// A no-op — and deliberately not a dirty vault — when nothing is unlocked, the id matches
+    /// nothing, the name is blank, or it is the name the folder already has. The last of those is
+    /// the one worth stating: a rename that changed nothing would otherwise leave the user with an
+    /// unsaved-changes flag and a save to make for no reason.
+    func renameGroup(_ groupID: UUID, to name: String) {
+        guard case .unlocked(var vault) = state,
+              let index = vault.groups.firstIndex(where: { $0.id == groupID })
+        else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, vault.groups[index].name != trimmed else { return }
+        vault.groups[index].name = trimmed
+        commit(vault)
+    }
+
+    /// Re-parents a folder, subtree and all, and reports whether it moved.
+    ///
+    /// **A move into the folder's own descendant is refused** — see `Vault.canMoveGroup` for why
+    /// the encoder's cycle guard must never be the thing that catches that.
+    @discardableResult
+    func moveGroup(_ groupID: UUID, under newParentID: UUID?) -> Bool {
+        guard case .unlocked(var vault) = state,
+              vault.moveGroup(groupID, under: newParentID)
+        else { return false }
+        commit(vault)
+        return true
+    }
+
     // MARK: - Deletion
 
     /// What deleting a given entry would actually DO, so the UI can decide whether to ask first.
@@ -414,6 +465,62 @@ final class VaultStore {
               vault.entries.contains(where: { $0.id == entryID })
         else { return }
         vault.removePermanently(entryID: entryID)
+        commit(vault)
+    }
+
+    /// What `delete(groupID:)` would do, or `nil` when the folder must not be deleted at all.
+    ///
+    /// `nil` carries more weight here than it does for an entry, where it only ever means "no such
+    /// entry". Besides that, it covers the recycle bin itself and any folder the bin is nested
+    /// inside: neither can be recycled (the bin would become its own ancestor) and neither may be
+    /// deleted outright (that destroys the bin, and `Meta/RecycleBinUUID` with it). See
+    /// `Vault.moveToRecycleBin(groupID:)`. A caller offers no delete for those rather than picking
+    /// one of the two wrong answers.
+    func plannedDeletion(forGroup groupID: UUID) -> Deletion? {
+        guard case .unlocked(let vault) = state,
+              vault.groups.contains(where: { $0.id == groupID })
+        else { return nil }
+        if let binID = vault.recycleBin.groupID, vault.groupSubtreeIDs(of: groupID).contains(binID) {
+            return nil
+        }
+        if vault.recycleBin.isEnabled, !vault.recycleBinGroupIDs.contains(groupID) { return .recycled }
+        return .permanent
+    }
+
+    /// Deletes the folder — entries, nested folders and all — per `plannedDeletion(forGroup:)`.
+    ///
+    /// **Callers MUST have confirmed with the user when `plannedDeletion` reports `.permanent`**,
+    /// exactly as for an entry. This method does not prompt and will not refuse.
+    ///
+    /// Written as a switch on the plan rather than as `delete(entryID:)`'s "try to recycle, else
+    /// remove outright". For an entry those two are the same thing, because every refusal
+    /// `moveToRecycleBin` can return IS a permanent delete. For a folder there is a third refusal —
+    /// the bin itself, or a folder containing it — and letting that fall through to "else remove
+    /// outright" would turn a case that must do nothing into the most destructive act in the app.
+    func delete(groupID: UUID) {
+        guard case .unlocked(var vault) = state else { return }
+        switch plannedDeletion(forGroup: groupID) {
+        case .recycled:
+            _ = vault.moveToRecycleBin(groupID: groupID)
+        case .permanent:
+            vault.removePermanently(groupID: groupID)
+        case nil:
+            return
+        }
+        commit(vault)
+    }
+
+    /// Removes the folder and everything inside it outright, bypassing the bin. Same confirmation
+    /// obligation as `permanentlyDelete(entryID:)` — this is the one that cannot be undone.
+    func permanentlyDelete(groupID: UUID) {
+        guard case .unlocked(var vault) = state,
+              vault.groups.contains(where: { $0.id == groupID })
+        else { return }
+        let before = (vault.entries.count, vault.groups.count)
+        vault.removePermanently(groupID: groupID)
+        // `removePermanently(groupID:)` refuses to take the recycle bin (see its doc comment), so
+        // this can legitimately change nothing — and an unchanged vault must not be marked dirty.
+        guard (vault.entries.count, vault.groups.count) != before else { return }
         commit(vault)
     }
 

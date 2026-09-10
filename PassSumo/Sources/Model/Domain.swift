@@ -386,21 +386,21 @@ extension Vault {
     }
 }
 
-// MARK: - Recycle bin
+// MARK: - Group tree
 
 extension Vault {
-    /// Every group id inside the recycle bin, the bin group itself included. Empty when the
-    /// database has no bin group. Used to keep deleted entries out of search and to decide whether
-    /// a second delete means "permanently".
-    var recycleBinGroupIDs: Set<UUID> {
-        guard let binID = recycleBin.groupID, groups.contains(where: { $0.id == binID }) else {
-            return []
-        }
-        var result: Set<UUID> = [binID]
-        // Fixed-point expansion rather than recursion: `groups` is a flat parent-linked list that
-        // another client can leave a cycle in (see `GroupTreeBuilder`'s own handling), and a walk
-        // that follows parents naively would not terminate on one. Each pass can only add ids, and
-        // there are finitely many, so this always halts.
+    /// `groupID` together with every group nested beneath it, however deep.
+    ///
+    /// Fixed-point expansion rather than recursion — `recycleBinGroupIDs` is this function applied
+    /// to the bin, and the reason is the same for both: `groups` is a flat parent-linked list that
+    /// another KDBX client can leave a cycle in, and a walk that follows parents naively would not
+    /// terminate on one. Each pass can only add ids, and there are finitely many, so this halts.
+    ///
+    /// The id itself is always in the result, even when no such group exists — a subtree is at
+    /// minimum its own root. Callers that care whether the group is real check that separately
+    /// rather than reading an empty set as "not found".
+    func groupSubtreeIDs(of groupID: UUID) -> Set<UUID> {
+        var result: Set<UUID> = [groupID]
         var didGrow = true
         while didGrow {
             didGrow = false
@@ -413,6 +413,57 @@ extension Vault {
             }
         }
         return result
+    }
+
+    /// Whether `groupID` may be re-parented under `newParentID` (`nil` = the vault's top level).
+    ///
+    /// **The rule that matters is the cycle: a group may not be moved into its own descendant, nor
+    /// into itself.** `KDBXContentMerge.buildGroup` does have a guard that survives such a vault,
+    /// but that is an encoder backstop for input another client corrupted, and the price it pays is
+    /// silently dropping a branch of the tree — data loss dressed up as robustness. A legal UI
+    /// action must never be what reaches it, so the refusal lives here, where the caller can be
+    /// told no and show the user nothing happened.
+    ///
+    /// A move to where the group already is passes this check: it is legal, merely pointless, and
+    /// `moveGroup` is what reports that nothing changed.
+    func canMoveGroup(_ groupID: UUID, under newParentID: UUID?) -> Bool {
+        guard groups.contains(where: { $0.id == groupID }) else { return false }
+        guard let newParentID else { return true }
+        guard groups.contains(where: { $0.id == newParentID }) else { return false }
+        // The subtree contains `groupID` itself, so "into itself" is refused by the same test.
+        return !groupSubtreeIDs(of: groupID).contains(newParentID)
+    }
+
+    /// Re-parents `groupID` and reports whether the vault actually changed. Everything nested
+    /// inside comes along untouched: children name their parent, so moving the root of a subtree
+    /// moves the subtree.
+    ///
+    /// `false` means either the move was refused (see `canMoveGroup`) or it would have changed
+    /// nothing — the caller must not mark the vault dirty on either.
+    @discardableResult
+    mutating func moveGroup(_ groupID: UUID, under newParentID: UUID?) -> Bool {
+        guard canMoveGroup(groupID, under: newParentID),
+              let index = groups.firstIndex(where: { $0.id == groupID }),
+              groups[index].parentID != newParentID
+        else { return false }
+        groups[index].parentID = newParentID
+        return true
+    }
+}
+
+// MARK: - Recycle bin
+
+extension Vault {
+    /// Every group id inside the recycle bin, the bin group itself included. Empty when the
+    /// database has no bin group. Used to keep deleted entries out of search and to decide whether
+    /// a second delete means "permanently".
+    var recycleBinGroupIDs: Set<UUID> {
+        guard let binID = recycleBin.groupID, groups.contains(where: { $0.id == binID }) else {
+            return []
+        }
+        // The bin's own subtree, through the one cycle-safe walk both this and the group
+        // operations share — see `groupSubtreeIDs(of:)` for why it is written the way it is.
+        return groupSubtreeIDs(of: binID)
     }
 
     /// Whether the entry currently sits inside the recycle bin.
@@ -456,6 +507,43 @@ extension Vault {
         return true
     }
 
+    /// Moves a whole folder — its entries, and every folder nested inside it — into the recycle
+    /// bin, and returns `true` when it did.
+    ///
+    /// The move is one assignment: children name their parent, so re-parenting the folder onto the
+    /// bin takes the entire subtree with it, exactly the way `moveToRecycleBin(entryID:)` moves one
+    /// entry. Nothing is copied and nothing is renumbered, so a restore is the reverse assignment.
+    ///
+    /// Returns `false` in three cases, and they are NOT interchangeable — which is why
+    /// `VaultStore.plannedDeletion(forGroup:)`, and not this method's return value, is what decides
+    /// what a delete means:
+    ///
+    /// - the database has the bin switched off, or the folder is already inside the bin — a
+    ///   permanent delete, the same as for an entry;
+    /// - the folder IS the bin, or the bin is nested somewhere inside it — neither a recycle nor a
+    ///   permanent delete is right. Re-parenting would make the bin its own ancestor (a cycle), and
+    ///   deleting outright would destroy the bin and everything anyone ever put in it.
+    mutating func moveToRecycleBin(groupID: UUID) -> Bool {
+        guard recycleBin.isEnabled,
+              groups.contains(where: { $0.id == groupID }),
+              // Covers "the folder IS the bin" too: the bin is the first member of its own subtree.
+              !recycleBinGroupIDs.contains(groupID)
+        else { return false }
+        // The bin nested somewhere inside the folder being deleted. Refused rather than resolved:
+        // every resolution moves someone else's bin to a place they did not put it.
+        if let binID = recycleBin.groupID, groupSubtreeIDs(of: groupID).contains(binID) {
+            return false
+        }
+
+        let binID = ensureRecycleBinGroup()
+        // Found AFTER `ensureRecycleBinGroup`, which appends to `groups`. An index taken before a
+        // mutation of the same array happens to survive an append, and would stop surviving the
+        // day bin creation is written differently.
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return false }
+        groups[index].parentID = binID
+        return true
+    }
+
     /// The bin group's id, creating the group if the database does not have one yet.
     ///
     /// Lazy creation is the cross-client convention, not an optimisation: a database that has
@@ -481,6 +569,21 @@ extension Vault {
     /// confirmed with the user first — nothing below this line asks.
     mutating func removePermanently(entryID: UUID) {
         entries.removeAll { $0.id == entryID }
+    }
+
+    /// Removes a folder, every folder nested inside it, and every entry in any of them — no bin
+    /// involved. Same obligation as the entry overload: the caller has already confirmed with the
+    /// user, because nothing below this line asks.
+    ///
+    /// **Refuses to take the recycle bin with it.** Removing the bin would leave
+    /// `Meta/RecycleBinUUID` pointing at a group that no longer exists, which other clients read as
+    /// a damaged database rather than as "no bin". Emptying the bin is the operation that exists for
+    /// that, and it deliberately keeps the group.
+    mutating func removePermanently(groupID: UUID) {
+        let doomed = groupSubtreeIDs(of: groupID)
+        if let binID = recycleBin.groupID, doomed.contains(binID) { return }
+        entries.removeAll { $0.groupID.map(doomed.contains) == true }
+        groups.removeAll { doomed.contains($0.id) }
     }
 
     /// Empties the bin: every entry inside it and every folder nested under it are removed. The

@@ -1,6 +1,6 @@
 # pass-sumo — brand & design tokens
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 This file owns the token VALUES. Nothing else in the repo restates them: the Swift mirror
 (`PassSumo/Sources/UI/DesignTokens.swift`) is the only other place they are written down, and it is
@@ -148,6 +148,8 @@ here so the views never carry them as literals:
 | `glyph-button-size` | 24 | `.icon-btn` |
 | `field-label-width` | 90 | `.field` grid's first column |
 | `hero-glyph-size` | 40 | `.big-lock`, the glyph heading a centred card |
+| `search-field-width` | 252 | `.search`, the toolbar's search well |
+| `search-field-height` | 24 | `.search` |
 
 **`control-disabled-opacity` = 0.4 has no counterpart in the mockup.** The mockup draws no disabled
 state, and a custom SwiftUI `ButtonStyle` gets no automatic dimming, so a disabled primary action
