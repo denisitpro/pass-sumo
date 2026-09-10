@@ -1,6 +1,6 @@
 # Components — chrome
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 The window's own surfaces and bands: what content sits on, and what frames it. Token values are in
 `design/BRAND.md`.
@@ -69,8 +69,8 @@ enabled while unlocked.
   system-rendered toolbar items with `Button(role: .destructive)`.
 - The mockup annotates each button with a shortcut in its tooltip. Several of those bindings do not
   exist — see `design/keyboard-map.md`.
-- **Unverified:** whether the `sidebar` tint applies at all under the unified toolbar style
-  (issue #66).
+- Settled: the `sidebar` tint does apply under the unified toolbar style. Verified empirically; see
+  `claude-memory/pass-sumo-list-and-toolbar-verified.md`.
 
 ## Status bar (`.statusBarBand` + `StatusBar`)
 

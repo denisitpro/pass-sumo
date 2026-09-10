@@ -1,6 +1,6 @@
 # Components — data display
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 The rows and readouts that show vault contents. Token values are in `design/BRAND.md`.
 
@@ -64,8 +64,9 @@ blank space.
 - The double-click that opens an entry must be a `.simultaneousGesture`. `List(selection:)` already
   owns a click gesture on macOS, and an exclusive gesture competes with it and can silently swallow
   the double-click. Verified empirically.
-- **Unverified:** whether `List(selection:)` lets that custom selected ground show through at all, or
-  paints its native highlight over it (issue #66).
+- Settled: `List(selection:)` does not paint its native highlight over the custom selected ground —
+  the row's own `row-sel-bg` is what renders, for `.plain` and `.sidebar` alike. Verified empirically;
+  see `claude-memory/pass-sumo-list-and-toolbar-verified.md`.
 
 ## Sidebar row (`sidebarRowSurface` + `GroupSidebar.sidebarRow`)
 

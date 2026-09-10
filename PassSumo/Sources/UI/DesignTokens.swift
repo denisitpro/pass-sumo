@@ -199,6 +199,12 @@ enum Metrics {
     static let focusRingWidth: CGFloat = 2
     static let entryRowHeight: CGFloat = 34
     static let sidebarRowHeight: CGFloat = 26
+    /// The mockup's toolbar band. **Descriptive only — nothing consumes it, and nothing can.**
+    /// The window toolbar's height belongs to AppKit, not to us: under
+    /// `.windowToolbarStyle(.unified)` the `NSTitlebarContainerView` measures **52pt** (verified by
+    /// rendering that exact scene off-screen, 2026-09-09), and a SwiftUI `.toolbar` has no height
+    /// knob. Do not try to force 44 — the only lever is a hand-rolled band inside the content view,
+    /// which trades the system's traffic lights and window dragging for it.
     static let toolbarHeight: CGFloat = 44
     static let statusBarHeight: CGFloat = 26
 

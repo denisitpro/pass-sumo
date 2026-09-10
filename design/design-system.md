@@ -1,6 +1,6 @@
 # pass-sumo — design system
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 The component contracts, screen patterns, UX rules, keyboard map, accessibility rules and tone of
 voice for the macOS app. Written against the code in `PassSumo/Sources/UI/` and
@@ -72,4 +72,4 @@ the contracts describe it, they do not replace it.
 | No approved mockup for Welcome, the entry-edit sheet, or Settings | #63 |
 | Keyboard focus is invisible on every custom button style | #64 |
 | Custom fields have no protected flag, so a secret custom field renders in plaintext | #65 |
-| Two rendering assumptions from PR #59 are unverified and need an eyes-on pass | #66 |
+| The running app's own pixels (row rhythm, the inset hairline, the unlock card, the generator sheet, Settings) are still unverified against the mockup | #66 |
