@@ -1,12 +1,33 @@
 # App icon — design notes
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-sonnet-5]
 
-## What ships
+## Owner's verdict, 2026-09-10 (issue #18) — the monogram redraw is rejected
+
+The "Keyhole P" monogram below (`b88fd32`, `b6a0e40`, both 2026-09-09) **is currently still what
+`PassSumo/Resources/Assets.xcassets/AppIcon.appiconset` contains**, but the owner has rejected it:
+
+> иконка которая была до вчера была нормальная кроме цвета, на хуй ее перерисовали я не понял,
+> сказано было сделать лазурью, ушел получил говно блять какое то
+
+The instruction that was actually given, before the redraw, was **"make it azure"** — a recolour
+of the mark that shipped before, `8ab8f02` (2026-08-30, the flat padlock + sumo silhouette). The
+monogram substituted a different mark entirely, which was never asked for.
+
+**What this round (issue #18) did:** recovered `8ab8f02`'s own mark-extraction pipeline from git
+(not redrawn from a description — see "Recolour candidates" below), produced colour + treatment
+variants of *that* silhouette for the owner to pick from, and rendered them at the sizes that
+actually matter (1024/128/32/16). **It deliberately did NOT touch `AppIcon.appiconset`** — the
+monogram is still the compiled asset as of this commit. Swapping it is a follow-up, once the owner
+picks a candidate from `appicon-variants-comparison.png`.
+
+## What ships right now (rejected, not yet replaced)
 
 A procedural mark, drawn from geometry in `make-appicon.py` rather than traced from source art, so
 every edge stays crisp at every exported size and a colour or proportion change is one command.
-Three concepts are implemented; **C1 is wired into the asset catalog** (issue #58):
+Three concepts are implemented; **C1 is wired into the asset catalog** (issue #58) — **and is the
+mark the owner rejected above.** Left in place, and `make-appicon.py` left as its reproducible
+generator, only because #18 defers the actual asset-catalog swap to a follow-up commit:
 
 - **C1 "Keyhole P"** — a bold monoline P whose counter *is* a keyhole: the bowl is a D, and the
   counter punched out of it is a circular bore concentric with the bowl plus a slot tapering into
@@ -165,12 +186,72 @@ sheet showing the 1024 render, every small size at **true pixel size on both a l
 background**, and nearest-neighbour zooms of 16/32/64/128px so the actual pixels can be judged.
 The old `--source` flag is gone: there is no source art to extract a mark from any more.
 
+## Recolour candidates (issue #18) — the padlock+sumo mark, restored
+
+`make-icon-variants.py` recovers `8ab8f02`'s own mark-extraction pipeline — `sample_source_colors`,
+`extract_mark_alpha`, `crop_to_content`, and the padlock-only small-size glyph
+(`draw_padlock_glyph` / `punch_keyhole`) — **copied verbatim from that commit**, not re-derived from
+a description. Run against the same source JPEG (`grok-image-b89c2f82-*.jpg`, unchanged since
+`8ab8f02`), it produces the identical silhouette `8ab8f02` shipped. Only colour changes; no shape,
+letterform, or composition edit was made.
+
+**Colour directions (two):**
+
+| Direction | Value | Relationship to palette C |
+|---|---|---|
+| `azure` | `#25C9ED` | Same token `design/BRAND.md`'s ramp already names in the "Colour" section above — measured from sibling app finsumo's icon, hue 0.530 (matches accent-300–900's 0.530–0.538). **Deliberately outside the ramp itself**: at value 0.929 it is far brighter than any ramp step (the closest, accent-300, sits at 0.784), and at saturation 0.844 it matches accent-600/700 rather than a paler step. It is the brand's own hue at a chroma/brightness combination the ramp doesn't otherwise reach — not a foreign blue, but not a ramp step either. This is the token the owner actually named ("сделать лазурью"). |
+| `steel` | `accent-400` `#3A96AB` | The brightest ramp step that is still meaningfully saturated (sat 0.661, hue 0.531). **Strictly inside the published ramp** — no departure at all. Included so the choice sheet shows what "just stay inside the ramp" looks like next to what "azure" actually looks like, since those are visibly different brightness levels, not just different hues. |
+
+**Silhouette treatments (two), full-art tiers only (≥64px, `8ab8f02`'s own cutover):**
+
+- **flat** — a single flat recolour: the same `recolor()` treatment `8ab8f02` itself used, unchanged.
+- **shaded** — a diagonal two-stop gradient across the mark's own bounding box (light corner to dark
+  corner), plus a matching tile gradient (`accent-800` → `accent-900`, the same pairing the rejected
+  monogram used for its tile). Colour distribution only; the mask is identical to the flat variant.
+
+Below `8ab8f02`'s own 64px cutover, the full padlock+sumo mark degrades into a blob — its finding,
+not a new one — so 32px and 16px always fall back to its procedural padlock-only glyph, flat-
+recoloured per colour direction. **`flat` and `shaded` are therefore pixel-identical below 64px**
+(verified: their 32px and 16px PNGs hash identically); shading is a full-art-tier enhancement only,
+exactly matching `8ab8f02`'s own precedent of tiered art.
+
+The tile stays a flat/gradient `accent-800`/`accent-900` navy in every variant — the owner never
+objected to the dark tile in either the original or the rejected monogram, only to the mark being
+redrawn, so the tile isn't a variable here. (`8ab8f02` itself derived its background from the source
+JPEG's own navy, `#313943`; palette C didn't exist yet on 2026-08-30. Using the now-published ramp's
+own darkest steps instead is a deliberate, in-scope alignment, not a silhouette change.)
+
+**What looking at the renders actually shows.** At 128px and 1024px all four variants read cleanly —
+padlock body, shackle, keyhole and the sumo figure all distinct; `shaded` adds visible material depth
+over `flat` without costing any legibility. At 32px, all four still read as a clear padlock glyph with
+an open keyhole. **At 16px the two colour directions diverge**: `azure`'s brightness (value 0.929)
+holds a visibly crisper, higher-contrast silhouette against the dark tile, while `steel`
+(`accent-400`, value 0.671) reads distinctly duller and softer at the same pixel size — still
+legible, but azure is the stronger candidate at exactly the size issue #18 says is the point.
+
+Renders (all under `design/logo/`, `AppIcon.appiconset` untouched):
+
+- `appicon-variants-comparison.png` — the side-by-side sheet: all 4 variants × 1024/128/32/16px,
+  16px/32px shown both at true pixel size and nearest-neighbour zoomed for legibility.
+- `variants/<azure|steel>-<flat|shaded>-<1024|128|32|16>.png` — the 16 individual renders.
+
+Regenerate with `python3 design/logo/make-icon-variants.py` (Pillow only, no numpy, no arguments).
+Output paths are hardcoded to `design/logo/` and `design/logo/variants/` — deliberately: this
+script has no flag that can point it at `AppIcon.appiconset`. Once the owner picks a variant, wiring
+the chosen colour/treatment into `make-appicon.py`'s own `--concept` and asset-catalog output is
+the follow-up commit.
+
 ## Superseded source art
 
-`grok-image-299e0343-*.jpg` (cartoon mascot) and `grok-image-b89c2f82-*.jpg` (flat navy padlock +
-sumo silhouette) are the generated concepts the **previous** icon was built from — the mascot too
-detailed to read below 128px, the flat mark's sumo an ambiguous blob below 512px. Retained as
-marketing/store reference art only; nothing in the build reads them.
+`grok-image-299e0343-*.jpg` (cartoon mascot) is a generated concept that was never shipped — too
+detailed to read below 128px. Retained as marketing/store reference art only; nothing in the build
+reads it.
+
+`grok-image-b89c2f82-*.jpg` (flat navy padlock + sumo silhouette) is **not superseded** — it is the
+source `8ab8f02` extracted its mark from, and `make-icon-variants.py` (above) reads it again for
+the issue #18 recolour candidates. Kept exactly as-is since `8ab8f02`; only the two smaller sizes'
+sumo silhouette is an ambiguous blob (`8ab8f02`'s own finding, which is why those two sizes use the
+procedural padlock-only glyph instead — see above).
 
 ## If you would rather generate the art than draw it
 
