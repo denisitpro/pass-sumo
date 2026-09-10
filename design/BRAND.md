@@ -151,8 +151,8 @@ here so the views never carry them as literals:
 
 **`control-disabled-opacity` = 0.4 has no counterpart in the mockup.** The mockup draws no disabled
 state, and a custom SwiftUI `ButtonStyle` gets no automatic dimming, so a disabled primary action
-would otherwise look pressable. It is the one invented value in the set; the full design system
-(issue #3) should decide it properly.
+would otherwise look pressable. It is the one invented value in the set; issue #60 decides it
+properly.
 
 ## Elevation
 
@@ -175,5 +175,6 @@ numbers rather than inventing converted ones.
 - Swift mirror: `PassSumo/Sources/UI/DesignTokens.swift` (raw values, the only file in the app
   target allowed a colour or dimension literal) and `PassSumo/Sources/UI/DesignStyles.swift` (the
   button/surface/field/row styles that consume them).
-- Still to come, deliberately not here: `design/design-system.md` — component contracts, UX rules,
-  the keyboard map, and the full accessibility pass (issue #3).
+- What consumes these values, and never restates them: `design/design-system.md` and the focused
+  documents it indexes — component contracts, screen patterns, UX rules, the keyboard map, the
+  accessibility rules and the tone of voice.

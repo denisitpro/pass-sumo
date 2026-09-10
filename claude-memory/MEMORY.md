@@ -3,3 +3,4 @@
 - [Work sequencing](pass-sumo-work-sequencing.md) — what waits on the design-system decision, and what gates autosave.
 - [Palette decision](pass-sumo-palette-decision.md) — variant C "Steel Cyan" is approved; `design/BRAND.md` owns the tokens, the ramp is light-only pending #57.
 - [List selection and the toolbar band](pass-sumo-list-and-toolbar-verified.md) — both of PR #59's pixel unknowns settled (no fix needed), the toolbar band is 52pt not 44, and how to measure UI off-screen when this Mac's session is screen-locked.
+- [Design system docs](pass-sumo-design-system-docs.md) — the spec is an index plus focused siblings under `design/`; the mockup is a palette reference, not a keyboard or component spec.

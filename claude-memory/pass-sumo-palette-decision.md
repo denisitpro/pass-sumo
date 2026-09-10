@@ -27,8 +27,9 @@ alone, and the wrong half of it is very easy to guess.
   `canvas`, 4.25:1 on `sidebar`, 4.18:1 on `sunken` — all under WCAG AA. Anything quiet on those
   grounds uses `text-2`. Same reason the status bar tints only the warning ICON with `warning`
   (4.41:1 on `sidebar`) and keeps the sentence in `text`.
-- **Still open: `design/design-system.md`** (component contracts, UX rules, keyboard map, the full
-  accessibility pass) — issue #3. #56 deliberately did not write it.
+- **The rest of the design system** (component contracts, screen patterns, UX rules, keyboard map,
+  accessibility, tone) was written separately for issue #3 — see
+  [[pass-sumo-design-system-docs]] for its shape. #56 deliberately did not write it.
 
 **How to apply:** before any UI work in this repo, read `design/BRAND.md`, then consume
 `Palette`/`Typography`/`Spacing`/`Radius`/`Metrics`/`Elevation` and the styles in
