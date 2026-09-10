@@ -7,3 +7,5 @@
 - [Strongbox is the reference](pass-sumo-strongbox-is-the-reference.md) — Strongbox is the эталон; copy its behaviour (especially biometric unlock), never its GPL code or its feature creep.
 - [Parallel sessions share one checkout](pass-sumo-parallel-sessions-share-a-checkout.md) — four sessions, one working tree; use your own worktree and verify peers' merge claims yourself.
 - [Parallel builds share log paths](pass-sumo-parallel-builds-share-log-paths.md) — a shared /tmp capture path makes one agent report another agent's test count.
+- [ASC record created](pass-sumo-asc-record-created.md) — the app record, subscription products and prices exist since 2026-09-10; what is immutable, and what was left blank on purpose.
+- [StoreKit needs the network entitlement](pass-sumo-storekit-needs-network-entitlement.md) — verified from ShotSumo; it makes the site's "cannot open a connection" claim false, and that claim is now fixed.
