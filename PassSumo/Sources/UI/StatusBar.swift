@@ -95,7 +95,7 @@ struct StatusBar: View {
 
 #Preview("Clean") {
     StatusBar(
-        databasePath: "/Users/den/Documents/Personal.kdbx",
+        databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: false,
         secondsUntilClipboardClear: nil,
         backupWarning: nil
@@ -104,7 +104,7 @@ struct StatusBar: View {
 
 #Preview("Dirty, clipboard counting down") {
     StatusBar(
-        databasePath: "/Users/den/Documents/Personal.kdbx",
+        databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: true,
         secondsUntilClipboardClear: 7,
         backupWarning: nil
@@ -113,7 +113,7 @@ struct StatusBar: View {
 
 #Preview("Saved without a backup") {
     StatusBar(
-        databasePath: "/Users/den/Documents/Personal.kdbx",
+        databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: false,
         secondsUntilClipboardClear: nil,
         backupWarning: "Saved, but no backup: couldn't back up Personal.kdbx before saving: "
