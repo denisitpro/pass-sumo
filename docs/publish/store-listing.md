@@ -21,12 +21,12 @@ Password manager for KDBX
 It names the thing the app is. ShotSumo's issue #171 is the cautionary tale here: its subtitle was
 slogans and never said the app took screenshots.
 
-## Promotional Text — 165 of 170 chars
+## Promotional Text — 162 of 170 chars
 
 Editable at any time without shipping a new version, unlike the Description.
 
 ```
-One .kdbx file you keep, in iCloud Drive or on local disk. No account, no sync service, no telemetry. Vaults from other KeePass apps open here, and yours open there.
+One .kdbx file you keep, in iCloud Drive or on local disk. No account, no sync service, no telemetry. Vaults from other KDBX apps open here, and yours open there.
 ```
 
 ## Keywords — 90 of 100 chars
@@ -38,6 +38,28 @@ keepass,vault,totp,2fa,offline,argon2,chacha20,generator,local,secure,encrypted,
 Apple indexes the app name and subtitle together with the keywords, so `password`, `manager` and
 `kdbx` are deliberately **absent** — they already appear in the name or subtitle, and repeating
 them would waste the budget.
+
+`keepass` **is an open decision, not a settled one** — see the trademark section below.
+
+## Where "KeePass" appears, and where it deliberately does not
+
+"KeePass" is someone else's mark. Guidelines 5.2.1/5.2.2 let Apple reject an app whose use of a
+third-party mark suggests endorsement or association; using it descriptively is nominative use and
+is normally fine. Issue #83 records the rule and the KeePassium precedent (its author obtained
+written permission from Dominik Reichl rather than relying on nominative use).
+
+Applied to this listing, the three uses are **not** equally safe, and they are handled differently:
+
+| Where | Status |
+|---|---|
+| App name, subtitle, icon | **Absent, on purpose.** The name is `PassSumo`, the subtitle says `Password manager for KDBX` — the format, not the product |
+| Description | `KeePass-compatible apps` — textbook nominative use, kept |
+| Promotional Text | **Was** `other KeePass apps`, changed to `other KDBX apps` on 2026-09-10. "Other KeePass apps" reads as a claim that PassSumo *is* one, which is the associative reading 5.2.2 is about — the point was interop, and `KDBX` says it without borrowing anyone's mark |
+| Keywords | `keepass` is still there, and is the **riskiest** of the three despite being invisible to users: keyword fields are metadata App Review reads, and a third party's mark in them is a known rejection class. Left in place because removing it costs real discoverability — the target user searches for exactly that word — so it is the owner's call, not a silent edit. Keywords are editable at any time |
+
+The landing pages use the word twice, both in the Terms of Use, both as "KeePass-compatible app".
+That is a legal page rather than store metadata, and both uses are descriptive; the landing's own
+marketing copy avoids the word entirely ("several other password managers").
 
 ## Description — 2,945 of 4,000 chars
 
