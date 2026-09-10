@@ -45,11 +45,11 @@ struct VaultBrowserView: View {
     /// `selectedEntryID`. Neither touches `searchText`, and that absence of a code path IS the
     /// fix — the natural "type a query, look at a result, go back, look at the next" flow needs
     /// the query to survive every entry it opens along the way. The two moments that legitimately
-    /// DO clear it are the user's own action on the search field (`.searchable`'s built-in clear
-    /// button / Escape) and a lock, which the `.empty`/`.locked` switch in `RootView` handles for
-    /// free: it unmounts this whole view, and remounting it after the next unlock starts a fresh
-    /// `@State` at `""`. Shipping this as a preference — as Strongbox once did — is explicitly
-    /// what issue #34 rejects; there is no toggle to keep in sync.
+    /// DO clear it are the user's own action on the search field (Escape — see `searchField`) and a
+    /// lock, which the `.empty`/`.locked` switch in `RootView` handles for free: it unmounts this
+    /// whole view, and remounting it after the next unlock starts a fresh `@State` at `""`.
+    /// Shipping this as a preference — as Strongbox once did — is explicitly what issue #34
+    /// rejects; there is no toggle to keep in sync.
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Whether the entry-detail inspector is shown. Seeded from `AppSettings.detailPaneVisible` on
@@ -65,8 +65,10 @@ struct VaultBrowserView: View {
     /// destroys an entry without passing through here first — see `requestDelete(_:)`.
     @State private var pendingPermanentDeletion: VaultEntry?
     @State private var isConfirmingEmptyRecycleBin = false
-    /// Drives `.searchFocused` so the Focus Search command (⌘F) has something to move focus TO —
-    /// `.searchable` presents the field but gives no other handle on its focus state.
+    /// What the Focus Search command (⌘F, declared once in `AppCommands`) moves focus TO, and what
+    /// `searchField` draws its focus ring from. It was already this view's own `@FocusState` when
+    /// the field was `.searchable`'s; replacing that with a hand-rolled field (issue #87) swapped
+    /// `.searchFocused` for a plain `.focused` and changed nothing else about the shortcut.
     @FocusState private var isSearchFocused: Bool
 
     init(
@@ -133,9 +135,6 @@ struct VaultBrowserView: View {
                 onCopyPassword: { entry in clipboard.copy(entry.password) },
                 onDeleteEntry: { id in requestDelete(id) }
             )
-            .searchable(text: $searchText, placement: .toolbar, prompt: "Search entries and passwords")
-            .searchFocused($isSearchFocused)
-            .accessibilityIdentifier("browser.search")
             .inspector(isPresented: $isDetailPaneVisible) {
                 Group {
                     if let selectedEntry {
@@ -246,6 +245,14 @@ struct VaultBrowserView: View {
         // all, so this is its only binding — same reasoning for ⌥⌘I below (issue #49): toggling the
         // inspector is this view's own `@State`, with no menu-bar equivalent to conflict with.
         .toolbar {
+            // `.principal` is the toolbar's centre on macOS, and a centred item is the whole point
+            // of issue #87 — `.searchable`'s own placements cannot reach it. Declared before the
+            // button group only for readability; the system positions it, not the declaration
+            // order.
+            ToolbarItem(placement: .principal) {
+                searchField
+            }
+
             ToolbarItemGroup {
                 Button {
                     editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
@@ -379,6 +386,65 @@ struct VaultBrowserView: View {
                 backupWarning: store.lastBackupError?.backupFailureMessage
             )
         }
+    }
+
+    /// One string, used as both the field's visible placeholder and its accessible name.
+    private static let searchPrompt = "Search entries and passwords"
+
+    /// The toolbar's search field — hand-rolled, because `.searchable`'s placement cannot be
+    /// steered to the toolbar's centre, and centred is where Strongbox (this project's behavioural
+    /// reference — see `claude-memory/pass-sumo-strongbox-is-the-reference.md`) puts it. Issue #87.
+    ///
+    /// What the system field gave for free, and what replaces it, one for one:
+    ///
+    /// - **⌘F.** Unchanged. `AppCommands` already owns the only "Focus Search" binding and raises
+    ///   `.focusSearch`, which `handle(_:)` below turns into `isSearchFocused = true`. Nothing here
+    ///   declares a shortcut — the toolbar is the pointer surface, `AppCommands` the keyboard one.
+    /// - **Escape.** `.onExitCommand`, which is AppKit's `cancelOperation(_:)` reaching the focused
+    ///   field through the responder chain — the hook Escape actually travels on in a text control,
+    ///   unlike `.onKeyPress(.escape)`.
+    /// - **Focus ring and ground.** The token layer's `.searchFieldChrome`, which composes the
+    ///   `sunken` well the design system assigns this field with the one shared `FocusRing`. No
+    ///   second ring is drawn here.
+    ///
+    /// The mockup's `.search` has no clear button and neither does this: Escape and ⌘A-delete are
+    /// the two ways out, and adding a glyph the approved design does not show is not this issue's
+    /// to decide.
+    private var searchField: some View {
+        HStack(spacing: Spacing.s3) {
+            Image(systemName: "magnifyingglass")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+
+            TextField(
+                text: $searchText,
+                // `text-2`, not the mockup's `text-3`: this placeholder sits on `sunken`, where
+                // `text-3` measures 4.18:1 and misses WCAG AA. `design/BRAND.md`'s contrast rule
+                // scopes `text-3` to `surface` only — which is why `MasterPasswordField`, whose
+                // field IS on `surface`, keeps it and this one does not.
+                prompt: Text(Self.searchPrompt).foregroundStyle(Palette.textSecondary)
+            ) {
+                // Carries the accessible name; macOS renders only `prompt`. Same reasoning as
+                // `MasterPasswordField.fieldContent` — dropping it would leave the field unnamed to
+                // VoiceOver as soon as the placeholder disappears behind typed text.
+                Text(Self.searchPrompt)
+            }
+            .textFieldStyle(.plain)
+            .font(Typography.caption)
+            .foregroundStyle(Palette.text)
+            .focused($isSearchFocused)
+            .onExitCommand {
+                searchText = ""
+                isSearchFocused = false
+            }
+            // On the field itself, not on the column. Under `.searchable` this identifier sat on
+            // the content column because the system's toolbar item did not inherit it, which is
+            // the gap `Sources/UITests/README.md` recorded; a field of our own can carry it.
+            .accessibilityIdentifier("browser.search")
+        }
+        .padding(.horizontal, Spacing.s3)
+        .frame(width: Metrics.searchFieldWidth, height: Metrics.searchFieldHeight)
+        .searchFieldChrome(isFocused: isSearchFocused)
     }
 
     /// Read through a computed property rather than `onChange(of: appEnvironment?.menuRequest)` so

@@ -41,7 +41,7 @@ final class BrowseAndSearchTests: XCTestCase {
 
     func testSearchNarrowsTheListAndClearingRestoresIt() {
         let app = launchUITestingApp(self)
-        let searchField = app.searchFields.firstMatch
+        let searchField = app.byID("browser.search")
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
 
         searchField.replaceText(SampleVault.gmailPersonalTitle)
@@ -59,7 +59,7 @@ final class BrowseAndSearchTests: XCTestCase {
     /// check of that specific behavior, not just of substring search in general.
     func testSearchFindsEntryBySubstringThatOnlyAppearsInItsPassword() {
         let app = launchUITestingApp(self)
-        let searchField = app.searchFields.firstMatch
+        let searchField = app.byID("browser.search")
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
 
         searchField.replaceText(SampleVault.passwordOnlySearchSubstring)
@@ -73,7 +73,7 @@ final class BrowseAndSearchTests: XCTestCase {
 
     func testSearchWithNoMatchesShowsEmptyStateAndDoesNotCrash() {
         let app = launchUITestingApp(self)
-        let searchField = app.searchFields.firstMatch
+        let searchField = app.byID("browser.search")
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
 
         searchField.replaceText(SampleVault.searchWithNoMatches)

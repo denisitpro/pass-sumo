@@ -51,7 +51,8 @@ bar; see `design/keyboard-map.md`.
 tone via `.toolbarBackground(_:for: .windowToolbar)`, under `.windowToolbarStyle(.unified)`. Its
 items, in order: New Entry, Delete Entry, Generator, Lock, Save, Hide/Show Detail. Each is a `Label`
 with an SF Symbol, rendered by the system — the toolbar deliberately does **not** use
-`GlyphButtonStyle`. Search is `.searchable(placement: .toolbar)`, so the field is the system's.
+`GlyphButtonStyle`. The search field is this app's own, in a separate `ToolbarItem(placement:
+.principal)` — see below.
 
 **States.** Delete Entry is disabled with no selection; Save is disabled when nothing is dirty. The
 detail toggle's label flips between "Hide Detail" and "Show Detail". Everything else is always
@@ -61,8 +62,9 @@ enabled while unlocked.
 
 - The mockup groups its buttons into two `.toolbar-group`s split by `.toolbar-sep` separators, opens
   with a sidebar-collapse glyph and a `.toolbar-title` showing the database filename, and ends with
-  the search well. The code has one flat group, no separators, no title item (the filename reaches
-  the window title through `navigationTitle` on the sidebar instead), and the system search field.
+  the search well. The code has one flat group, no separators, and no title item (the filename
+  reaches the window title through `navigationTitle` on the sidebar instead). The search well is
+  built, but centred rather than trailing — see the next section.
 - The mockup has an **Edit Entry** toolbar button. The code has none; Edit lives in the detail
   pane's header and in the Entry menu.
 - The mockup's toolbar glyphs are `.icon-btn`s with a `.is-danger` variant for delete; the code's are
@@ -71,6 +73,34 @@ enabled while unlocked.
   exist — see `design/keyboard-map.md`.
 - Settled: the `sidebar` tint does apply under the unified toolbar style. Verified empirically; see
   `claude-memory/pass-sumo-list-and-toolbar-verified.md`.
+
+## Search field (`.searchFieldChrome`)
+
+**Purpose.** Filter the entry list. One field, in the browser, and nowhere else.
+
+**Where.** Centred in the window toolbar, in its own `ToolbarItem(placement: .principal)` —
+Strongbox's position, and the owner's ask in issue #87.
+
+**Why it is hand-rolled.** `.searchable`'s placement cannot be steered to the centre: on macOS its
+`.toolbar` placement renders the system's field at the trailing edge, after every other item. So the
+field is this app's own `TextField`, and the four things the system field supplied are supplied
+explicitly instead:
+
+| Behaviour | How |
+|---|---|
+| ⌘F focuses it | unchanged — `AppCommands`' "Focus Search" raises `.focusSearch`, which the browser turns into `isSearchFocused = true`. The field declares no shortcut of its own |
+| Escape clears and unfocuses | `.onExitCommand`, i.e. AppKit's `cancelOperation(_:)` — the hook Escape actually reaches a focused text control on |
+| Focus ring | the shared `FocusRing`, through `.searchFieldChrome` — never a second ring of its own |
+| Ground | `sunken`, per the mockup's `.search` |
+
+**Anatomy.** `search-field-width` × `search-field-height`, `space-3` of horizontal padding and
+`space-3` between a leading `magnifyingglass` glyph and the field, on a `sunken` fill with a `border`
+hairline at radius `sm`. Text and placeholder are `caption`.
+
+**Where the mockup and the code differ:** the mockup colours the placeholder `text-3`; the code uses
+`text-2`, because `text-3` on `sunken` measures 4.18:1 and misses AA — the contrast rule in
+`design/BRAND.md` scopes `text-3` to `surface`. Neither has a clear (✕) button: Escape is the way
+out.
 
 ## Status bar (`.statusBarBand` + `StatusBar`)
 

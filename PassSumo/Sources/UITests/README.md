@@ -74,8 +74,9 @@ work around by adding identifiers itself:
   `detail.revealPassword` in `EntryDetailView`. Not currently a blocker for any test in this suite,
   since `edit.password`'s accessibility VALUE is read directly regardless of which mode
   (`SecureField`/`TextField`) it's rendered in.
-- `VaultBrowserView`'s `.searchable` search field: the `"browser.search"` identifier is set on the
-  content column (`EntryListView` + the `.searchable` modifier), not on the resulting toolbar
-  search control itself — SwiftUI's `.searchable` toolbar item doesn't appear to inherit it. Tests
-  here use `app.searchFields.firstMatch` instead, which works but means `"browser.search"` isn't
-  actually reachable as documented.
+
+**Closed since this list was written:** the search field. It used to be `.searchable`'s, whose toolbar
+item did not inherit the `"browser.search"` identifier set on the content column, so tests reached
+it through `app.searchFields.firstMatch`. Issue #87 replaced it with a field of this app's own in a
+centred toolbar item, which carries the identifier directly — the tests here look it up by id like
+everything else, and there is no longer an `XCUIElement` of type `searchField` to match.

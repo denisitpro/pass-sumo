@@ -1,6 +1,6 @@
 # Screen patterns
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 How the real screens are assembled, and the empty and error states each one actually has.
 Components are in `design/components-*.md`; token values in `design/BRAND.md`.
@@ -97,11 +97,12 @@ system-provided toggle, a place to hang it in the toolbar, and a shortcut (issue
 
 - **Sidebar** — "All Entries" plus the group outline, on `sidebar`. `List(selection:)` with
   `.listStyle(.sidebar)` and the scroll background hidden so the band's tone shows.
-- **List** — the filtered entries on `surface`, `.listStyle(.plain)`. The search field is
-  `.searchable(placement: .toolbar)`.
+- **List** — the filtered entries on `surface`, `.listStyle(.plain)`. The search field is not this
+  column's: it is a centred toolbar item of the app's own (see `design/components-chrome.md`).
 - **Inspector** — the detail pane on `surface`: a header (title in `title3` plus an Edit secondary
   button), the five standard field rows, the TOTP well, then Custom Fields, Attachments and Metadata,
-  each behind a section heading — a `captionMedium` in `text-2` over a `border` hairline.
+  each behind a section heading — a `captionMedium` in `text-2` over a `border` hairline. Its width
+  range is 400 / 480 / 640 (issue #86); the arithmetic behind those three is at the call site.
 - **Status bar** — a bottom `safeAreaInset`.
 
 **Filtering.** The group filter and the search query compose as an **intersection**, never
@@ -116,9 +117,12 @@ in the inspector. All three are `ContentUnavailableView`s.
 failed attachment export to a `danger` line inside the Attachments section, and a lock that arrives
 mid-render degrades to an empty vault rather than a crash.
 
-**Selection coupling.** The browser owns `selectedGroupID`, `selectedEntryID` and `searchText`
+**Selection coupling.** The browser owns `selectedGroup`, `selectedEntryID` and `searchText`
 because a group change has to clear the entry selection; a selection that no longer appears in the
-visible list is cleared, so the inspector never shows an entry the user cannot see selected.
+visible list is cleared, so the inspector never shows an entry the user cannot see selected. The
+sidebar selection is a `GroupSelection?`, where "All Entries" is a case of its own rather than the
+`nil` it used to be — `nil` is what a macOS `List(selection:)` writes for "deselected", and sharing
+one value between the two meanings is what made "All Entries" unpickable (issue #85).
 
 ## Generator sheet
 
