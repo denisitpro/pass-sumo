@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -103,6 +104,54 @@ final class AppSettings {
     }
 }
 
+// MARK: - Version info
+
+/// The version/build/revision/OS line shown, and made copyable, by the Settings "About" section
+/// (issue #51) — assembled for pasting whole into a bug report.
+///
+/// Built from explicit inputs rather than reading `Bundle.main`/`ProcessInfo` inside the view, the
+/// same seam-over-hard-wiring rule the rest of this codebase follows (repo CLAUDE.md's
+/// dependency-inversion rule) — `AppVersionInfoTests` exercises the assembly, including a plist
+/// missing the git-stamping keys entirely, without touching the real bundle.
+///
+/// This is **data**, never UI copy: issue #46's localization pass must never reach `summary` or
+/// reformat any part of it — a bug report needs the exact byte-for-byte string regardless of the
+/// reporter's locale.
+struct AppVersionInfo {
+    let shortVersion: String
+    let build: String
+    let gitRevision: String
+    let osVersion: String
+
+    /// project.yml's Info.plist template placeholders (see its "Stamp Info.plist from git"
+    /// `preBuildScripts` phase) — used here too, so a plist missing a key shows the same value a
+    /// developer already sees in that template rather than inventing a different "unknown" marker.
+    static let unknownShortVersion = "0.0.0"
+    static let unknownBuild = "1"
+    static let unknownGitRevision = "dev"
+
+    /// Reads the three git-stamped `Info.plist` keys plus the running macOS version.
+    /// `infoDictionary`/`osVersion` are injectable so tests can supply a dictionary missing one or
+    /// all of the git-stamping keys without touching `Bundle.main`.
+    static func current(
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
+        osVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion
+    ) -> AppVersionInfo {
+        AppVersionInfo(
+            shortVersion: infoDictionary?["CFBundleShortVersionString"] as? String ?? unknownShortVersion,
+            build: infoDictionary?["CFBundleVersion"] as? String ?? unknownBuild,
+            gitRevision: infoDictionary?["GitRevision"] as? String ?? unknownGitRevision,
+            // Plain integer interpolation, never a number formatter — see the type's doc comment.
+            osVersion: "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
+        )
+    }
+
+    /// The exact bug-report string. Never localized, never run through a locale-aware formatter.
+    var summary: String {
+        "PassSumo \(shortVersion) (build \(build)) · \(gitRevision) · macOS \(osVersion)"
+    }
+}
+
 // MARK: - View
 
 /// The one Settings window. Few controls, no clutter — this is the anti-Strongbox screen the repo's
@@ -116,6 +165,12 @@ struct SettingsView: View {
     /// `BiometricUnlock`/the keychain are for) nor observed by anything outside this view.
     @State private var isTouchIDBusy = false
     @State private var touchIDError: String?
+
+    /// Whether the About row's label is currently showing "Copied to clipboard" instead of the
+    /// version string — local, transient UI state, reset by `copyVersionInfo`'s own timer.
+    @State private var didCopyVersionInfo = false
+
+    private let versionInfo = AppVersionInfo.current()
 
     var body: some View {
         Form {
@@ -163,6 +218,19 @@ struct SettingsView: View {
             Section {
                 Toggle("Show password strength", isOn: $environment.settings.showPasswordStrength)
                     .accessibilityIdentifier("settings.showPasswordStrength")
+            }
+
+            Section("About") {
+                Button {
+                    copyVersionInfo()
+                } label: {
+                    Text(didCopyVersionInfo ? "Copied to clipboard" : versionInfo.summary)
+                        .font(Typography.monoCaption)
+                        .contentTransition(.opacity)
+                }
+                .buttonStyle(.plain)
+                .help("Click to copy version")
+                .accessibilityIdentifier("settings.about.version")
             }
         }
         .formStyle(.grouped)
@@ -273,6 +341,26 @@ struct SettingsView: View {
             touchIDError = error.userMessage
         } catch {
             touchIDError = error.localizedDescription
+        }
+    }
+
+    // MARK: - About
+
+    /// Copies `versionInfo.summary` and swaps the row's label to "Copied to clipboard" for 1.4s —
+    /// ShotSumo's exact pattern (issue #51): no toast, no sound, no checkmark, just the label
+    /// itself changing under a `.contentTransition(.opacity)`.
+    private func copyVersionInfo() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(versionInfo.summary, forType: .string)
+
+        withAnimation {
+            didCopyVersionInfo = true
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(1.4))
+            withAnimation {
+                didCopyVersionInfo = false
+            }
         }
     }
 }
