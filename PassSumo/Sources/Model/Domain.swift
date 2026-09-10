@@ -20,6 +20,18 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     var notes: String
     var otpAuthURL: String?            // raw `otpauth://...` taken from the "otp" string field
     var customFields: [String: String] // all other string fields, minus the 5 standard ones + otp
+    /// Index into KeePass's built-in icon set (0…68), stored verbatim as the file's `IconID`.
+    ///
+    /// Modelled as the raw integer rather than as an app-side enum because the integer is the
+    /// interop contract: every other client reads this number and draws its own artwork for it.
+    /// What pass-sumo draws for a given number is `StandardIconCatalog`'s business, not this
+    /// type's — and a value outside 0…68 (another client's, or a future KeePass release's) must
+    /// still round-trip untouched rather than be normalised away by an enum that cannot represent
+    /// it.
+    ///
+    /// `customIconUUID`, KDBX's other icon channel, is deliberately still unmodelled and survives
+    /// only through `KDBXContentMerge`'s preserved original — see `Vault`'s doc comment.
+    var iconID: UInt32 = VaultEntry.defaultIconID
     /// File attachments on this entry, as METADATA ONLY — the bytes live once in `Vault.blobs`
     /// and are reached through `Vault.bytes(for:)`. See `VaultAttachment` for why.
     var attachments: [VaultAttachment] = []
@@ -42,6 +54,16 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     /// rest of `entry.history` only reaches the file through `KDBXContentMerge`'s preserved
     /// original rather than through anything `Vault` models live.
     var passwordLastChanged: Date? = nil
+}
+
+extension VaultEntry {
+    /// What an entry whose icon was never chosen carries: KeePass's icon 0, the key.
+    ///
+    /// Not an assumption — every `.kdbx` under `Sources/UnitTests/Fixtures` was exported to XML
+    /// and checked: every entry KeePassXC wrote without an explicit icon has `<IconID>0`. There is
+    /// no "absent" spelling to distinguish from it, so 0 is both "default" and "the key icon", and
+    /// nothing downstream may treat it as "unset".
+    static let defaultIconID: UInt32 = 0
 }
 
 // MARK: - Attachments
@@ -265,16 +287,34 @@ struct VaultGroup: Identifiable, Sendable, Equatable {
     var id: UUID
     var parentID: UUID?
     var name: String
+    /// Index into KeePass's built-in icon set, stored verbatim as the file's `IconID`. Same
+    /// contract and the same reasoning as `VaultEntry.iconID`; only the default differs.
+    var iconID: UInt32 = VaultGroup.defaultIconID
+}
+
+extension VaultGroup {
+    /// What a folder whose icon was never chosen carries: KeePass's icon 48, the folder.
+    ///
+    /// Verified the same way as `VaultEntry.defaultIconID` — every group in every fixture that has
+    /// no icon of its own, the KDBX root group included, has `<IconID>48`.
+    static let defaultIconID: UInt32 = 48
 }
 
 /// Fully decrypted database content — everything the app can show or edit. Deliberately does NOT
-/// model anything a KDBX file can carry that pass-sumo has no UI for yet (entry history, custom
-/// icons, unknown header/XML data); that unmodeled remainder is the codec's job to round-trip via
-/// `DecodedVault.opaque`, not this type's job to represent. The one deliberate exception is
-/// `VaultEntry.passwordLastChanged`: history itself still isn't modeled (no list of past
-/// snapshots exists here), but the single date derived from walking it is, because issue #33
-/// needs a sort key and computing that key once at decode time is what keeps the entry list from
-/// re-decrypting history on every render.
+/// model anything a KDBX file can carry that pass-sumo has no UI for yet (entry history,
+/// user-supplied custom icons, unknown header/XML data); that unmodeled remainder is the codec's
+/// job to round-trip via `DecodedVault.opaque`, not this type's job to represent. Two deliberate
+/// exceptions:
+///
+/// - `VaultEntry.passwordLastChanged`: history itself still isn't modeled (no list of past
+///   snapshots exists here), but the single date derived from walking it is, because issue #33
+///   needs a sort key and computing that key once at decode time is what keeps the entry list from
+///   re-decrypting history on every render.
+/// - `iconID` on entries and groups (issue #89): KDBX's *built-in* icon index is modeled and
+///   written back, because the app has to be able to change it. KDBX's *other* icon channel,
+///   `CustomIconUUID` plus the `Meta/CustomIcons` image pool, is still unmodeled and still
+///   round-trips opaquely — writing `iconID` must never disturb it, which is what
+///   `KDBXCodecTests.testRoundTripPreservesCustomIconWhenIconIDIsChanged` exists to prove.
 struct Vault: Sendable, Equatable {
     var name: String                          // Meta/DatabaseName
     var groups: [VaultGroup]
@@ -521,7 +561,17 @@ extension Vault {
         if let existing = recycleBin.groupID, groups.contains(where: { $0.id == existing }) {
             return existing
         }
-        let bin = VaultGroup(id: UUID(), parentID: nil, name: Self.recycleBinGroupName)
+        // The icon is part of what makes this folder read as THE bin in other clients, exactly
+        // like the name below — and now that `iconID` is modeled, it has to be set HERE. The codec
+        // also stamps it when it mints the group (`KDBXContentMerge.makeGroup`), but the merge
+        // then writes the model's `iconID` over whatever it stamped; a bin created with the
+        // default folder icon would arrive in KeePassXC as an ordinary folder.
+        let bin = VaultGroup(
+            id: UUID(),
+            parentID: nil,
+            name: Self.recycleBinGroupName,
+            iconID: KDBXRecycleBin.iconID
+        )
         groups.append(bin)
         recycleBin.groupID = bin.id
         recycleBin.isEnabled = true
