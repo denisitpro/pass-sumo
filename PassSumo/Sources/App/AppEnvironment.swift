@@ -22,6 +22,14 @@ final class AppEnvironment {
     let generator: PasswordGenerator
     let codec: any VaultCodec
     let biometrics: BiometricUnlock
+    /// Whether `UnlockView` may raise the Touch ID sheet on its own, and whether it already has.
+    ///
+    /// Owned here rather than by the view because the one bit of state it holds has to survive the
+    /// `.locked → .unlocking → .locked` round-trip a wrong master password causes, which destroys
+    /// `UnlockView` and every `@State` on it — the type's own doc comment has the full account.
+    /// `let`, and not `@Observable`-observed: nothing renders from it, it is consulted from a
+    /// `.task` and re-armed from `PassSumoApp`'s state mirror.
+    let automaticBiometricUnlock: AutomaticBiometricUnlockPolicy
     // `var`, not `let`: `SettingsView` reaches it as `$environment.settings.autoLockTimeout` via
     // `@Bindable`, and a keypath-derived `Binding` requires every component along the path to be
     // settable — even though `settings` itself is never reassigned, and even though it is a
@@ -82,6 +90,7 @@ final class AppEnvironment {
         generator: PasswordGenerator,
         codec: any VaultCodec,
         biometrics: BiometricUnlock,
+        automaticBiometricUnlock: AutomaticBiometricUnlockPolicy,
         fileAccess: any VaultFileAccess,
         settings: AppSettings,
         isUITesting: Bool
@@ -92,6 +101,7 @@ final class AppEnvironment {
         self.generator = generator
         self.codec = codec
         self.biometrics = biometrics
+        self.automaticBiometricUnlock = automaticBiometricUnlock
         self.fileAccess = fileAccess
         self.settings = settings
         self.isUITesting = isUITesting
@@ -121,6 +131,7 @@ final class AppEnvironment {
             generator: PasswordGenerator(),
             codec: codec,
             biometrics: BiometricUnlock(),
+            automaticBiometricUnlock: AutomaticBiometricUnlockPolicy(),
             fileAccess: fileAccess,
             settings: settings,
             isUITesting: false
@@ -171,6 +182,11 @@ final class AppEnvironment {
             generator: PasswordGenerator(),
             codec: codec,
             biometrics: biometrics,
+            // A real policy object even here. It costs nothing, and under `-ui-testing 1` the
+            // `NoBiometricsSecretStore` above reports nothing enrolled for anything, so
+            // `claimAutomaticAttempt` refuses on `isEnrolledForThisVault` and no e2e run can ever
+            // reach a Touch ID sheet through it.
+            automaticBiometricUnlock: AutomaticBiometricUnlockPolicy(),
             fileAccess: fileAccess,
             settings: settings,
             isUITesting: true

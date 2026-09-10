@@ -56,6 +56,12 @@ struct PassSumoApp: App {
                     switch newState {
                     case .unlocked:
                         environment.autoLock.vaultDidUnlock()
+                        // The next lock gets a fresh automatic Touch ID attempt. Re-armed HERE,
+                        // on a genuine unlock, and deliberately not when `UnlockView` appears:
+                        // that view is rebuilt every time a wrong password bounces the state
+                        // through `.unlocking`, and re-arming there would put the sheet back up
+                        // on every typo (see `AutomaticBiometricUnlockPolicy`).
+                        environment.automaticBiometricUnlock.rearm()
                         if let url = environment.store.currentURL {
                             environment.rememberRecentDatabase(url)
                         }

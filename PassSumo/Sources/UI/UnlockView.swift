@@ -25,6 +25,21 @@ struct UnlockView: View {
     let environment: AppEnvironment
     let url: URL
 
+    /// Whether this window is the active one, and by extension whether the app is active at all:
+    /// SwiftUI reports `false` for every window of an inactive app, and for a window of an active
+    /// app that is not the front one.
+    ///
+    /// **This is as close to "the app is active and the vault window is key" as SwiftUI states
+    /// it, and the gap is worth naming.** `appearsActive` is about the window that *appears*
+    /// active — AppKit's main window — which is not literally `NSWindow.isKeyWindow`; the two
+    /// diverge when a panel or a sheet holds key while the document window stays main. That
+    /// divergence cannot matter here, because this view IS the whole window's content and there is
+    /// nothing else in the app that could hold key over it. The alternative, reaching for
+    /// `NSApp.keyWindow` from a view body, would be both untestable and a guess about which window
+    /// is ours. (`controlActiveState == .key` says key literally, and is deprecated in favour of
+    /// exactly this property.)
+    @Environment(\.appearsActive) private var appearsActive
+
     @State private var password = ""
     @State private var biometricFailure: String?
     /// Resolved once via `.task`, not recomputed on every render: `AppEnvironment.biometricsIdentifier`
@@ -69,6 +84,29 @@ struct UnlockView: View {
     private var canOfferEnrollment: Bool {
         guard BiometricUnlock.availabilityError() == nil, let identifier else { return false }
         return !environment.biometrics.isEnabled(for: identifier)
+    }
+
+    /// Why there is no Touch ID affordance on this screen at all, when that is worth saying.
+    ///
+    /// Without this, a Mac with no sensor (or no enrolled finger) simply shows neither the
+    /// "Unlock with Touch ID" button nor the "Remember with Touch ID" checkbox, and says nothing
+    /// — the explanation existed only in Settings, which is not where anyone looks when a thing
+    /// they expected is merely absent.
+    ///
+    /// **Only the two permanent-state cases**, per issue #69. `.biometricsLockedOut` also hides
+    /// the affordance, and is deliberately not reported here: it is transient (one login-password
+    /// unlock clears it), it is not a property of this Mac, and widening this to "any availability
+    /// error" would put a scary sentence on the unlock screen for a condition that fixes itself.
+    /// Every other case of `BiometricUnlockError` describes an *attempt*, not the absence of the
+    /// affordance, and reaches the user through `biometricFailure` instead.
+    private var biometricsUnavailableNote: String? {
+        guard let error = BiometricUnlock.availabilityError() else { return nil }
+        switch error {
+        case .biometricsUnavailable, .biometricsNotEnrolled:
+            return error.userMessage
+        default:
+            return nil
+        }
     }
 
     /// The content column's width. A minimum with no maximum (the pre-#32 behaviour) let a wide
@@ -167,6 +205,15 @@ struct UnlockView: View {
                 .buttonStyle(.tokenSecondary)
                 .disabled(isUnlocking)
                 .accessibilityIdentifier("unlock.biometric")
+            } else if let note = biometricsUnavailableNote {
+                // Tertiary and quiet, not `danger`: nothing has failed and there is nothing to
+                // retry — this is a standing fact about the Mac, in the space where the Touch ID
+                // button would otherwise be.
+                Text(note)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("unlock.biometricUnavailable")
             }
         }
         .padding(Spacing.s9)
@@ -175,7 +222,47 @@ struct UnlockView: View {
         .cardSurface()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.canvas)
-        .task { identifier = environment.biometricsIdentifier(for: url) }
+        .task {
+            // Held in a local as well as in `@State`: the automatic attempt below needs the value
+            // resolved by THIS call, not whatever a re-render might have left in the property.
+            let resolved = environment.biometricsIdentifier(for: url)
+            identifier = resolved
+            await attemptAutomaticBiometricUnlockIfAllowed(identifier: resolved)
+        }
+        // The app can be launched, or brought to this screen, while it is not the active app —
+        // and the policy refuses in that case WITHOUT spending the session's one attempt (see
+        // `claimAutomaticAttempt`). Asking again the moment the window becomes active is what
+        // turns that refusal into "not yet" instead of "never", and is also the cold-launch path
+        // that matters most: `.task` above can run before the window has finished becoming
+        // active. It cannot double-prompt — the first call that is allowed to prompt claims the
+        // attempt, and every later call is refused on that.
+        .onChange(of: appearsActive) {
+            Task { await attemptAutomaticBiometricUnlockIfAllowed(identifier: identifier) }
+        }
+    }
+
+    /// The whole of issue #69's headline behaviour: present a locked, enrolled database and the
+    /// system Touch ID sheet comes up on its own, with no click.
+    ///
+    /// This function deliberately contains no policy. It gathers the four facts the decision needs
+    /// and hands them to `AutomaticBiometricUnlockPolicy`, which is where the rules live and where
+    /// they are unit-tested — this Mac has no Touch ID sensor, so a rule expressed inline here
+    /// would be a rule nothing on this machine could check.
+    private func attemptAutomaticBiometricUnlockIfAllowed(identifier: VaultKeyIdentifier?) async {
+        guard let identifier else { return }
+        let conditions = AutomaticBiometricUnlockPolicy.Conditions(
+            isEnrolledForThisVault: environment.biometrics.isEnabled(for: identifier),
+            availabilityError: BiometricUnlock.availabilityError(),
+            isWindowActive: appearsActive,
+            lastLockReason: environment.autoLock.lastLockReason
+        )
+        guard environment.automaticBiometricUnlock.claimAutomaticAttempt(conditions) else { return }
+
+        // Exactly the manual button's code path, not a variant of it. Whatever happens next —
+        // success, a cancel, a wrong finger, an invalidated keychain item and its recovery — is
+        // already handled there, and the button stays on screen as the way back in, which is what
+        // makes a cancelled automatic prompt a dead end rather than a loop.
+        await unlockWithBiometrics()
     }
 
     private func submit() async {
