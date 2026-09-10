@@ -227,6 +227,11 @@ enum Metrics {
     static let heroGlyphSize: CGFloat = 40
     /// The label column of a label/value field row.
     static let fieldLabelWidth: CGFloat = 90
+    /// The toolbar's search well — the mockup's `.search`. Fixed rather than flexible: it is
+    /// centred in the toolbar (issue #87), and a field that grew with the window would not stay
+    /// centred against the same amount of chrome on each side.
+    static let searchFieldWidth: CGFloat = 252
+    static let searchFieldHeight: CGFloat = 24
 
     /// How far a disabled control is faded.
     ///

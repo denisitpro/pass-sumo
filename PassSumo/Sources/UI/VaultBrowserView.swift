@@ -12,9 +12,9 @@ import SwiftUI
 /// system-provided show/hide for free, plus a natural place to hang a toolbar toggle and a
 /// keyboard shortcut. `isDetailPaneVisible` is that binding.
 ///
-/// Owns ALL cross-column state itself (`selectedGroupID`, `selectedEntryID`, `searchText`) rather
+/// Owns ALL cross-column state itself (`selectedGroup`, `selectedEntryID`, `searchText`) rather
 /// than letting each column keep its own — a group change has to clear which entry is selected
-/// (see the `.onChange(of: selectedGroupID)` below), and that coordination only works if one view
+/// (see the `.onChange(of: selectedGroup)` below), and that coordination only works if one view
 /// is the single source of truth for both.
 struct VaultBrowserView: View {
     let store: VaultStore
@@ -34,18 +34,22 @@ struct VaultBrowserView: View {
     /// which a preview has no menu bar for anyway.
     @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
 
-    @State private var selectedGroupID: UUID?
+    /// Optional because that is what a macOS `List(selection:)` binds to — `nil` is its "nothing is
+    /// selected", which ⌘-clicking the selected row produces. It starts at `.allEntries` so the
+    /// screen opens on the unfiltered list with that row visibly picked; see `GroupSelection` for
+    /// why "All Entries" is a case of its own rather than the `nil` it used to be (issue #85).
+    @State private var selectedGroup: GroupSelection? = .allEntries
     @State private var selectedEntryID: UUID?
     /// **Issue #34: nothing in this file may clear this as a side effect of opening an entry.**
     /// `openForEdit(_:)` only ever assigns `editingEntry`; selecting a row only ever assigns
     /// `selectedEntryID`. Neither touches `searchText`, and that absence of a code path IS the
     /// fix — the natural "type a query, look at a result, go back, look at the next" flow needs
     /// the query to survive every entry it opens along the way. The two moments that legitimately
-    /// DO clear it are the user's own action on the search field (`.searchable`'s built-in clear
-    /// button / Escape) and a lock, which the `.empty`/`.locked` switch in `RootView` handles for
-    /// free: it unmounts this whole view, and remounting it after the next unlock starts a fresh
-    /// `@State` at `""`. Shipping this as a preference — as Strongbox once did — is explicitly
-    /// what issue #34 rejects; there is no toggle to keep in sync.
+    /// DO clear it are the user's own action on the search field (Escape — see `searchField`) and a
+    /// lock, which the `.empty`/`.locked` switch in `RootView` handles for free: it unmounts this
+    /// whole view, and remounting it after the next unlock starts a fresh `@State` at `""`.
+    /// Shipping this as a preference — as Strongbox once did — is explicitly what issue #34
+    /// rejects; there is no toggle to keep in sync.
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Whether the entry-detail inspector is shown. Seeded from `AppSettings.detailPaneVisible` on
@@ -60,9 +64,21 @@ struct VaultBrowserView: View {
     /// The entry a permanent delete has been requested for, held until the user confirms. Nothing
     /// destroys an entry without passing through here first — see `requestDelete(_:)`.
     @State private var pendingPermanentDeletion: VaultEntry?
+    /// The folder a permanent delete has been requested for. Its own property rather than one
+    /// shared with the entry above: the two dialogs say different things — a folder takes its whole
+    /// subtree with it — and a single property holding either would turn "which am I confirming"
+    /// into a question the view has to answer at render time.
+    @State private var pendingPermanentGroupDeletion: VaultGroup?
     @State private var isConfirmingEmptyRecycleBin = false
-    /// Drives `.searchFocused` so the Focus Search command (⌘F) has something to move focus TO —
-    /// `.searchable` presents the field but gives no other handle on its focus state.
+    @State private var groupNamePrompt: GroupNamePrompt?
+    /// The text in the group-name prompt. Seeded when the prompt opens — empty for a new folder,
+    /// the current name for a rename — rather than being derived, because a `TextField` needs
+    /// somewhere of its own to put what the user types.
+    @State private var groupNameDraft = ""
+    /// What the Focus Search command (⌘F, declared once in `AppCommands`) moves focus TO, and what
+    /// `searchField` draws its focus ring from. It was already this view's own `@FocusState` when
+    /// the field was `.searchable`'s; replacing that with a hand-rolled field (issue #87) swapped
+    /// `.searchFocused` for a plain `.focused` and changed nothing else about the shortcut.
     @FocusState private var isSearchFocused: Bool
 
     init(
@@ -86,6 +102,30 @@ struct VaultBrowserView: View {
         var id: UUID { entry.id }
     }
 
+    /// What the group-name prompt is naming: a new folder under `parentID`, or an existing one.
+    ///
+    /// One alert serves both, because they ask the same question through the same single control.
+    /// Two alerts differing only in a title string is two places for the create path and the rename
+    /// path to drift apart.
+    private enum GroupNamePrompt: Equatable {
+        case create(parentID: UUID?)
+        case rename(UUID)
+
+        var title: String {
+            switch self {
+            case .create: return "New Group"
+            case .rename: return "Rename Group"
+            }
+        }
+
+        var confirmTitle: String {
+            switch self {
+            case .create: return "Create"
+            case .rename: return "Rename"
+            }
+        }
+    }
+
     /// The vault to render. Empty when the store isn't `.unlocked` — this view is only ever
     /// SHOWN while unlocked (that's the app shell's job to arrange), but reading `store.state`
     /// defensively here rather than force-unwrapping means a lock arriving mid-render (auto-lock,
@@ -100,59 +140,106 @@ struct VaultBrowserView: View {
         return true
     }
 
+    /// The selection the rest of the screen filters by. An empty sidebar selection resolves to
+    /// "show everything" — that is what the list showed before anything was picked, and it is the
+    /// only answer that cannot leave the user staring at a column filtered to nothing they chose.
+    private var groupSelection: GroupSelection { selectedGroup ?? .allEntries }
+
     private var selectedEntry: VaultEntry? {
         guard let selectedEntryID else { return nil }
         return vault.entries.first { $0.id == selectedEntryID }
     }
 
-    var body: some View {
+    /// The trailing column: the entry list, with the entry detail hanging off it as an inspector.
+    ///
+    /// A named member rather than written inline in `body`'s `detail:` closure, and not as a style
+    /// preference: `body` is long enough that the Swift type-checker gives up on the whole
+    /// expression ("unable to type-check this expression in reasonable time") once anything more is
+    /// added to it. Splitting a chunk out gives the solver a boundary it can finish inside.
+    private var detailColumn: some View {
+        EntryListView(
+            vault: vault,
+            selection: groupSelection,
+            searchText: $searchText,
+            selectedEntryID: $selectedEntryID,
+            onOpenEntry: { id in openForEdit(id) },
+            onCopyUsername: { entry in clipboard.copy(entry.username) },
+            onCopyPassword: { entry in clipboard.copy(entry.password) },
+            onDeleteEntry: { id in requestDelete(id) }
+        )
+        .inspector(isPresented: $isDetailPaneVisible) {
+            Group {
+                if let selectedEntry {
+                    EntryDetailView(
+                        entry: selectedEntry,
+                        clipboard: clipboard,
+                        isLocked: isLocked,
+                        // The one capability the detail view needs from the vault, handed over
+                        // as a function instead of the vault itself — see its
+                        // `resolveAttachment`.
+                        resolveAttachment: { vault.bytes(for: $0) },
+                        onEdit: { openForEdit(selectedEntry.id) }
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "No Entry Selected",
+                        systemImage: "lock.doc",
+                        description: Text("Choose an entry from the list.")
+                    )
+                    .foregroundStyle(Palette.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Palette.surface)
+            .accessibilityIdentifier("browser.detail")
+            // On the inspector's CONTENT, which is where this modifier is read from — not on
+            // the view carrying `.inspector` itself.
+            //
+            // Without a width range the inspector sits at SwiftUI's unconfigured default and
+            // its divider does not drag at all (issue #86). The three numbers are measured
+            // against what `EntryDetailView` actually renders, not copied from another app:
+            //
+            // **min 400.** The pane's one row that cannot reflow is `TOTPView`: an `HStack` of
+            // fixed-size parts with no flexible member. At the widest code an `otpauth://` URI
+            // may ask for (8 digits) it measures 343pt — "One-time" 53 + `s5` + the code 111
+            // plus 18 of `tracking` + `s5` + the 40pt progress bar + `s5` + the 24pt seconds
+            // slot + `s5` + a 24pt copy glyph + `s5` of well padding each side — and the pane
+            // adds `s7` of its own padding on both sides, putting the clipping floor at 383.
+            // 400 is that floor rounded up. Everything else reflows: a `FieldRow` value wraps,
+            // an attachment preview is capped at 220, the header title truncates to one line.
+            //
+            // **ideal 480.** The width `EntryDetailView`'s own `#Preview` frames at, i.e. the
+            // one this layout was eyeballed against. It is also where the Metadata section's
+            // KDBX entry UUID — 289pt of 13pt monospace, the longest fixed string in the pane
+            // — first fits beside its 90pt label on one line (431pt needed).
+            //
+            // **max 640.** Past this the extra width reaches only wrapped prose: at 640 a
+            // Notes value already runs about 81 characters per line, which is past a
+            // comfortable measure rather than short of one. Everything else — labels, glyphs,
+            // the preview cap — is fixed and stops using the room long before.
+            .inspectorColumnWidth(min: 400, ideal: 480, max: 640)
+        }
+    }
+
+    /// The screen itself — the two columns, their toolbar, and the state each column has to keep in
+    /// step with the other. Everything this screen *presents* on top of it (the edit sheet, the
+    /// generator, the confirmations, the status bar) is chained onto it in `body`.
+    ///
+    /// The split is not decorative: written as one chain, `body` is past what the Swift type-checker
+    /// will finish ("unable to type-check this expression in reasonable time"), and it fails on
+    /// whichever link it happened to give up inside rather than on the one just added. Keep the two
+    /// halves roughly balanced when adding to either.
+    private var browserContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             GroupSidebar(
                 vault: vault,
-                selectedGroupID: $selectedGroupID,
-                onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true }
+                selection: $selectedGroup,
+                onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true },
+                onGroupCommand: { handle($0) }
             )
             .accessibilityIdentifier("browser.sidebar")
         } detail: {
-            EntryListView(
-                vault: vault,
-                groupID: selectedGroupID,
-                searchText: $searchText,
-                selectedEntryID: $selectedEntryID,
-                onOpenEntry: { id in openForEdit(id) },
-                onCopyUsername: { entry in clipboard.copy(entry.username) },
-                onCopyPassword: { entry in clipboard.copy(entry.password) },
-                onDeleteEntry: { id in requestDelete(id) }
-            )
-            .searchable(text: $searchText, placement: .toolbar, prompt: "Search entries and passwords")
-            .searchFocused($isSearchFocused)
-            .accessibilityIdentifier("browser.search")
-            .inspector(isPresented: $isDetailPaneVisible) {
-                Group {
-                    if let selectedEntry {
-                        EntryDetailView(
-                            entry: selectedEntry,
-                            clipboard: clipboard,
-                            isLocked: isLocked,
-                            // The one capability the detail view needs from the vault, handed over
-                            // as a function instead of the vault itself — see its
-                            // `resolveAttachment`.
-                            resolveAttachment: { vault.bytes(for: $0) },
-                            onEdit: { openForEdit(selectedEntry.id) }
-                        )
-                    } else {
-                        ContentUnavailableView(
-                            "No Entry Selected",
-                            systemImage: "lock.doc",
-                            description: Text("Choose an entry from the list.")
-                        )
-                        .foregroundStyle(Palette.textSecondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Palette.surface)
-                .accessibilityIdentifier("browser.detail")
-            }
+            detailColumn
         }
         // The toolbar shares the sidebar's tone, as the mockup's `.toolbar` does — otherwise the
         // window's chrome is the one band still painted by the system.
@@ -163,7 +250,7 @@ struct VaultBrowserView: View {
         .onChange(of: isDetailPaneVisible) { _, newValue in
             appEnvironment?.settings.detailPaneVisible = newValue
         }
-        .onChange(of: selectedGroupID) {
+        .onChange(of: selectedGroup) {
             // Switching groups can leave `selectedEntryID` pointing at an entry that's no longer
             // in view (or, for "All Entries", pointing at nothing new) — clear it so the detail
             // column never shows an entry the list column doesn't have selected any more.
@@ -202,6 +289,17 @@ struct VaultBrowserView: View {
                 self.selectedEntryID = nil
             }
         }
+        .onChange(of: vault.groups.count) {
+            // A folder can vanish out from under the selection two ways — permanently deleted, or
+            // emptied away with the recycle bin it was sitting in — and a selection pointing at a
+            // group that no longer exists filters the list column to nothing, with no row
+            // highlighted to explain why. Same shape as the entry cleanup above, and for the same
+            // reason: the code that removed the group cannot reach this view's `@State`.
+            if let id = selectedGroup?.containingGroupID,
+               !vault.groups.contains(where: { $0.id == id }) {
+                selectedGroup = .allEntries
+            }
+        }
         .onChange(of: menuRequest) { _, request in handle(request) }
         // These buttons carry NO `.keyboardShortcut` except the generator's and the detail-pane
         // toggle's. Every other shortcut they used to declare is also declared by `AppCommands` —
@@ -211,6 +309,14 @@ struct VaultBrowserView: View {
         // all, so this is its only binding — same reasoning for ⌥⌘I below (issue #49): toggling the
         // inspector is this view's own `@State`, with no menu-bar equivalent to conflict with.
         .toolbar {
+            // `.principal` is the toolbar's centre on macOS, and a centred item is the whole point
+            // of issue #87 — `.searchable`'s own placements cannot reach it. Declared before the
+            // button group only for readability; the system positions it, not the declaration
+            // order.
+            ToolbarItem(placement: .principal) {
+                searchField
+            }
+
             ToolbarItemGroup {
                 Button {
                     editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
@@ -218,6 +324,13 @@ struct VaultBrowserView: View {
                     Label("New Entry", systemImage: "plus")
                 }
                 .accessibilityIdentifier("browser.newEntry")
+
+                Button {
+                    handle(.create(parentID: newGroupParentID))
+                } label: {
+                    Label("New Group", systemImage: "folder.badge.plus")
+                }
+                .accessibilityIdentifier("browser.newGroup")
 
                 Button(role: .destructive) {
                     guard let selectedEntryID else { return }
@@ -270,80 +383,172 @@ struct VaultBrowserView: View {
                 .accessibilityIdentifier("browser.toggleDetail")
             }
         }
-        .sheet(item: $editingEntry) { editing in
-            EntryEditView(
-                entry: editing.entry,
-                isNew: editing.isNew,
-                store: store,
-                clipboard: clipboard,
-                generator: generator,
-                onSave: { saved in selectedEntryID = saved.id },
-                onDismiss: { editingEntry = nil }
-            )
-        }
-        .confirmationDialog(
-            "Delete Permanently?",
-            isPresented: Binding(
-                get: { pendingPermanentDeletion != nil },
-                set: { if !$0 { pendingPermanentDeletion = nil } }
-            ),
-            presenting: pendingPermanentDeletion
-        ) { entry in
-            Button("Delete Permanently", role: .destructive) {
-                store.permanentlyDelete(entryID: entry.id)
-                if selectedEntryID == entry.id { selectedEntryID = nil }
-                pendingPermanentDeletion = nil
+    }
+
+    var body: some View {
+        browserContent
+            .sheet(item: $editingEntry) { editing in
+                EntryEditView(
+                    entry: editing.entry,
+                    isNew: editing.isNew,
+                    store: store,
+                    clipboard: clipboard,
+                    generator: generator,
+                    onSave: { saved in selectedEntryID = saved.id },
+                    onDismiss: { editingEntry = nil }
+                )
             }
-            .accessibilityIdentifier("browser.confirmPermanentDelete")
-            Button("Cancel", role: .cancel) { pendingPermanentDeletion = nil }
-        } message: { entry in
-            Text(
-                "“\(entry.title.isEmpty ? "Untitled" : entry.title)” is already in the Recycle Bin. "
-                    + "Deleting it now removes it from this database for good — there is no undo."
-            )
-        }
-        .confirmationDialog(
-            "Empty Recycle Bin?",
-            isPresented: $isConfirmingEmptyRecycleBin
-        ) {
-            Button("Empty Recycle Bin", role: .destructive) {
-                store.emptyRecycleBin()
-                selectedEntryID = nil
+            .confirmationDialog(
+                "Delete Permanently?",
+                isPresented: Binding(
+                    get: { pendingPermanentDeletion != nil },
+                    set: { if !$0 { pendingPermanentDeletion = nil } }
+                ),
+                presenting: pendingPermanentDeletion
+            ) { entry in
+                Button("Delete Permanently", role: .destructive) {
+                    store.permanentlyDelete(entryID: entry.id)
+                    if selectedEntryID == entry.id { selectedEntryID = nil }
+                    pendingPermanentDeletion = nil
+                }
+                .accessibilityIdentifier("browser.confirmPermanentDelete")
+                Button("Cancel", role: .cancel) { pendingPermanentDeletion = nil }
+            } message: { entry in
+                Text(
+                    "“\(entry.title.isEmpty ? "Untitled" : entry.title)” is already in the Recycle Bin. "
+                        + "Deleting it now removes it from this database for good — there is no undo."
+                )
             }
-            .accessibilityIdentifier("browser.confirmEmptyRecycleBin")
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "Everything in the Recycle Bin is removed from this database for good. "
-                    + "There is no undo."
-            )
+            // No disabled state on Create/Rename. An alert's buttons are rendered by AppKit from a
+            // description, not laid out as views, so `.disabled` on one is not reliably honoured — and
+            // it is not needed: `VaultStore.addGroup`/`renameGroup` refuse a blank name themselves, so
+            // confirming an empty field closes the alert and changes nothing.
+            .alert(
+                groupNamePrompt?.title ?? "",
+                isPresented: isShowingGroupNamePrompt,
+                presenting: groupNamePrompt
+            ) { prompt in
+                TextField("Name", text: $groupNameDraft)
+                    .accessibilityIdentifier("browser.groupName")
+                Button(prompt.confirmTitle) { commitGroupName(prompt) }
+                    .accessibilityIdentifier("browser.confirmGroupName")
+                Button("Cancel", role: .cancel) { groupNamePrompt = nil }
+            }
+            .confirmationDialog(
+                "Delete Folder Permanently?",
+                isPresented: isShowingPermanentGroupDeletion,
+                presenting: pendingPermanentGroupDeletion
+            ) { group in
+                Button("Delete Permanently", role: .destructive) {
+                    store.permanentlyDelete(groupID: group.id)
+                    pendingPermanentGroupDeletion = nil
+                }
+                .accessibilityIdentifier("browser.confirmPermanentGroupDelete")
+                Button("Cancel", role: .cancel) { pendingPermanentGroupDeletion = nil }
+            } message: { group in
+                Text(Self.permanentGroupDeletionMessage(for: group))
+            }
+            .confirmationDialog(
+                "Empty Recycle Bin?",
+                isPresented: $isConfirmingEmptyRecycleBin
+            ) {
+                Button("Empty Recycle Bin", role: .destructive) {
+                    store.emptyRecycleBin()
+                    selectedEntryID = nil
+                }
+                .accessibilityIdentifier("browser.confirmEmptyRecycleBin")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    "Everything in the Recycle Bin is removed from this database for good. "
+                        + "There is no undo."
+                )
+            }
+            .sheet(isPresented: $showingGenerator) {
+                // Opened from the toolbar, with no target field to fill — `onUse` is `nil` so
+                // `GeneratorSheet` hides "Use" entirely rather than offering a button that just
+                // duplicates "Copy" with no explanation (issue #45). The field-filling meaning of
+                // "Use" only exists at `EntryEditView`'s own "Generate…" call site.
+                GeneratorSheet(generator: generator, clipboard: clipboard)
+            }
+            // Both countdowns are live values, not placeholders: `AutoLockController` and
+            // `ClipboardService` are each `@Observable` and tick their own published second counters, so
+            // reading them straight out of the body is what re-renders this bar once per second. `nil`
+            // in either slot means "not counting" — locked/stopped for auto-lock, nothing of ours on the
+            // pasteboard for the clipboard (`secondsRemaining` reports that as `0`, which `StatusBar`
+            // asks the caller to collapse to `nil`).
+            .safeAreaInset(edge: .bottom) {
+                StatusBar(
+                    databasePath: store.currentURL?.path ?? "",
+                    isDirty: store.isDirty,
+                    secondsUntilAutoLock: autoLock.secondsUntilIdleLock,
+                    secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
+                    // A failed pre-save backup no longer blocks the save (issue #26), so this is the
+                    // one place the user learns it happened. Persistent rather than a transient alert:
+                    // the condition persists — an unwritable container fails every save — and an alert
+                    // dismissed once would leave the app quietly saving without backups thereafter.
+                    backupWarning: store.lastBackupError?.backupFailureMessage
+                )
+            }
+    }
+
+    /// One string, used as both the field's visible placeholder and its accessible name.
+    private static let searchPrompt = "Search entries and passwords"
+
+    /// The toolbar's search field — hand-rolled, because `.searchable`'s placement cannot be
+    /// steered to the toolbar's centre, and centred is where Strongbox (this project's behavioural
+    /// reference — see `claude-memory/pass-sumo-strongbox-is-the-reference.md`) puts it. Issue #87.
+    ///
+    /// What the system field gave for free, and what replaces it, one for one:
+    ///
+    /// - **⌘F.** Unchanged. `AppCommands` already owns the only "Focus Search" binding and raises
+    ///   `.focusSearch`, which `handle(_:)` below turns into `isSearchFocused = true`. Nothing here
+    ///   declares a shortcut — the toolbar is the pointer surface, `AppCommands` the keyboard one.
+    /// - **Escape.** `.onExitCommand`, which is AppKit's `cancelOperation(_:)` reaching the focused
+    ///   field through the responder chain — the hook Escape actually travels on in a text control,
+    ///   unlike `.onKeyPress(.escape)`.
+    /// - **Focus ring and ground.** The token layer's `.searchFieldChrome`, which composes the
+    ///   `sunken` well the design system assigns this field with the one shared `FocusRing`. No
+    ///   second ring is drawn here.
+    ///
+    /// The mockup's `.search` has no clear button and neither does this: Escape and ⌘A-delete are
+    /// the two ways out, and adding a glyph the approved design does not show is not this issue's
+    /// to decide.
+    private var searchField: some View {
+        HStack(spacing: Spacing.s3) {
+            Image(systemName: "magnifyingglass")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+
+            TextField(
+                text: $searchText,
+                // `text-2`, not the mockup's `text-3`: this placeholder sits on `sunken`, where
+                // `text-3` measures 4.18:1 and misses WCAG AA. `design/BRAND.md`'s contrast rule
+                // scopes `text-3` to `surface` only — which is why `MasterPasswordField`, whose
+                // field IS on `surface`, keeps it and this one does not.
+                prompt: Text(Self.searchPrompt).foregroundStyle(Palette.textSecondary)
+            ) {
+                // Carries the accessible name; macOS renders only `prompt`. Same reasoning as
+                // `MasterPasswordField.fieldContent` — dropping it would leave the field unnamed to
+                // VoiceOver as soon as the placeholder disappears behind typed text.
+                Text(Self.searchPrompt)
+            }
+            .textFieldStyle(.plain)
+            .font(Typography.caption)
+            .foregroundStyle(Palette.text)
+            .focused($isSearchFocused)
+            .onExitCommand {
+                searchText = ""
+                isSearchFocused = false
+            }
+            // On the field itself, not on the column. Under `.searchable` this identifier sat on
+            // the content column because the system's toolbar item did not inherit it, which is
+            // the gap `Sources/UITests/README.md` recorded; a field of our own can carry it.
+            .accessibilityIdentifier("browser.search")
         }
-        .sheet(isPresented: $showingGenerator) {
-            // Opened from the toolbar, with no target field to fill — `onUse` is `nil` so
-            // `GeneratorSheet` hides "Use" entirely rather than offering a button that just
-            // duplicates "Copy" with no explanation (issue #45). The field-filling meaning of
-            // "Use" only exists at `EntryEditView`'s own "Generate…" call site.
-            GeneratorSheet(generator: generator, clipboard: clipboard)
-        }
-        // Both countdowns are live values, not placeholders: `AutoLockController` and
-        // `ClipboardService` are each `@Observable` and tick their own published second counters, so
-        // reading them straight out of the body is what re-renders this bar once per second. `nil`
-        // in either slot means "not counting" — locked/stopped for auto-lock, nothing of ours on the
-        // pasteboard for the clipboard (`secondsRemaining` reports that as `0`, which `StatusBar`
-        // asks the caller to collapse to `nil`).
-        .safeAreaInset(edge: .bottom) {
-            StatusBar(
-                databasePath: store.currentURL?.path ?? "",
-                isDirty: store.isDirty,
-                secondsUntilAutoLock: autoLock.secondsUntilIdleLock,
-                secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
-                // A failed pre-save backup no longer blocks the save (issue #26), so this is the
-                // one place the user learns it happened. Persistent rather than a transient alert:
-                // the condition persists — an unwritable container fails every save — and an alert
-                // dismissed once would leave the app quietly saving without backups thereafter.
-                backupWarning: store.lastBackupError?.backupFailureMessage
-            )
-        }
+        .padding(.horizontal, Spacing.s3)
+        .frame(width: Metrics.searchFieldWidth, height: Metrics.searchFieldHeight)
+        .searchFieldChrome(isFocused: isSearchFocused)
     }
 
     /// Read through a computed property rather than `onChange(of: appEnvironment?.menuRequest)` so
@@ -401,11 +606,107 @@ struct VaultBrowserView: View {
             // existing `onChange(of: vault.entries.count)` cleanup cannot catch this: the count
             // did not change, only the placement did.
             let stillVisible = EntryListFilter
-                .apply(to: vault, groupID: selectedGroupID, query: searchText)
+                .apply(to: vault, selection: groupSelection, query: searchText)
                 .contains { $0.id == id }
             if !stillVisible { selectedEntryID = nil }
         case .permanent:
             pendingPermanentDeletion = vault.entries.first { $0.id == id }
+        case nil:
+            return
+        }
+    }
+
+    /// The two group dialogs' presentation bindings, and the sentence one of them shows, lifted
+    /// out of `body` as named members.
+    ///
+    /// Not tidying: with all three written inline the Swift type-checker gives up on `body`
+    /// altogether ("unable to type-check this expression in reasonable time"). Each nested
+    /// `Binding(get:set:)` and each `+`-concatenated interpolation multiplies what it has to solve,
+    /// and this `body` is already long. Anything added here should go the same way.
+    private var isShowingGroupNamePrompt: Binding<Bool> {
+        Binding(
+            get: { groupNamePrompt != nil },
+            set: { if !$0 { groupNamePrompt = nil } }
+        )
+    }
+
+    private var isShowingPermanentGroupDeletion: Binding<Bool> {
+        Binding(
+            get: { pendingPermanentGroupDeletion != nil },
+            set: { if !$0 { pendingPermanentGroupDeletion = nil } }
+        )
+    }
+
+    private static func permanentGroupDeletionMessage(for group: VaultGroup) -> String {
+        let name = group.name.isEmpty ? "Untitled" : group.name
+        return "“\(name)” is already in the Recycle Bin. Deleting it now removes it, "
+            + "every folder inside it and every entry they hold from this database for good — "
+            + "there is no undo."
+    }
+
+    /// Where a group command from the sidebar's context menu or the toolbar is acted on.
+    ///
+    /// Create and rename stop here to ask for a name; move goes straight to the store, because
+    /// `Vault.canMoveGroup` has already refused every illegal destination before the menu drew it;
+    /// delete goes through `requestDeleteGroup`, which is where the confirmation rule lives.
+    private func handle(_ command: GroupCommand) {
+        switch command {
+        case .create(let parentID):
+            groupNameDraft = ""
+            groupNamePrompt = .create(parentID: parentID)
+        case .rename(let id):
+            guard let group = vault.group(id) else { return }
+            groupNameDraft = group.name
+            groupNamePrompt = .rename(id)
+        case .move(let id, let parentID):
+            store.moveGroup(id, under: parentID)
+        case .delete(let id):
+            requestDeleteGroup(id)
+        }
+    }
+
+    private func commitGroupName(_ prompt: GroupNamePrompt) {
+        switch prompt {
+        case .create(let parentID):
+            // Selecting the new folder is what makes "New Group" visibly do something: the row
+            // appears in the sidebar AND the list column switches to it, empty, ready for the entry
+            // the user is about to put there.
+            if let created = store.addGroup(named: groupNameDraft, parentID: parentID) {
+                selectedGroup = .group(created.id)
+            }
+        case .rename(let id):
+            store.renameGroup(id, to: groupNameDraft)
+        }
+        groupNamePrompt = nil
+    }
+
+    /// Where a new folder created from the toolbar goes: under whatever the sidebar is pointed at —
+    /// the same "it appears where you are already looking" rule `makeBlankEntry()` follows — except
+    /// inside the recycle bin, where a brand-new folder would be born deleted. That falls back to
+    /// the top level.
+    private var newGroupParentID: UUID? {
+        guard let id = groupSelection.containingGroupID,
+              !vault.recycleBinGroupIDs.contains(id)
+        else { return nil }
+        return id
+    }
+
+    /// The single entry point for deleting a folder from this screen, applying the same three tiers
+    /// `requestDelete` applies to an entry: a first delete moves the folder and everything in it to
+    /// the recycle bin and asks nothing, a delete of something already in the bin is the destructive
+    /// one and always goes through the confirmation, and the bin itself — or a folder the bin sits
+    /// inside — is not deletable at all. `VaultStore.plannedDeletion(forGroup:)` decides which.
+    ///
+    /// Unlike an entry's, the selection is NOT dropped on a recycle. The folder is still on screen —
+    /// a row under the bin, with its entries still in it — so following it is more useful than
+    /// clearing. A permanent delete does remove the row, and `onChange(of: vault.groups.count)`
+    /// above is what catches that.
+    private func requestDeleteGroup(_ id: UUID) {
+        switch store.plannedDeletion(forGroup: id) {
+        case .recycled:
+            store.delete(groupID: id)
+        case .permanent:
+            pendingPermanentGroupDeletion = vault.group(id)
         case nil:
             return
         }
@@ -425,7 +726,7 @@ struct VaultBrowserView: View {
         let now = Date()
         return VaultEntry(
             id: UUID(),
-            groupID: selectedGroupID,
+            groupID: groupSelection.containingGroupID,
             title: "",
             username: "",
             password: "",
