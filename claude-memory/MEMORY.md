@@ -5,3 +5,5 @@
 - [List selection and the toolbar band](pass-sumo-list-and-toolbar-verified.md) — both of PR #59's pixel unknowns settled (no fix needed), the toolbar band is 52pt not 44, and how to measure UI off-screen when this Mac's session is screen-locked.
 - [Design system docs](pass-sumo-design-system-docs.md) — the spec is an index plus focused siblings under `design/`; the mockup is a palette reference, not a keyboard or component spec.
 - [Strongbox is the reference](pass-sumo-strongbox-is-the-reference.md) — Strongbox is the эталон; copy its behaviour (especially biometric unlock), never its GPL code or its feature creep.
+- [ASC record created](pass-sumo-asc-record-created.md) — the app record, subscription products and prices exist since 2026-09-10; what is immutable, and what was left blank on purpose.
+- [StoreKit needs the network entitlement](pass-sumo-storekit-needs-network-entitlement.md) — verified from ShotSumo; it makes the site's "cannot open a connection" claim false, and that claim is now fixed.
