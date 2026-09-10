@@ -44,6 +44,26 @@ struct PassSumoApp: App {
                 // Sized for a three-pane browser (sidebar / list / detail) — the shell's steady
                 // state once a vault is open, not the Welcome/Unlock screens, which are small and
                 // simply centre themselves in whatever size this establishes.
+                //
+                // **Reconsidered, not just kept, now that the sidebar has a real minimum (issue
+                // #101).** The three panes' own genuine floors are: the sidebar's 165
+                // (`VaultBrowserView.browserContent`'s `.navigationSplitViewColumnWidth`), the
+                // inspector's 400 (`.inspectorColumnWidth`, issue #86) — and the entry list in
+                // between, which carries no width range of its own and has nothing in its row that
+                // truncation actually breaks (title and username both just truncate, same as a
+                // sidebar group name past its own floor), so its "genuine need" is editorial rather
+                // than technical: `Metrics.rowIconSlot` (20) + the icon/text `Spacing.s4` gap (8) +
+                // the row's own `Spacing.s5` padding on both sides (24) + enough room for a short,
+                // real title to read whole rather than as an ellipsis (measured: "Gmail Personal",
+                // this app's own sample data, is 90pt at `Typography.body`) — about 142pt. Summed,
+                // the three panes' bare floors come to roughly 707, a good 190pt under 900.
+                //
+                // 900 is still the right number, but for a different reason than a bare floor: it
+                // is what keeps the STEADY STATE comfortable, giving the list column (the one pane
+                // with no minimum of its own) enough slack to show full titles and usernames rather
+                // than sitting at its bare-content floor on every ordinary launch. Shrinking this to
+                // 707 would trade "the shell's steady state" for "the shell's most cramped legal
+                // state" — a real regression this issue did not ask for. Left at 900.
                 .frame(minWidth: 900, minHeight: 560)
                 .preferredColorScheme(contentColorScheme)
                 // Finishes what `AppEnvironment.uiTesting()` can only start synchronously — see that

@@ -20,12 +20,12 @@ struct VaultBrowserView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
-    /// Read for its countdown and for `noteActivity()`, and told when the toolbar's Lock button is
-    /// pressed — this view still never locks anything itself, it reports the request and the
-    /// controller performs the lock through its own `onLock` (see `lockRequestedByUser()`).
-    /// It is a constructor parameter rather than an environment read because `StatusBar`
-    /// showing a real number is not optional behaviour, and an environment lookup that silently
-    /// resolves to nothing would degrade to exactly the hardcoded `nil` this replaced.
+    /// Read for `noteActivity()`, and told when the toolbar's Lock button is pressed — this view
+    /// still never locks anything itself, it reports the request and the controller performs the
+    /// lock through its own `onLock` (see `lockRequestedByUser()`). `StatusBar` stopped reading its
+    /// countdown when that readout was removed (issue #101); this is a constructor parameter rather
+    /// than an environment read for the same reason as before — an environment lookup that silently
+    /// resolves to nothing would let the activity-reporting and the Lock button go quietly inert.
     let autoLock: AutoLockController
 
     /// Optional on purpose: `RootView` always injects it, but the `#Preview` below (and any future
@@ -246,6 +246,42 @@ struct VaultBrowserView: View {
                 onGroupCommand: { handle($0) }
             )
             .accessibilityIdentifier("browser.sidebar")
+            // Same rule as the inspector's `.inspectorColumnWidth` below (issue #86): without a
+            // width range this column sits at SwiftUI's unconfigured default and its divider does
+            // not drag at all (issue #101). The numbers are measured against what `GroupSidebar`
+            // actually renders (`measure_sidebar.swift`, AppKit `NSAttributedString.size()` against
+            // the exact `Typography`/`Metrics` tokens the row uses), not copied from another app:
+            //
+            // **min 165.** The two things this column must never truncate are its fixed system
+            // rows — "All Entries" and "Recycle Bin" are product-chosen labels, not user data, so
+            // they get the same "must always read cleanly" treatment `EntryDetailView`'s TOTP row
+            // got — and the entry-count column beside them. At `Typography.bodyMedium` (the font a
+            // SELECTED row uses) "Recycle Bin" is the wider of the two, at 71.6pt; a live vault's
+            // count can plausibly run to 3 digits (repo CLAUDE.md: "managing hundreds of
+            // passwords"), 20.4pt at `Typography.monoCaption2`. Add the fixed row furniture around
+            // them — `Metrics.rowIconSlot` (20) + the icon/label `Spacing.s3` gap (6) + the
+            // label/count `Spacer(minLength: Spacing.s2)` (4) + the row's own `Spacing.s3` padding
+            // on both sides (12, from `SidebarRowSurface`) — and the content itself needs 134pt.
+            // The rest of the number is the one thing this measurement script cannot see: `List`'s
+            // own `.sidebar`-style margin and the leading indent `OutlineGroup` reserves for a
+            // disclosure triangle once any group has a subgroup (very plausible for this app's own
+            // "hundreds of passwords, organized" user) — estimated, not measured, at 31pt. Dragging
+            // the divider to its stop in the running app confirms the column clamps at exactly this
+            // 165 (read back via Accessibility Inspector: `{58, 58}, {165, 596}`) with no truncation
+            // for the fixture's own (shorter) group names; the "Recycle Bin"-length worst case above
+            // is the content math, not a screen a full pass happened to land on.
+            //
+            // **ideal 220.** No mockup constrains this (`design/mockups/palette-variants.html` is a
+            // palette reference only — see `claude-memory/pass-sumo-design-system-docs.md`), so this
+            // is the conventional macOS Finder/Mail sidebar width: comfortably wider than a typical
+            // real group name (e.g. "Passwords" at 64.8pt) plus its count, with room to spare before
+            // anything has to reflow.
+            //
+            // **max 320.** A sidebar row carries far less than the inspector's prose-bearing fields
+            // — a short label and a number, nothing that benefits from wrapping — so it is capped at
+            // about half the inspector's 640: past this point extra width only stretches empty
+            // trailing space between a group's name and its count.
+            .navigationSplitViewColumnWidth(min: 165, ideal: 220, max: 320)
         } detail: {
             detailColumn
         }
@@ -490,17 +526,17 @@ struct VaultBrowserView: View {
                 // "Use" only exists at `EntryEditView`'s own "Generate…" call site.
                 GeneratorSheet(generator: generator, clipboard: clipboard)
             }
-            // Both countdowns are live values, not placeholders: `AutoLockController` and
-            // `ClipboardService` are each `@Observable` and tick their own published second counters, so
-            // reading them straight out of the body is what re-renders this bar once per second. `nil`
-            // in either slot means "not counting" — locked/stopped for auto-lock, nothing of ours on the
-            // pasteboard for the clipboard (`secondsRemaining` reports that as `0`, which `StatusBar`
-            // asks the caller to collapse to `nil`).
+            // The clipboard countdown is a live value, not a placeholder: `ClipboardService` is
+            // `@Observable` and ticks its own published second counter, so reading it straight out of
+            // the body is what re-renders this bar once per second. `nil` means "not counting" —
+            // nothing of ours is on the pasteboard (`secondsRemaining` reports that as `0`, which
+            // `StatusBar` asks the caller to collapse to `nil`). The auto-lock countdown that used to
+            // sit beside it was removed from `StatusBar` (issue #101) — see that type's doc comment
+            // on `secondsUntilClipboardClear` for why one countdown stayed and the other didn't.
             .safeAreaInset(edge: .bottom) {
                 StatusBar(
                     databasePath: store.currentURL?.path ?? "",
                     isDirty: store.isDirty,
-                    secondsUntilAutoLock: autoLock.secondsUntilIdleLock,
                     secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
                     // A failed pre-save backup no longer blocks the save (issue #26), so this is the
                     // one place the user learns it happened. Persistent rather than a transient alert:
