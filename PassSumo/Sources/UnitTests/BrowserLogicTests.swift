@@ -120,6 +120,48 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.group.name), ["Apple", "Zebra"])
     }
 
+    // MARK: - GroupTreeBuilder.paths (issue #88)
+
+    func testGroupPathsFollowTheOutlineOrderAndSpellTheFullPath() {
+        let root = makeGroup("00000000-0000-0000-0000-000000000001", parent: nil, name: "Work")
+        let child = makeGroup("00000000-0000-0000-0000-000000000002", parent: "00000000-0000-0000-0000-000000000001", name: "Clients")
+        let sibling = makeGroup("00000000-0000-0000-0000-000000000003", parent: nil, name: "Archive")
+
+        let paths = GroupTreeBuilder.paths(from: [root, child, sibling])
+
+        // Depth-first, siblings sorted by name — the order the sidebar draws, so a flat control
+        // built from this reads as the same tree rather than as a differently-ordered list.
+        XCTAssertEqual(paths.map(\.path), ["Archive", "Work", "Work / Clients"])
+        XCTAssertEqual(paths.map(\.id), [sibling.id, root.id, child.id])
+    }
+
+    /// Two folders of the same name in different places are what the path is FOR: as bare names
+    /// they would be two identical rows in a picker, and picking one would be a coin toss.
+    func testGroupPathsDistinguishSameNamedFoldersInDifferentPlaces() {
+        let work = makeGroup("00000000-0000-0000-0000-000000000001", parent: nil, name: "Work")
+        let personal = makeGroup("00000000-0000-0000-0000-000000000002", parent: nil, name: "Personal")
+        let workArchive = makeGroup("00000000-0000-0000-0000-000000000003", parent: "00000000-0000-0000-0000-000000000001", name: "Archive")
+        let personalArchive = makeGroup("00000000-0000-0000-0000-000000000004", parent: "00000000-0000-0000-0000-000000000002", name: "Archive")
+
+        let paths = GroupTreeBuilder.paths(from: [work, personal, workArchive, personalArchive])
+
+        XCTAssertEqual(Set(paths.map(\.path)).count, paths.count, "no two rows may read the same")
+        XCTAssertEqual(paths.first { $0.id == workArchive.id }?.path, "Work / Archive")
+        XCTAssertEqual(paths.first { $0.id == personalArchive.id }?.path, "Personal / Archive")
+    }
+
+    /// Same guarantee the outline gives: a cyclic `parentID` must not cost a group its row, and
+    /// must not hang the walk.
+    func testGroupPathsListEveryGroupOnceEvenThroughACycle() {
+        let a = makeGroup("00000000-0000-0000-0000-0000000000a1", parent: "00000000-0000-0000-0000-0000000000a2", name: "A")
+        let b = makeGroup("00000000-0000-0000-0000-0000000000a2", parent: "00000000-0000-0000-0000-0000000000a1", name: "B")
+
+        let paths = GroupTreeBuilder.paths(from: [a, b])
+
+        XCTAssertEqual(Set(paths.map(\.id)), [a.id, b.id])
+        XCTAssertEqual(paths.count, 2, "once each, not once per way round the cycle")
+    }
+
     // MARK: - GroupSelection (issue #85)
 
     /// The defect this type exists to remove: "All Entries" used to be spelled `nil`, which is also

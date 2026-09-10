@@ -124,6 +124,20 @@ struct EntryEditView: View {
 
                 TextField("URL", text: $url)
                     .accessibilityIdentifier("edit.url")
+
+                // Until this existed an entry could never change folder (issue #88): `groupID` was
+                // seeded from the entry, passed back to `save()` unchanged, and nothing between the
+                // two ever wrote to it.
+                Picker("Group", selection: $groupID) {
+                    // `VaultEntry.groupID`'s own "nil == the vault's top level", spelled for a user
+                    // rather than left as an absent row — without it there is no way back OUT of a
+                    // folder once an entry is in one.
+                    Text("No Group").tag(UUID?.none)
+                    ForEach(groupOptions) { option in
+                        Text(option.path).tag(UUID?.some(option.group.id))
+                    }
+                }
+                .accessibilityIdentifier("edit.group")
             }
 
             Section("Notes") {
@@ -184,6 +198,25 @@ struct EntryEditView: View {
         .sheet(isPresented: $showingGenerator) {
             GeneratorSheet(generator: generator, clipboard: clipboard, onUse: { password = $0 })
         }
+    }
+
+    /// The folders this entry can be filed in, in the sidebar's own order and each labelled with
+    /// its full path — `GroupTreeBuilder.paths(from:)` does both, so this picker and the sidebar
+    /// can never disagree about the shape of the tree.
+    ///
+    /// **The recycle bin and its contents ARE listed here**, unlike in the sidebar's "Move to"
+    /// menu, which filters them out. That menu relocates a folder the user chose to move; this
+    /// picker also has to be able to show where the entry already is, and an entry sitting in the
+    /// bin whose own group was missing from the list would render as a picker with nothing
+    /// selected — and no way to read, let alone change, where it is.
+    ///
+    /// Read from the store on each body pass rather than snapshotted at init. The sheet is modal,
+    /// so the only thing that can reshape the tree underneath it is a lock — and a lock already
+    /// disables Save and raises the banner, so whatever the picker does from that point on cannot
+    /// reach the vault.
+    private var groupOptions: [GroupPathItem] {
+        guard case .unlocked(let vault) = store.state else { return [] }
+        return GroupTreeBuilder.paths(from: vault.groups)
     }
 
     /// Add / remove / export attachments. Preview still lives only in `EntryDetailView` — issue
