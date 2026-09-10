@@ -20,8 +20,10 @@ struct VaultBrowserView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
-    /// Only ever read for its countdown and for `noteActivity()` — this view never locks anything
-    /// itself. It is a constructor parameter rather than an environment read because `StatusBar`
+    /// Read for its countdown and for `noteActivity()`, and told when the toolbar's Lock button is
+    /// pressed — this view still never locks anything itself, it reports the request and the
+    /// controller performs the lock through its own `onLock` (see `lockRequestedByUser()`).
+    /// It is a constructor parameter rather than an environment read because `StatusBar`
     /// showing a real number is not optional behaviour, and an environment lookup that silently
     /// resolves to nothing would degrade to exactly the hardcoded `nil` this replaced.
     let autoLock: AutoLockController
@@ -224,7 +226,11 @@ struct VaultBrowserView: View {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
 
                 Button {
-                    store.lock()
+                    // The controller, not `store.lock()` — see `AutoLockController.lockRequestedByUser()`.
+                    // This is the one thing this view does through `autoLock` besides reading its
+                    // countdown, and it is not "this view locks the vault": it reports that the
+                    // user asked, and the controller's `onLock` is still what performs it.
+                    autoLock.lockRequestedByUser()
                 } label: {
                     Label("Lock", systemImage: "lock")
                 }

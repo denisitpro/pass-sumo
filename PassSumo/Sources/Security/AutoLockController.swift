@@ -184,6 +184,32 @@ final class AutoLockController {
         onLock()
     }
 
+    /// The user asked for it — "Lock Database" (⌘L) and the browser toolbar's Lock button.
+    ///
+    /// **Both of those used to call `VaultStore.lock()` directly, which is why `.userRequested`
+    /// existed as a case and was never once produced (issue #69).** `lastLockReason` was then left
+    /// holding whatever automatic reason had locked the vault some time earlier, or `nil`, so
+    /// anything downstream asking "why is this locked" — `AutomaticBiometricUnlockPolicy`, and #62
+    /// later — got an answer about a different lock.
+    ///
+    /// The `isLocked` branch is not defensive noise. `lock(reason:)` is deliberately idempotent
+    /// because three system events can describe one departure, and that same guard would turn a
+    /// ⌘L into a silent no-op if this controller's bookkeeping ever disagreed with the store's
+    /// state (nothing today makes them disagree — `PassSumoApp` mirrors every `VaultStore.state`
+    /// change into `vaultDidUnlock()`/`stop()` — but "the vault did not lock when I asked it to"
+    /// is a security failure, not a cosmetic one, and it would be invisible). So a lock the user
+    /// asked for always reaches `onLock`, which is `VaultStore.lock()` and is itself idempotent:
+    /// it drops the credentials and the decrypted vault, and dropping them twice is not a second
+    /// teardown.
+    func lockRequestedByUser() {
+        if isLocked {
+            lastLockReason = .userRequested
+            onLock()
+        } else {
+            lock(reason: .userRequested)
+        }
+    }
+
     /// Stops the idle timer and unsubscribes. For app teardown; does not itself lock.
     func stop() {
         timer?.invalidate()

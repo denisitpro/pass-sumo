@@ -139,6 +139,50 @@ final class SecurityAutoLockTests: XCTestCase {
         XCTAssertEqual(lockCount, 1)
     }
 
+    // MARK: - The lock the user asked for
+
+    /// `lockRequestedByUser()` is the single code path behind BOTH manual-lock call sites — the
+    /// "Lock Database" menu command (`AppCommands`) and the browser toolbar's Lock button
+    /// (`VaultBrowserView`). Until issue #69 both called `VaultStore.lock()` directly, so
+    /// `.userRequested` existed as a case and was never once produced in production and
+    /// `lastLockReason` kept reporting whatever automatic reason had locked the vault earlier.
+    func testUserRequestedLockLocksAndRecordsTheReason() {
+        controller.vaultDidUnlock()
+
+        controller.lockRequestedByUser()
+
+        XCTAssertTrue(controller.isLocked)
+        XCTAssertEqual(controller.lastLockReason, .userRequested)
+        XCTAssertEqual(lockCount, 1)
+        XCTAssertNil(controller.secondsUntilIdleLock)
+    }
+
+    /// It must overwrite an earlier automatic reason, not be swallowed by it: "the Mac slept, and
+    /// then I hit ⌘L" is a lock the user asked for.
+    func testUserRequestedLockOverwritesAnEarlierAutomaticReason() {
+        controller.vaultDidUnlock()
+        events.fire(.systemSleep)
+        XCTAssertEqual(controller.lastLockReason, .systemSleep)
+
+        controller.vaultDidUnlock()
+        controller.lockRequestedByUser()
+
+        XCTAssertEqual(controller.lastLockReason, .userRequested)
+    }
+
+    /// The guard inside `lock(reason:)` exists so three system events describing one departure
+    /// tear down decrypted state once. A ⌘L must not be silently swallowed by that same guard if
+    /// this controller's bookkeeping ever disagrees with the store's state — "the vault did not
+    /// lock when I asked it to" is a security failure, and an invisible one.
+    func testUserRequestedLockStillLocksWhenTheControllerAlreadyBelievesItIsLocked() {
+        XCTAssertTrue(controller.isLocked, "precondition: a controller starts locked")
+
+        controller.lockRequestedByUser()
+
+        XCTAssertEqual(lockCount, 1, "the request never reached onLock")
+        XCTAssertEqual(controller.lastLockReason, .userRequested)
+    }
+
     // MARK: - Re-unlock and teardown
 
     func testUnlockingAgainClearsTheReasonAndReusesTheExistingSubscription() {
