@@ -235,6 +235,25 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   .testFixtureDataUsesOnlyReservedPlaceholderEmailDomains` enforces this on every `make test` run —
   it is a domain ALLOWLIST (not a denylist naming the leak), so it catches any real email domain
   reintroduced later without needing to hardcode anyone's real name.
+- **A history snapshot is decided in the model and written by the codec (issue #75).**
+  `VaultStore.upsert` compares the incoming entry against the one it replaces and pushes the old
+  state onto `VaultEntry.historyAdditions`; `KDBXContentMerge` appends those to the file's own
+  `<History>`. Deriving the snapshot at save time instead — diffing the vault against the decoded
+  original — was rejected: the origin is decoded once per unlock and never refreshed, so a
+  save-time diff can only ever see the state the file was opened in, and the middle value of two
+  edits between saves would be unrecoverable. The other half of the split is just as deliberate:
+  the file's own snapshots are NEVER projected into the domain (a snapshot carries tags, AutoType,
+  expiry, custom data and positional pool refs that `VaultEntrySnapshot` cannot hold), so ours are
+  appended to theirs, and each new one is built on the file's own entry object. `upsert` also owns
+  `passwordLastChanged` for the same reason it owns `modified`: the edit form builds a whole new
+  `VaultEntry` and would otherwise pass the property's `nil` default straight through.
+- **`HistoryMaxItems`/`HistoryMaxSize` are enforced only on an entry we appended a snapshot to.**
+  Both are frequently ABSENT, and the values used then (10 items, 6 MiB — KeePass's own defaults,
+  in `KDBXEntryHistory`) are a convention we adopt, not something the file declared. Applying them
+  to an untouched entry would let a save that changed one password delete another client's history
+  from an unrelated one, and would break the byte-identical round trip. `HistoryMaxSize` weighs
+  string fields plus attachment payloads, and charges a payload once — a snapshot sharing an
+  attachment the live entry still has costs nothing, because the pool stores it once.
 - **A `VaultError` message must not name a cause the error does not carry.** `KDBXErrorMapping`
   reports the stage that failed, never a guessed why: `corruptedInnerHeader` was mapped to "the
   database's attachment table is damaged" and told the owner his attachments were broken when the
@@ -259,6 +278,8 @@ not an upgrade. Full reasoning and licensing verification: issue #5.
   blocks the save. See "Gotchas worth recording" above.
 - #27 — `save()` had no mutual exclusion, so two racing saves lost one set of edits. Fixed: saves
   are chained. See "Gotchas worth recording" above.
+- #75 — entry history was round-tripped but never written, so an in-app password change left no
+  `<History>` snapshot. Fixed. See "Gotchas worth recording" above.
 
 ## Acceptance criteria (owner's definition)
 

@@ -6,10 +6,15 @@ import KDBXKit
 /// This is the half of the codec that makes pass-sumo a password manager rather than a data-loss
 /// incident. It never constructs a database from `Vault`: for every group and entry it starts from
 /// the object KDBXKit parsed out of the user's file and overwrites only the handful of fields
-/// `Vault` actually models. Everything else on that object comes along untouched — entry history,
+/// `Vault` actually models. Everything else on that object comes along untouched —
 /// user-supplied custom icons (`CustomIconUUID` and the `Meta/CustomIcons` pool it points into),
 /// tags, AutoType, colours, expiry, usage counts, and any `CustomData` a different KDBX client
 /// wrote and we have never heard of.
+///
+/// Entry `<History>` is APPENDED to now (issue #75) rather than only carried along: the snapshots
+/// already in the file keep their exact objects, and one more is added per pre-edit state
+/// `VaultStore.upsert` recorded. `buildSnapshot` and `KDBXEntryHistory` own that; the model owns
+/// the decision that an edit happened at all.
 ///
 /// `iconID` is the newest field to move off that carried-along list (issue #89), and it is the one
 /// that most needs the base-object reuse to be understood: KDBX has TWO icon channels on the same
@@ -61,6 +66,64 @@ enum KDBXContentMerge {
         var emittedGroupIDs: Set<UUID> = []
         var emittedEntryIDs: Set<UUID> = []
 
+        /// One history snapshot, as a KDBX entry.
+        ///
+        /// Built on `pristine` — the entry object the FILE holds — so everything the domain does
+        /// not model is the same in the snapshot as in the live entry: tags, AutoType, colours,
+        /// expiry, usage counts, per-entry `CustomData`, and the `CustomIconUUID` that shadows the
+        /// built-in index. That is not an approximation: pass-sumo cannot edit any of it, so the
+        /// live entry's values ARE the values every one of its past versions had. Rebuilding a
+        /// snapshot from `VaultEntrySnapshot` alone would drop all of it and hand other clients a
+        /// history whose old versions had lost half their metadata.
+        ///
+        /// The snapshot keeps the live entry's UUID, which is what the format specifies and what
+        /// `OriginalIndex` is careful never to index.
+        func buildSnapshot(
+            _ snapshot: VaultEntrySnapshot,
+            of id: UUID,
+            on pristine: KDBX.Entry,
+            baseTitle: String
+        ) -> KDBX.Entry {
+            var object = pristine
+            // "A historical entry carries no history of its own" — the format's own rule, and what
+            // keeps growth linear instead of quadratic.
+            object.history = []
+            let asEntry = snapshot.entry(id: id)
+
+            // The SAME field mapping the live entry goes through, deliberately: a second
+            // implementation for snapshots would have to re-derive the TOTP convention, the
+            // reserved keys and the per-field protection classes, and the first time the two
+            // disagreed a historical password would be written in the clear.
+            object.strings = KDBXEntryStrings.apply(
+                asEntry,
+                to: pristine.strings,
+                baseTitle: baseTitle,
+                memoryProtection: memoryProtection
+            )
+            // Against `pristine.binaries`, so a snapshot whose attachments match what the file
+            // already had keeps that entry's exact `<Binary>` elements — inline payloads stay
+            // inline, refs keep pointing at the slots they pointed at. The pool is only appended
+            // to here, never compacted or renumbered, which is the invariant every OTHER
+            // snapshot's positional refs depend on (see `KDBXBinaryPool`).
+            object.binaries = KDBXAttachments.merge(
+                snapshot.attachments,
+                into: pristine.binaries,
+                blobs: vault.blobs,
+                pool: &pool
+            )
+            object.iconID = snapshot.iconID
+
+            // The snapshot's OWN timestamps, not the live entry's. A snapshot's
+            // `LastModificationTime` is read by every KeePass-family client — and by
+            // `KDBXPasswordHistory` — as the moment that version became current, so copying the
+            // live entry's would date every old password to the day it was replaced.
+            var times = pristine.times ?? KDBX.Times()
+            times.creationTime = restore(snapshot.created, into: times.creationTime)
+            times.lastModificationTime = restore(snapshot.modified, into: times.lastModificationTime)
+            object.times = times
+            return object
+        }
+
         /// `parentID` is the group this entry is being emitted INTO, which is not always
         /// `entry.groupID` — an entry naming a group that no longer exists is rescued onto the root
         /// below. The move bookkeeping has to reflect where the entry actually lands, or a rescued
@@ -74,6 +137,9 @@ enum KDBXContentMerge {
             let baseTitle = base.strings
                 .first { $0.key == KDBXStandardField.title.rawValue }?
                 .value.withRevealedString { $0 } ?? ""
+            // Captured before anything below overwrites it: every snapshot is built on the entry
+            // as the file has it, never on the state this save is about to leave it in.
+            let pristine = base
 
             base.strings = KDBXEntryStrings.apply(
                 entry,
@@ -110,6 +176,31 @@ enum KDBXContentMerge {
                 base.previousParentGroup = originalParent ?? rootGroupUUID
             }
             base.times = times
+
+            // History: the file's own snapshots, then one per pre-edit state `VaultStore.upsert`
+            // recorded since this file was decoded (issue #75). Before this, an in-app password
+            // change left no `<History>` at all — the file's snapshots round-tripped untouched and
+            // nothing ever added to them, so the previous password was unrecoverable from inside
+            // the app. Appended, never rebuilt: `pristine.history` keeps the exact objects another
+            // client wrote.
+            //
+            // Trimming runs ONLY on the append path, which is why it is inside this `if` — see
+            // `KDBXEntryHistory` for why applying a cap the database never declared to an entry
+            // nobody edited would be a way to delete someone else's history.
+            if !entry.historyAdditions.isEmpty {
+                var history = pristine.history
+                for addition in entry.historyAdditions {
+                    history.append(
+                        buildSnapshot(addition, of: entry.id, on: pristine, baseTitle: baseTitle)
+                    )
+                }
+                base.history = KDBXEntryHistory.trimmed(
+                    history,
+                    meta: original.database.meta,
+                    liveBinaries: base.binaries,
+                    pool: pool
+                )
+            }
             return base
         }
 
