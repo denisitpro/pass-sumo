@@ -193,6 +193,68 @@ final class FormatConformanceTests: DurabilityTestCase {
         XCTAssertTrue(listing.output.contains("v3"), "the post-crash entry is missing:\n\(listing.output)")
     }
 
+    /// The interop half of issue #88: a folder tree pass-sumo created has to be a folder tree in
+    /// KeePassXC, not merely something our own reader happens to understand.
+    ///
+    /// The database is created through the real stack, then the folders are added through the
+    /// domain API and re-encoded with the real codec — `KDBXContentMerge` is the same path a save
+    /// takes, and it is what decides whether a new `VaultGroup` becomes a nested `<Group>` element
+    /// or nothing at all. The write itself is a plain one rather than
+    /// `SandboxedVaultFileAccess`'s: what is under test here is the bytes, and the atomic write has
+    /// its own suite.
+    ///
+    /// The entry filed in the deepest folder is not decoration. `ls -R` prints a folder that exists
+    /// whether or not anything is in it; an entry it lists underneath is what proves KeePassXC
+    /// walked INTO the folder rather than merely echoing a name.
+    func testAFolderTreeCreatedHereIsAFolderTreeInKeePassXC() throws {
+        let cli = try Self.keePassXCCLIOrSkip()
+        let directory = try makeScratchDirectory()
+        let database = try createDatabase(in: directory, title: "original")
+
+        let codec = KDBXKitCodec()
+        let credentials = VaultCredentials(password: Self.password, keyFile: nil)
+        let decoded = try codec.decode(fileData: try Data(contentsOf: database), credentials: credentials)
+
+        var vault = decoded.vault
+        let parent = VaultGroup(id: UUID(), parentID: nil, name: "PassSumo Folder")
+        let child = VaultGroup(id: UUID(), parentID: parent.id, name: "Nested Folder")
+        vault.groups.append(contentsOf: [parent, child])
+        vault.entries.append(
+            VaultEntry(
+                id: UUID(),
+                groupID: child.id,
+                title: "Filed Away",
+                username: "someone",
+                password: "s3cret",
+                url: "",
+                notes: "",
+                otpAuthURL: nil,
+                customFields: [:],
+                created: Date(),
+                modified: Date()
+            )
+        )
+        try codec.encode(vault, credentials: credentials, origin: decoded).write(to: database)
+
+        let listing = try Self.run(cli, ["ls", "-R", database.path], stdin: Self.password + "\n")
+        XCTAssertEqual(
+            listing.status, 0,
+            "keepassxc-cli could not open a database with folders we created:\n\(listing.output)"
+        )
+        XCTAssertTrue(
+            listing.output.contains("PassSumo Folder"),
+            "the top-level folder is missing:\n\(listing.output)"
+        )
+        XCTAssertTrue(
+            listing.output.contains("Nested Folder"),
+            "the nested folder is missing, so the group was written flat:\n\(listing.output)"
+        )
+        XCTAssertTrue(
+            listing.output.contains("Filed Away"),
+            "the entry inside the nested folder is missing:\n\(listing.output)"
+        )
+    }
+
     /// Backups have to be openable by other tools too. A backup is the thing a user reaches for
     /// when everything else has gone wrong, quite possibly from a different application, and one
     /// that only our own reader can open is a promise we have not actually kept.
