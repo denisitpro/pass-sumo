@@ -37,30 +37,75 @@ source on 2026-09-10, not inferred from a naming pattern — see "How this was v
 
 | Dependency | Before this PR | After this PR | Current release | Advisory in range | Reachable from us? |
 |---|---|---|---|---|---|
-| `apple/swift-crypto` | 3.15.1 | 3.15.1 (unchanged) | 4.5.2 | **GHSA-8q93-f6xh-4f6f**, critical, double-free parsing a malformed RSA key, range `>=3.2.0, <=4.5.0` — fixed only in **4.5.1+**, no 3.x backport exists. Also GHSA-9m44-rr2w-ppp7 (medium, X-Wing HPKE), range `4.0.0-4.3.0`, does not affect 3.15.1. | No — `grep -rn "_RSA" Vendor/KDBXKit/Sources PassSumo/Sources` returns zero matches; neither KDBXKit nor the app ever parses an RSA key. |
+| `apple/swift-crypto` | 3.15.1 | 3.15.1 (unchanged) | 4.5.2 | Two items, see notes below the table — GHSA-9m44-rr2w-ppp7 (**high**, X-Wing HPKE) does not affect 3.15.1; GHSA-8q93-f6xh-4f6f / CVE-2026-43823 (RSA double-free) does, fixed only in 4.5.1+. | RSA: no — see notes. AES-CBC (`_CryptoExtras.AES._CBC`): no on Apple platforms — see notes. |
 | `apple/swift-asn1` | 1.7.0 | **1.7.2** | 1.7.2 | GHSA-w8xv-rwgf-4fwh (low, malformed BER/DER crash), fixed in 1.3.1 — does not affect 1.7.0 or 1.7.2. | N/A (already patched) |
 | `apple/swift-log` | 1.12.0 | **1.15.1** | 1.15.1 | None found | N/A |
 | `apple/swift-argument-parser` | 1.5.0 | **1.8.2** | 1.8.2 | None found | Only linked into the vendored `kdbx-cli`/`KDBXCLICore` dev targets, never into the `KDBXKit` library product the app ships |
 | `apple/swift-docc-plugin` | 1.5.0 | 1.5.0 (unchanged) | 1.5.0 | None found | Docs-generation only, not shipped |
 | `swiftlang/swift-docc-symbolkit` | 1.0.0 | 1.0.0 (unchanged) | 1.0.0 is still the newest **semver** tag; upstream has since switched to toolchain-snapshot tags only (33 commits past our pin on that scheme, e.g. `swift-6.3.3-RELEASE`), so there is no newer version SwiftPM's resolver could select | 1.0.0 (semver) | None found | Docs-generation only, not shipped |
 
+**How advisories were checked** (re-run these, don't re-derive): `gh api
+/advisories?ecosystem=swift&affects=<package>` lists what's in GitHub's global, reviewed Advisory
+Database for that package; `gh api /repos/<owner>/<repo>/security-advisories` separately lists every
+advisory *published on that repo*, which can be a superset of the global database — see the
+`swift-crypto` notes below, where one real advisory is missing from the global list entirely.
+
+**`swift-crypto` advisory notes (checked 2026-09-10):**
+
+- **GHSA-9m44-rr2w-ppp7** (X-Wing HPKE malformed-ciphertext-length decapsulation, CVE-2026-28815):
+  severity is **high**, range `4.0.0–4.3.0`, patched `4.3.1` — all confirmed against
+  `gh api /advisories/GHSA-9m44-rr2w-ppp7`. Does not affect 3.15.1.
+- **GHSA-8q93-f6xh-4f6f** (double-free when an RSA public key fails to parse, CVE-2026-43823): **not
+  returned by** `gh api /advisories?ecosystem=swift&affects=swift-crypto` or
+  `gh api /advisories/GHSA-8q93-f6xh-4f6f` (404) — that call only reaches GitHub's global, reviewed
+  Advisory Database, and this one is not (yet) in it, which is why a first pass can miss it. It is
+  real: published on the repo itself
+  (`gh api /repos/apple/swift-crypto/security-advisories` → `state: published`,
+  `severity: critical`, range `>=3.2.0, <=4.5.0`, `patched_versions: 4.5.1`;
+  `https://github.com/apple/swift-crypto/security/advisories/GHSA-8q93-f6xh-4f6f` → HTTP 200), and
+  independently confirmed via NVD (`CVE-2026-43823`, analyzed, published 2026-07-23, CVSS v3.1 base
+  score 7.5 / **HIGH**, description: "addressed in swift-crypto version 4.5.1", citing that exact GHSA
+  URL as the vendor advisory). So: real, has a CVE, fixed only in 4.5.1+ (no 3.x release ever received
+  the fix — 3.15.1 is the latest 3.x tag that exists), but a dependency scan that only queries the
+  global Advisory Database will not surface it.
+  - **Reachability — RSA:** not reachable. `grep -rn --include='*.swift' -E '_RSA|\bRSA\b'` across
+    `PassSumo/Sources` and `Vendor/KDBXKit/Sources` returns exactly one hit, a doc comment in
+    `KDBX/Entry+Passkey.swift:22` ("PKCS#8 PEM-encoded private key (EC or RSA depending on the
+    algorithm)") — no RSA key is ever initialized anywhere in the tree. Note the precise phrasing:
+    `_CryptoExtras` (the module the vulnerable RSA types live in) **is linked** into the shipped
+    `KDBXKit` target (`Package.swift`'s `KDBXKit` target depends on
+    `.product(name: "_CryptoExtras", package: "swift-crypto")`) — the vulnerable code is linked but
+    never called, not simply absent from the binary.
+- **Also in the 4.5.1 release notes, not an advisory but relevant to us:** "Back AES-CBC with
+  BoringSSL and constant-time PKCS#7 unpadding" (PR #448). `Vendor/KDBXKit` does use `_CryptoExtras`
+  for AES-CBC (`AES256CBC.swift`) and AES-KDF (`KDF/AESKDF.swift`). Checked both: `AES256CBC.swift`
+  routes through CommonCrypto under `#if canImport(CommonCrypto)` — on Apple platforms (what we ship)
+  `_CryptoExtras.AES._CBC` is never called (the file's own comment: swift-crypto's path is ~180x
+  slower, which is why CommonCrypto is used instead); the `_CryptoExtras` path only compiles in the
+  `#else` (non-Apple) branch. `AESKDF.swift` uses `AES.permute`, a single-block ECB permutation with
+  no padding involved, unrelated to this fix. Net: not reachable on the platforms this app ships to;
+  would only matter for a non-Apple build of the vendored library (its CLI/CI lane).
+
 **How the bump was made and verified:** `swift package update` inside `Vendor/KDBXKit`, with no edit to
 any `.package(... from:)` bound in `Package.swift` — every resolved version above stayed inside the
 range the manifest already declared. Verified with `make generate`, `make test` (355/355, 1 deliberate
 skip), and `make durability` (23/23, 1 expected skip on an unsigned host) — the latter's
 `FormatConformanceTests` exercise the real `keepassxc-cli` round trip, so interop was checked, not just
-our own tests.
+our own tests. This follow-up correction (advisory wording only) was **not** re-verified with
+`make test` / `make durability` — no code or dependency version changed, only prose, so re-running the
+suites would add nothing.
 
 ## Decisions for the owner
 
 1. **`swift-crypto` 3.15.1 → 4.x is a major bump — deliberately NOT done here.** It is #23's job (API
    changes expected in `_CryptoExtras`, needs its own dedicated verification pass and a
-   `keepassxc-cli` round trip). New information for #23: **GHSA-8q93-f6xh-4f6f (critical) did not
-   exist when #23 was written** and its fix landed only in 4.5.1+, with no patch on any 3.x release —
-   so the gap is not just "a major version behind" any more, it is "the only fix for a critical CVE is
-   on the other side of a major bump we're intentionally deferring." Currently not reachable (no RSA
-   use anywhere in the app or the vendored library), but worth re-weighing #23's priority in light of
-   this.
+   `keepassxc-cli` round trip). The defensible, verifiable argument for re-weighing #23's priority is
+   not "a critical CVE" by itself — it's that **3.x is a dead branch receiving no fixes at all**:
+   3.15.1 is the newest 3.x tag that exists, and GHSA-8q93-f6xh-4f6f's fix (see notes above) landed
+   only in 4.5.1 with no 3.x backport, so any future defect in this dependency will ship a fix only on
+   a major line we are not on. Not reachable today (no RSA key parsing anywhere in the app or the
+   vendored library; the AES-CBC 4.5.1 fix is also unreachable — see notes above), so there is no
+   live exposure to point at, but the branch being unmaintained is true on its own.
 2. **App-target Swift language mode: bump `SWIFT_VERSION` from `"6.0"` to `"6.1"` (or higher)?** The
    vendored library already builds under swift-tools-version 6.1 and the installed toolchain is 6.3.3,
    so the app is one language-mode step behind what it already links against. Not applied here: a
