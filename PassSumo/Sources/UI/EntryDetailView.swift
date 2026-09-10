@@ -281,13 +281,28 @@ struct EntryDetailView: View {
         EntryURLResolver.resolvedURL(from: entry.url)
     }
 
+    private func openResolvedURL() {
+        guard let resolvedURL else { return }
+        NSWorkspace.shared.open(resolvedURL)
+    }
+
+    /// Issue #17: the URL value itself now opens on click (`FieldRow.onActivateLink`), matching
+    /// Strongbox. The adjacent glyph button stays rather than being removed as redundant: a plain
+    /// clicked value has no keyboard-focus stop on macOS (only controls do), so a Tab-only user —
+    /// sighted, not using VoiceOver — would lose the ability to open the URL at all if this were
+    /// the sole affordance. `detail.openURL` keeps naming the button; the value's own click and
+    /// VoiceOver action are unnamed extras, not a replacement for it.
     private var urlRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.s4) {
-            FieldRow(label: "URL", value: entry.url, isLink: resolvedURL != nil)
-            if let resolvedURL {
-                Button {
-                    NSWorkspace.shared.open(resolvedURL)
-                } label: {
+            FieldRow(
+                label: "URL", value: entry.url,
+                // A closure literal, not a bare `openResolvedURL` method reference: the ternary
+                // with `nil` otherwise defeats the type checker (a real failure seen here, not a
+                // style preference — see the compiler's own "please submit a bug report").
+                onActivateLink: resolvedURL != nil ? { openResolvedURL() } : nil
+            )
+            if resolvedURL != nil {
+                Button(action: openResolvedURL) {
                     Image(systemName: "arrow.up.forward.square")
                 }
                 .buttonStyle(.tokenGlyph)

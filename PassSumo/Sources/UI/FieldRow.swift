@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One label/value row shared everywhere the browser shows "Label: value [copy]" — every field in
@@ -7,10 +8,12 @@ struct FieldRow: View {
     let label: String
     let value: String
     var isMonospaced: Bool = false
-    /// Renders the value in the accent, the mockup's `.field .link` treatment — for a value that
-    /// points somewhere (the URL row). Presentation only: it does not make the text clickable, and
-    /// the button that actually opens the URL still lives beside the row in `EntryDetailView`.
-    var isLink: Bool = false
+    /// Non-nil marks the value as a link (the mockup's `.field .link` treatment, accent-coloured
+    /// and clickable) and is what runs when it's clicked — one flag instead of the earlier
+    /// `isLink: Bool` + separate action, so link *styling* can never exist without link
+    /// *behaviour* (issue #17: the old split let a caller set the colour and forget the click).
+    /// `nil` leaves the value as plain, selectable text, same as any other field.
+    var onActivateLink: (() -> Void)? = nil
     /// Non-nil marks this as a secret: `value` renders as fixed-width dots unless the bound `Bool`
     /// is `true`. `nil` means "not a secret" — no dots, no reveal toggle, `value` shown plainly.
     var isRevealed: Binding<Bool>?
@@ -83,10 +86,30 @@ struct FieldRow: View {
             Text("—")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textTertiary)
+        } else if let onActivateLink {
+            // A link value is clicked, not selected — the same convention as any hyperlink, and
+            // why `.textSelection` is deliberately absent only on this branch; every other value
+            // keeps it. `.plain` keeps `TokenButtonSurface`'s padding/fill/border out of this —
+            // the row must still look exactly like `FieldRow`'s other values, just clickable.
+            Button(action: onActivateLink) {
+                Text(value)
+                    .font(isMonospaced ? Typography.monoBody : Typography.body)
+                    .foregroundStyle(Palette.accent700)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.plain)
+            // No design token for cursor shape — this is AppKit interop, not a stylistic choice.
+            // `.set()` rather than `.push()/.pop()`: a push/pop pair can desync if this row is
+            // torn down (entry switched) while still hovered, leaving the pointing hand stuck.
+            .onHover { isHovered in
+                (isHovered ? NSCursor.pointingHand : NSCursor.arrow).set()
+            }
+            .accessibilityAddTraits(.isLink)
         } else {
             Text(value)
                 .font(isMonospaced ? Typography.monoBody : Typography.body)
-                .foregroundStyle(isLink ? Palette.accent700 : Palette.text)
+                .foregroundStyle(Palette.text)
                 .textSelection(.enabled)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
