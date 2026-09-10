@@ -5,20 +5,23 @@ import SwiftUI
 /// Takes only the plain values it renders — no `VaultStore`, no `AutoLockController`, no
 /// `ClipboardService` — so it stays trivially previewable and so the browser owner can drop it in
 /// without pulling this file's dependencies along. Whoever embeds it is responsible for reading the
-/// live countdowns off `AutoLockController.secondsUntilIdleLock` / `ClipboardService.secondsRemaining`
-/// and re-rendering this view each tick; that observation belongs to the embedder, not to a "dumb"
-/// status strip.
+/// live countdown off `ClipboardService.secondsRemaining` and re-rendering this view each tick; that
+/// observation belongs to the embedder, not to a "dumb" status strip.
 struct StatusBar: View {
     /// Full path of the open database — pass-sumo shows the machinery on purpose (see `UnlockView`).
     let databasePath: String
     /// Whether `VaultStore.isDirty` is currently true.
     let isDirty: Bool
-    /// Seconds left before the idle auto-lock fires, or `nil` when the countdown isn't running
-    /// (`AutoLockController.secondsUntilIdleLock`).
-    let secondsUntilAutoLock: Int?
     /// Seconds left before the clipboard auto-clears, or `nil` when nothing of ours is on it
     /// (`ClipboardService.secondsRemaining`, `0` meaning "not counting" collapsed to `nil` by the
     /// caller).
+    ///
+    /// **Kept, unlike the auto-lock countdown (issue #101) that used to sit beside it.** The two
+    /// looked like the same kind of peripheral ticking, but they are not: auto-lock is a background
+    /// safeguard the user never has to act on before it fires, while this one reports a deadline
+    /// the user is actively racing — paste the secret before it clears, or it's gone. That is a
+    /// real decision this readout serves (how much longer do I have), not motion for its own sake,
+    /// so it stays.
     let secondsUntilClipboardClear: Int?
     /// Set when the last save went through but its pre-save backup did not
     /// (`VaultStore.lastBackupError`, worded by `VaultError.backupFailureMessage`). `nil` in the
@@ -81,15 +84,6 @@ struct StatusBar: View {
                 }
                 .accessibilityIdentifier("statusbar.clipboardCountdown")
             }
-
-            if let secondsUntilAutoLock {
-                Label {
-                    Text(Self.formatted(secondsUntilAutoLock)).font(Typography.monoCaption2)
-                } icon: {
-                    Image(systemName: "lock.rotation")
-                }
-                .accessibilityIdentifier("statusbar.autoLockCountdown")
-            }
         }
         .font(Typography.caption)
         .foregroundStyle(Palette.textSecondary)
@@ -97,19 +91,12 @@ struct StatusBar: View {
         .statusBarBand()
         .accessibilityIdentifier("statusbar")
     }
-
-    /// `m:ss` — the auto-lock timeout is minutes-scale (default 300s), so a bare second count would
-    /// read as a much more alarming number than it is.
-    private static func formatted(_ seconds: Int) -> String {
-        String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
 }
 
 #Preview("Clean") {
     StatusBar(
         databasePath: "/Users/den/Documents/Personal.kdbx",
         isDirty: false,
-        secondsUntilAutoLock: 284,
         secondsUntilClipboardClear: nil,
         backupWarning: nil
     )
@@ -119,7 +106,6 @@ struct StatusBar: View {
     StatusBar(
         databasePath: "/Users/den/Documents/Personal.kdbx",
         isDirty: true,
-        secondsUntilAutoLock: 12,
         secondsUntilClipboardClear: 7,
         backupWarning: nil
     )
@@ -129,7 +115,6 @@ struct StatusBar: View {
     StatusBar(
         databasePath: "/Users/den/Documents/Personal.kdbx",
         isDirty: false,
-        secondsUntilAutoLock: 284,
         secondsUntilClipboardClear: nil,
         backupWarning: "Saved, but no backup: couldn't back up Personal.kdbx before saving: "
             + "the volume is out of space."
