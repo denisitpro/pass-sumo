@@ -42,20 +42,29 @@ enum EntryListSortOrder: String, CaseIterable, Identifiable, Sendable {
 enum EntryListFilter {
     static func apply(
         to vault: Vault,
-        groupID: UUID?,
+        selection: GroupSelection,
         query: String,
         sortOrder: EntryListSortOrder = .titleAscending
     ) -> [VaultEntry] {
-        // `groupID == nil` means "All Entries" (no filter) here — NOT `entries(inGroup: nil)`'s
-        // meaning of "only entries with no group at all". See `GroupSidebar`'s doc comment for why
-        // the two `nil`s intentionally diverge.
-        let candidates = groupID.map(vault.entries(inGroup:)) ?? vault.entries
-
+        let candidates: [VaultEntry]
         // This list normally hides the recycle bin (see `Vault.liveEntries`). The one exception is
         // a user who has selected the bin — or a folder inside it — in the sidebar: the group
         // filter has already scoped the result to the bin, so hiding it again would make that
         // column silently return nothing, whether or not anything was typed.
-        let isScopedToRecycleBin = groupID.map(vault.recycleBinGroupIDs.contains) == true
+        let isScopedToRecycleBin: Bool
+
+        // Switched on, rather than first reduced to an optional group id: "All Entries" means "no
+        // group filter at all", which is NOT `entries(inGroup: nil)`'s "only entries with no group
+        // at all" (see that method's doc comment). Those two used to be spelled the same way, and
+        // issue #85 is what that cost; the switch is what keeps them apart.
+        switch selection {
+        case .allEntries:
+            candidates = vault.entries
+            isScopedToRecycleBin = false
+        case .group(let id):
+            candidates = vault.entries(inGroup: id)
+            isScopedToRecycleBin = vault.recycleBinGroupIDs.contains(id)
+        }
 
         // `Vault.search` deliberately matches across the WHOLE vault, including the password field
         // itself (see `Domain.swift`'s doc comment on `search(_:)` — a differentiator from
@@ -123,7 +132,10 @@ enum EntryListFilter {
 /// this type only consumes `searchText`, it doesn't present the search field.
 struct EntryListView: View {
     let vault: Vault
-    let groupID: UUID?
+    /// Which sidebar row is in effect. Non-optional here on purpose: "nothing is selected" is a
+    /// state of the SIDEBAR's binding, and `VaultBrowserView` resolves it to `.allEntries` before
+    /// this column ever sees it — see its `groupSelection`.
+    let selection: GroupSelection
     @Binding var searchText: String
     @Binding var selectedEntryID: UUID?
     /// Return opens the selected entry for editing — arrow-key movement comes free from `List`'s
@@ -144,7 +156,7 @@ struct EntryListView: View {
     @State private var sortOrder: EntryListSortOrder = .titleAscending
 
     private var entries: [VaultEntry] {
-        EntryListFilter.apply(to: vault, groupID: groupID, query: searchText, sortOrder: sortOrder)
+        EntryListFilter.apply(to: vault, selection: selection, query: searchText, sortOrder: sortOrder)
     }
 
     var body: some View {
@@ -277,7 +289,7 @@ struct EntryListView: View {
     @Previewable @State var selection: UUID?
     return EntryListView(
         vault: .sample,
-        groupID: nil,
+        selection: .allEntries,
         searchText: $searchText,
         selectedEntryID: $selection,
         onOpenEntry: { _ in },

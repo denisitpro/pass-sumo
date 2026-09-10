@@ -60,23 +60,99 @@ enum GroupTreeBuilder {
 
         return nodes
     }
+
+    /// The same forest, flattened back into a list, each group carrying the "Parent / Child" path
+    /// that names it. What a FLAT control needs — the "Move to" menu below, the entry sheet's group
+    /// picker — so both show the sidebar's order and the sidebar's nesting without walking the tree
+    /// a second way and drifting from it.
+    ///
+    /// Paths rather than indentation because these controls are `Menu`s and `Picker`s, where two
+    /// folders that happen to share a name ("Work / Archive" and "Personal / Archive") would
+    /// otherwise be two identical rows with different meanings. Terminates on a cyclic input for
+    /// the same reason the outline does: `build(from:)` has already broken the cycle.
+    static func paths(from groups: [VaultGroup]) -> [GroupPathItem] {
+        var result: [GroupPathItem] = []
+
+        func walk(_ nodes: [GroupTreeNode], prefix: String) {
+            for node in nodes {
+                let path = prefix.isEmpty ? node.group.name : prefix + " / " + node.group.name
+                result.append(GroupPathItem(group: node.group, path: path))
+                walk(node.children ?? [], prefix: path)
+            }
+        }
+
+        walk(build(from: groups), prefix: "")
+        return result
+    }
+}
+
+/// One group plus the path that identifies it in a list with no indentation of its own. Built by
+/// `GroupTreeBuilder.paths(from:)`; see that method for why the label is a path.
+struct GroupPathItem: Identifiable, Equatable {
+    let group: VaultGroup
+    let path: String
+    var id: UUID { group.id }
+}
+
+/// What a group row's context menu asks its owner to do.
+///
+/// One closure carrying this, rather than four separate closures. The sidebar deliberately holds no
+/// `VaultStore` — see `GroupSidebar.onEmptyRecycleBin` for the rule and why — so every one of these
+/// is a REQUEST, and keeping them in one type keeps that boundary a single visible thing instead of
+/// four parameters that can each drift into something that acts on its own.
+enum GroupCommand: Equatable {
+    /// A new folder under `parentID`; `nil` is the vault's top level.
+    case create(parentID: UUID?)
+    case rename(UUID)
+    case move(UUID, toParent: UUID?)
+    case delete(UUID)
+}
+
+/// What the sidebar's selection can be: the unfiltered "All Entries" row, or one group.
+///
+/// **An explicit case rather than `nil` for "All Entries" (issue #85).** A macOS `List(selection:)`
+/// bound to an `Optional` writes `nil` to mean *deselected*, so a `nil` that ALSO meant "All
+/// Entries" gave the list no way to tell "the user picked that row" from "the selection was
+/// cleared" — and the row could not reliably become, or stay, the selection once a group had been
+/// picked. Binding the list to `GroupSelection?` gives `nil` back its one real meaning.
+///
+/// `nil` still means something else again one layer down, and deliberately so:
+/// `Vault.entries(inGroup: nil)` means "entries with no group at all" (see that method's doc
+/// comment), which is not what "All Entries" promises. The two were never the same thing; this type
+/// is what stops them being spelled the same way.
+enum GroupSelection: Hashable {
+    case allEntries
+    case group(UUID)
+
+    /// The group something created "here" belongs to — `nil` for `allEntries`, which is
+    /// `VaultEntry.groupID`'s own "no group, top level".
+    ///
+    /// Deliberately NOT used as a filter argument: `EntryListFilter` switches on the case instead,
+    /// so the two meanings of `nil` above never meet again in one value.
+    var containingGroupID: UUID? {
+        switch self {
+        case .allEntries: return nil
+        case .group(let id): return id
+        }
+    }
 }
 
 /// The left column: "All Entries" plus the group outline, each row showing its own entry count.
 ///
-/// Selecting "All Entries" clears `selectedGroupID` to `nil`. That's a DIFFERENT meaning of `nil`
-/// than `Vault.entries(inGroup:)` uses (there, `nil` means "top-level entries with no group at
-/// all" — see that method's doc comment) — this view and `EntryListView` deliberately treat
-/// `selectedGroupID == nil` as "no filter, show everything" instead, which is what the "All
-/// Entries" label actually promises.
+/// The selection is a `GroupSelection?` rather than a `UUID?` — see that type's doc comment for
+/// what went wrong when "All Entries" was spelled `nil`.
 struct GroupSidebar: View {
     let vault: Vault
-    @Binding var selectedGroupID: UUID?
+    @Binding var selection: GroupSelection?
     /// Asks the owner to empty the recycle bin. A closure rather than a `VaultStore` reference
     /// because emptying is destructive and needs a confirmation, and the confirmation belongs
     /// where the rest of this screen's alerts live (`VaultBrowserView`) — a sidebar that could
     /// call `store.emptyRecycleBin()` directly is one refactor away from doing it without asking.
     var onEmptyRecycleBin: () -> Void
+    /// Where every group edit this sidebar can start goes. A closure for the same reason
+    /// `onEmptyRecycleBin` is one: deleting a folder takes its entries with it, and the view that
+    /// can destroy something must not also be the view that decides to.
+    var onGroupCommand: (GroupCommand) -> Void
 
     private var nodes: [GroupTreeNode] {
         GroupTreeBuilder.build(from: vault.groups)
@@ -86,7 +162,7 @@ struct GroupSidebar: View {
     private var recycleBinID: UUID? { vault.recycleBin.groupID }
 
     var body: some View {
-        List(selection: $selectedGroupID) {
+        List(selection: $selection) {
             sidebarRow(
                 label: "All Entries",
                 systemImage: "tray.full",
@@ -95,10 +171,13 @@ struct GroupSidebar: View {
                 // row actually reveals (`EntryListFilter` hides them too). Counting them would
                 // leave the count unchanged when an entry is deleted — the same "nothing
                 // happened" signal that makes a user press ⌫ a second time.
-                isSelected: selectedGroupID == nil,
+                isSelected: selection == .allEntries,
                 isMuted: false
             )
-            .tag(UUID?.none)
+            // `Optional(_:)`, matching the group rows below: the tag's type must be the binding's
+            // `GroupSelection?`, not `GroupSelection`, or the row is tagged with a value the
+            // selection can never hold and clicking it does nothing.
+            .tag(Optional(GroupSelection.allEntries))
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar.allEntries")
@@ -162,13 +241,13 @@ struct GroupSidebar: View {
             // `EntryListView` uses for the same group filter, so the number shown here always
             // equals what selecting this row actually reveals.
             count: vault.entries(inGroup: node.group.id).count,
-            isSelected: selectedGroupID == node.group.id,
+            isSelected: selection == .group(node.group.id),
             // The bin's row is de-emphasised (`.side-row.is-muted`): it is the one group whose
             // contents are not live credentials, and a user who cannot tell it apart at a glance
             // is exactly the user who copies a password out of it.
             isMuted: isRecycleBin
         )
-        .tag(Optional(node.group.id))
+        .tag(Optional(GroupSelection.group(node.group.id)))
         .accessibilityIdentifier(
             isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"
         )
@@ -176,15 +255,67 @@ struct GroupSidebar: View {
             if isRecycleBin {
                 Button("Empty Recycle Bin", role: .destructive, action: onEmptyRecycleBin)
                     .accessibilityIdentifier("sidebar.emptyRecycleBin")
+            } else {
+                Button("New Group…") { onGroupCommand(.create(parentID: node.group.id)) }
+                    .accessibilityIdentifier("sidebar.newGroup")
+                Button("Rename…") { onGroupCommand(.rename(node.group.id)) }
+                    .accessibilityIdentifier("sidebar.renameGroup")
+                moveMenu(for: node.group)
+                Divider()
+                Button("Delete Group", role: .destructive) { onGroupCommand(.delete(node.group.id)) }
+                    .accessibilityIdentifier("sidebar.deleteGroup")
             }
         }
+    }
+
+    /// The non-drag way to re-parent a folder. Drag and drop is the macOS-native gesture and is
+    /// deliberately not here — it is its own issue (see #88's out-of-scope list), and without this
+    /// menu `VaultStore.moveGroup` would have no way of being reached at all.
+    ///
+    /// Two things are filtered out of the destinations, for two different reasons:
+    ///
+    /// - **Anything `Vault.canMoveGroup` refuses** — the folder itself and its own descendants.
+    ///   Offering a destination the model will decline is a menu item that does nothing when
+    ///   clicked, which reads as a broken app rather than as a rule.
+    /// - **The recycle bin and everything in it.** Filing a live folder in there is a delete wearing
+    ///   a move's clothes; "Delete Group" is the affordance for that, and it is the one that asks.
+    ///   The bin's own contents keep this menu, though — with the bin excluded, what is left is
+    ///   exactly the set of places a recycled folder can be RESTORED to.
+    @ViewBuilder
+    private func moveMenu(for group: VaultGroup) -> some View {
+        let recycled = vault.recycleBinGroupIDs
+        let destinations = GroupTreeBuilder.paths(from: vault.groups).filter { candidate in
+            !recycled.contains(candidate.group.id)
+                && candidate.group.id != group.parentID
+                && vault.canMoveGroup(group.id, under: candidate.group.id)
+        }
+        let canGoToTopLevel = group.parentID != nil
+
+        Menu("Move to") {
+            if canGoToTopLevel {
+                Button("Top Level") { onGroupCommand(.move(group.id, toParent: nil)) }
+                    .accessibilityIdentifier("sidebar.moveGroup.topLevel")
+            }
+            ForEach(destinations) { destination in
+                Button(destination.path) {
+                    onGroupCommand(.move(group.id, toParent: destination.group.id))
+                }
+                .accessibilityIdentifier("sidebar.moveGroup.\(destination.group.id)")
+            }
+        }
+        .disabled(destinations.isEmpty && !canGoToTopLevel)
     }
 }
 
 #Preview {
-    @Previewable @State var selection: UUID?
+    @Previewable @State var selection: GroupSelection? = .allEntries
     return NavigationSplitView {
-        GroupSidebar(vault: .sample, selectedGroupID: $selection, onEmptyRecycleBin: {})
+        GroupSidebar(
+            vault: .sample,
+            selection: $selection,
+            onEmptyRecycleBin: {},
+            onGroupCommand: { _ in }
+        )
     } detail: {
         Text("Detail")
     }
