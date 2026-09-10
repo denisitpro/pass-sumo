@@ -41,15 +41,6 @@ private struct CustomFieldDraft: Identifiable {
 /// encrypted holding area), which is a real feature, not a UI tweak.
 struct EntryEditView: View {
     let originalID: UUID
-    /// The entry's built-in KDBX icon index, carried straight through the edit.
-    ///
-    /// A `let` beside `originalID`, not `@State`, because this form has no icon control yet — the
-    /// picker is the second half of issue #89. It has to be carried all the same: `save()` builds a
-    /// whole new `VaultEntry` from the fields it owns, so any modelled field it forgets is written
-    /// back as that field's default. For `iconID` that default is 0, and the result is an entry
-    /// that arrives in KeePassXC wearing the key icon because someone fixed a typo in its title.
-    /// When the picker lands, this becomes `@State` and the form owns it.
-    let originalIconID: UInt32
     let isNew: Bool
     let store: VaultStore
     let clipboard: ClipboardService
@@ -70,10 +61,24 @@ struct EntryEditView: View {
     /// mapping at the point of failure is what lets the message name the specific file.
     @State private var attachmentError: String?
     @State private var groupID: UUID?
+    /// The entry's built-in KDBX icon index (issue #89).
+    ///
+    /// `@State`, not the `let` it was while the picker did not exist: the form now owns it, so an
+    /// icon chosen here is part of the same uncommitted draft as the title beside it, and Cancel
+    /// discards both together. It is seeded from the entry and — like every other field on this
+    /// form — has to be named explicitly in `save()`, which builds a whole new `VaultEntry` and
+    /// silently defaults any field it forgets. See `save()`'s own doc comment.
+    @State private var iconID: UInt32
     @State private var created: Date
 
     @State private var isPasswordVisible = false
     @State private var showingGenerator = false
+    /// Presentation state for the icon picker, held here beside `showingGenerator` rather than
+    /// inside the button that raises it. Both sheets are then attached at this view's own body
+    /// level, which is the arrangement already proven to work from inside this `Form` — a `.sheet`
+    /// hung off a control nested in a `Section` is a different, less-travelled path, and this file
+    /// is not the place to find out where it stops working.
+    @State private var showingIconPicker = false
     @State private var wasLockedWhileEditing = false
 
     init(
@@ -86,7 +91,6 @@ struct EntryEditView: View {
         onDismiss: @escaping () -> Void
     ) {
         self.originalID = entry.id
-        self.originalIconID = entry.iconID
         self.isNew = isNew
         self.store = store
         self.clipboard = clipboard
@@ -104,6 +108,7 @@ struct EntryEditView: View {
             .map { CustomFieldDraft(name: $0.key, value: $0.value) })
         _attachments = State(initialValue: entry.attachments.map { AttachmentDraft(attachment: $0) })
         _groupID = State(initialValue: entry.groupID)
+        _iconID = State(initialValue: entry.iconID)
         _created = State(initialValue: entry.created)
     }
 
@@ -123,6 +128,7 @@ struct EntryEditView: View {
             Section {
                 TextField("Title", text: $title)
                     .accessibilityIdentifier("edit.title")
+                iconField
                 TextField("Username", text: $username)
                     .accessibilityIdentifier("edit.username")
 
@@ -207,6 +213,42 @@ struct EntryEditView: View {
         }
         .sheet(isPresented: $showingGenerator) {
             GeneratorSheet(generator: generator, clipboard: clipboard, onUse: { password = $0 })
+        }
+        .sheet(isPresented: $showingIconPicker) {
+            // Writes into this form's draft, not into the store: an icon picked here is undone by
+            // Cancel along with everything else typed on the form, and reaches the vault only
+            // through `save()`. A folder's picker commits immediately instead, because a folder has
+            // no form and no Save — see `IconPickerSheet`.
+            IconPickerSheet(title: "Entry Icon", selectedIconID: iconID) { iconID = $0 }
+        }
+    }
+
+    /// The icon row, directly under Title because it is the other half of what identifies the entry
+    /// in the list — the row draws the two together.
+    ///
+    /// A button that opens the grid rather than the grid inline: this form is already long, and
+    /// seven rows of glyphs wedged in among the identity fields would push everything else down for
+    /// a setting most edits never touch. The button's own label is the icon currently in effect, so
+    /// the form still answers "which one is it?" without opening anything.
+    private var iconField: some View {
+        LabeledContent("Icon") {
+            Button {
+                showingIconPicker = true
+            } label: {
+                HStack(spacing: Spacing.s4) {
+                    Image(
+                        systemName: StandardIconCatalog.symbolName(
+                            for: iconID,
+                            fallingBackTo: VaultEntry.defaultIconID
+                        )
+                    )
+                    .font(Typography.body)
+                    .frame(width: Metrics.rowIconSlot)
+                    Text("Change…")
+                }
+            }
+            .buttonStyle(.tokenSecondary)
+            .accessibilityIdentifier("edit.icon")
         }
     }
 
@@ -482,9 +524,9 @@ struct EntryEditView: View {
             notes: notes,
             otpAuthURL: otpAuthURLText.isEmpty ? nil : otpAuthURLText,
             customFields: fields,
-            // Carried, not defaulted — see `originalIconID`. A new entry's is already the default,
-            // because that is what the blank entry this form was opened on carries.
-            iconID: originalIconID,
+            // Named, not defaulted — see the `iconID` property. A new entry's starts at the
+            // default, because that is what the blank entry this form was opened on carries.
+            iconID: iconID,
             attachments: attachments.map(\.attachment),
             created: created,
             // `VaultStore.upsert` stamps its own `modified` to `Date()` regardless of what's

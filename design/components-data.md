@@ -39,18 +39,19 @@ buttons are, and they carry their own states.
 **Purpose.** One entry in the middle column. Dense on purpose: hundreds of entries is the expected
 scale.
 
-**Anatomy.** Fixed `row-entry-h` height, `space-5` horizontal padding. A two-line stack — title in
-`body`, username beneath in `caption2` — then a trailing "has a one-time code" clock glyph when the
-entry carries an `otpAuthURL`. The username line is omitted entirely when empty rather than left as
-blank space.
+**Anatomy.** Fixed `row-entry-h` height, `space-5` horizontal padding, `space-4` between parts. The
+entry's own built-in KDBX icon leads, in `caption` inside a fixed `row-icon-slot` square; then a
+two-line stack — title in `body`, username beneath in `caption2` — then a trailing "has a one-time
+code" clock glyph when the entry carries an `otpAuthURL`. The username line is omitted entirely when
+empty rather than left as blank space.
 
 **States.**
 
 | State | Treatment |
 |---|---|
-| default | `surface` ground, title `text`, sub-line `text-2`, glyph `text-3` |
+| default | `surface` ground, title `text`, sub-line and leading icon `text-2`, trailing glyph `text-3` |
 | hover | `sunken` ground |
-| selected | `row-sel-bg` ground; title, sub-line and glyph all take `row-sel-text`, and the title steps to `bodyMedium` |
+| selected | `row-sel-bg` ground; icon, title, sub-line and glyph all take `row-sel-text`, and the title steps to `bodyMedium` |
 | separator | a `border` hairline on the bottom edge, **inset** to the row's leading padding and run to the pane's trailing edge; suppressed on the last row |
 | empty (the list, not the row) | see Empty states below |
 
@@ -73,7 +74,8 @@ blank space.
 **Purpose.** "All Entries" and each group, with its own entry count.
 
 **Anatomy.** Fixed `row-sidebar-h` height, `space-3` horizontal padding, radius `sm`. Icon in
-`caption`, label in `body`, then the count in `monoCaption2` pushed to the trailing edge.
+`caption` inside a fixed `row-icon-slot` square, label in `body`, then the count in `monoCaption2`
+pushed to the trailing edge.
 
 **States.**
 
@@ -86,10 +88,20 @@ blank space.
 
 **Rules.**
 
+- **The row's icon comes from the group's own `iconID`, not from what the row is.** Both list
+  surfaces read the file's built-in KDBX icon index through `StandardIconCatalog`, so a folder
+  iconed in KeePassXC arrives here wearing that icon; a folder that never had one carries index 48
+  and draws `folder`, which is what every row drew before. The fixed slot exists because the glyph
+  is now one of 69 the user picks, and their widths differ by more than 10pt.
 - **The recycle bin is deliberately not styled like the folders around it** — it is the one group
   whose contents are not live credentials, and a user who cannot tell it apart at a glance is
-  exactly the user who copies a password out of it. It gets the trash icon, the muted treatment, and
-  is the only row offering "Empty Recycle Bin".
+  exactly the user who copies a password out of it. It gets the muted treatment and is the only row
+  offering "Empty Recycle Bin". Its trash icon is **not** part of that special case any more: the
+  bin carries index 43, which the catalogue maps to `trash`, so the glyph falls out of the same
+  lookup as every other row. Only the muted treatment is keyed on identity — that is a rule about
+  what the folder holds, not about which icon its owner chose.
+- The bin is the one folder whose context menu offers neither Rename nor Change Icon: its name and
+  its icon are what make it recognisable as the bin to every other client that opens the file.
 - The count is direct membership only, matching what selecting the row actually reveals; "All
   Entries" counts live entries, excluding the bin, so a delete visibly changes the number.
 - The mockup uses `text-3` for `.side-row .count`; the code uses `text-2`, because `text-3` does not

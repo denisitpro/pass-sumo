@@ -153,8 +153,10 @@ labels the slider's ends, and renders strength as a segmented bar with a verdict
 **Purpose.** Edit one entry, or create one — the same form, distinguished only by its title and by
 whether Save inserts.
 
-**Assembly.** A `Form(.grouped)` with a native cancel/confirm toolbar: identity fields, then Notes,
-One-Time Password, Custom Fields and Attachments as titled sections. It consumes the token layer for
+**Assembly.** A `Form(.grouped)` with a native cancel/confirm toolbar: identity fields — Title, then
+an "Icon" row whose secondary button shows the current glyph and opens the icon picker, then
+Username, password, Generate…, URL and Group — then Notes, One-Time Password, Custom Fields and
+Attachments as titled sections. It consumes the token layer for
 type, colour and its glyph buttons, but not the field chrome or the worded button roles, so it is the
 one screen that does not yet look like the rest of the app. No approved mockup exists (issue #63).
 
@@ -167,6 +169,35 @@ is a feature, not a UI tweak.
 
 **Error states.** A refused attachment (too large, unreadable, batch too large) appends a `danger`
 line naming the file and the limit; a failed export replaces it with its own sentence.
+
+## Icon picker sheet
+
+**Purpose.** Choose one of KeePass's 69 built-in icons, for a folder or for an entry (issue #89).
+pass-sumo does not ship KeePass's artwork; it draws an SF Symbol per index, and the file still
+carries the plain integer every other client reads.
+
+**Assembly.** Title in `headline`; a ten-column `LazyVGrid` of `glyph-button-size` cells at radius
+`xs`, `space-2` apart; then a single quiet Cancel. Fixed columns rather than adaptive, so the grid
+has an intrinsic width and the sheet sizes itself off the token layer instead of a hardcoded frame.
+
+**Clicking an icon is the commit.** There is no confirm button: a grid cell is not a field being
+filled in, and a second step would make the user say the same thing twice. Cancel — and Esc, which
+reaches it through `.cancelAction` — closes having changed nothing.
+
+**What "commit" means differs by caller, and that is not the sheet's business.** A folder's pick goes
+straight through `VaultStore.setGroupIcon`, the way "Move to" beside it in the same context menu
+does; an entry's is parked in the edit form's own draft state and lands with Save, so Cancel on the
+form discards it along with everything else typed there.
+
+**Reached from** the sidebar's group context menu ("Change Icon…", beside Rename) and the edit
+sheet's Icon row. Not from the entry list's row context menu: that menu is the pointer mirror of the
+toolbar's copy/open/delete actions, and it opens the edit form anyway.
+
+**States.** The index currently in effect is highlighted with `row-sel-bg` / `row-sel-text`. An index
+outside 0…68 — another client's, a future KeePass's — highlights nothing rather than being snapped
+to a default, because the file's value survives until the user actually picks something. Each cell's
+symbol name reaches the tooltip and VoiceOver; nothing is captioned, because 69 labels is a wall of
+text and KeePass's own names ("PaperQ", "WorldSocket") are 2003 Windows jargon.
 
 ## Settings
 

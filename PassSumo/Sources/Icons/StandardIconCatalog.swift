@@ -120,4 +120,50 @@ enum StandardIconCatalog {
         guard iconID < symbolNames.count else { return nil }
         return symbolNames[Int(iconID)]
     }
+
+    /// The same lookup, with the substitute the caller has decided on — a name, always, because a
+    /// view has to draw something and a blank space where an icon belongs reads as a broken app
+    /// rather than as an unknown index.
+    ///
+    /// Total by construction: an out-of-range `fallbackIconID` falls through to index 0 rather
+    /// than subscripting past the end. That last step is unreachable in practice (both callers
+    /// pass a `defaultIconID`, and `StandardIconCatalogTests` pins both inside the range) and is
+    /// there so no future caller can turn a bad integer into a crash in a password manager.
+    static func symbolName(for iconID: UInt32, fallingBackTo fallbackIconID: UInt32) -> String {
+        symbolName(for: iconID) ?? symbolName(for: fallbackIconID) ?? symbolNames[0]
+    }
+}
+
+// MARK: - What each kind of item falls back to
+
+// `symbolName(for:)` above deliberately answers `nil` for an index it cannot draw and leaves the
+// substitute to the caller. These two are those callers, named once here rather than at every view
+// that renders a row: the sidebar, the entry list and the picker all have to agree about what an
+// unknown index looks like, and three copies of `?? "folder"` is three chances to disagree.
+//
+// They live in this file, and not in `Sources/Model`, for the reason the whole directory exists:
+// an SF Symbol name is presentation, and `Sources/Model` is compiled into the durability helper,
+// which has no business knowing about one.
+
+extension VaultEntry {
+    /// The SF Symbol this entry is drawn with — its own built-in icon, or the key that
+    /// `defaultIconID` names when the file carries an index this build cannot draw.
+    var symbolName: String {
+        StandardIconCatalog.symbolName(for: iconID, fallingBackTo: Self.defaultIconID)
+    }
+}
+
+extension VaultGroup {
+    /// The SF Symbol this folder is drawn with — its own built-in icon, or the folder that
+    /// `defaultIconID` names when the file carries an index this build cannot draw.
+    ///
+    /// **This is also what draws the recycle bin.** The bin carries `iconID` 43 (`KDBXRecycleBin`
+    /// stamps it on a bin we create, and every KeePass-family client writes it), which the table
+    /// maps to `trash` — so the sidebar no longer special-cases the bin's glyph by identity. What
+    /// stays identity-driven there is the bin's *muted* treatment: that is a rule about what the
+    /// folder contains, not about which icon its owner picked, so a bin re-iconed in another
+    /// client draws that icon here and is de-emphasised all the same.
+    var symbolName: String {
+        StandardIconCatalog.symbolName(for: iconID, fallingBackTo: Self.defaultIconID)
+    }
 }

@@ -70,6 +70,12 @@ final class EntryEditSaveTests: XCTestCase {
     /// against — the form leaving `iconID` to its default — fails here instead of passing by
     /// coincidence. Both what the callback hands back and what landed in the store are checked:
     /// the callback is what the browser re-selects on, the store is what gets encoded to the file.
+    ///
+    /// `iconID` is now `@State` rather than the `let` it was when this test was written, because
+    /// the picker landed and the form owns the value (issue #89). That is why `title` is asserted
+    /// alongside it: `title` has always been `@State`, so if reading the seeded value of one out
+    /// here ever stopped working, this test would say so instead of quietly passing on a default
+    /// that happened to match.
     func testEditingAnEntryPreservesItsBuiltInIcon() async throws {
         let original = entry(iconID: 3)
         let store = try await makeUnlockedStore(containing: original)
@@ -79,6 +85,7 @@ final class EntryEditSaveTests: XCTestCase {
         editor.save()
 
         XCTAssertEqual(handedBack?.iconID, 3, "the edited entry lost its icon on the way out of the form")
+        XCTAssertEqual(handedBack?.title, "Router", "the form's seeded @State did not reach save()")
         guard case .unlocked(let vault) = store.state else {
             return XCTFail("store is not unlocked: \(store.state)")
         }

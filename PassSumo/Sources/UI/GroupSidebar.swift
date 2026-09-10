@@ -104,6 +104,10 @@ enum GroupCommand: Equatable {
     /// A new folder under `parentID`; `nil` is the vault's top level.
     case create(parentID: UUID?)
     case rename(UUID)
+    /// Open the icon picker for this folder. A request to PRESENT, not the pick itself: the sheet
+    /// belongs where this screen's other sheets and alerts live (`VaultBrowserView`), the same
+    /// place `rename` goes to raise its name prompt.
+    case changeIcon(UUID)
     case move(UUID, toParent: UUID?)
     case delete(UUID)
 }
@@ -214,6 +218,11 @@ struct GroupSidebar: View {
             Image(systemName: systemImage)
                 .font(Typography.caption)
                 .foregroundStyle(quietColor)
+                // A fixed slot, because the glyph is no longer one of three known-similar symbols
+                // — it is whichever of the 69 the folder's `iconID` names, and those run 8pt to
+                // 21pt wide at this size. Without it every label in the column starts at a
+                // different x. See `Metrics.rowIconSlot`.
+                .frame(width: Metrics.rowIconSlot)
             Text(label)
                 .font(isSelected ? Typography.bodyMedium : Typography.body)
                 .foregroundStyle(labelColor)
@@ -228,15 +237,21 @@ struct GroupSidebar: View {
 
     /// One folder row. The recycle bin is deliberately NOT styled like the folders around it: it
     /// is the one group where the entries inside are not live credentials, and a user who cannot
-    /// tell it apart at a glance is exactly the user who copies a password out of it. It gets the
-    /// trash icon (matching the icon id we write into the file for other clients — see
-    /// `KDBXRecycleBin`), a de-emphasised label, and the only place "Empty Recycle Bin" is offered.
+    /// tell it apart at a glance is exactly the user who copies a password out of it. It gets a
+    /// de-emphasised label and the only place "Empty Recycle Bin" is offered.
+    ///
+    /// **The glyph is no longer one of them** (issue #89). It used to be picked by identity —
+    /// `trash` for the bin, `folder` for everything else — which drew the same two symbols however
+    /// a database's owner had actually iconed their folders. It now comes from the group's own
+    /// `iconID` through `VaultGroup.symbolName`, and the bin falls out of that table rather than
+    /// being special-cased: it carries `iconID` 43, which maps to the same `trash` this row drew
+    /// before. The identity check that remains is about the muted treatment only.
     @ViewBuilder
     private func row(for node: GroupTreeNode) -> some View {
         let isRecycleBin = node.group.id == recycleBinID
         sidebarRow(
             label: node.group.name,
-            systemImage: isRecycleBin ? "trash" : "folder",
+            systemImage: node.group.symbolName,
             // Direct membership only (not descendants) — matches `entries(inGroup:)`, which
             // `EntryListView` uses for the same group filter, so the number shown here always
             // equals what selecting this row actually reveals.
@@ -260,6 +275,12 @@ struct GroupSidebar: View {
                     .accessibilityIdentifier("sidebar.newGroup")
                 Button("Rename…") { onGroupCommand(.rename(node.group.id)) }
                     .accessibilityIdentifier("sidebar.renameGroup")
+                // Beside Rename, because it is the same kind of act: naming the folder, in the
+                // other of the two ways KDBX lets a folder be named. The recycle bin is left out
+                // for the same reason it has no Rename — its name and its icon are what make it
+                // recognisable as the bin to every other client that opens the file.
+                Button("Change Icon…") { onGroupCommand(.changeIcon(node.group.id)) }
+                    .accessibilityIdentifier("sidebar.changeGroupIcon")
                 moveMenu(for: node.group)
                 Divider()
                 Button("Delete Group", role: .destructive) { onGroupCommand(.delete(node.group.id)) }
