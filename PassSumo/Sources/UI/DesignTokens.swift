@@ -235,6 +235,32 @@ enum Metrics {
     static let rowIconSlot: CGFloat = 20
     /// The large lock/shield glyph a centred card is headed by — the mockup's `.big-lock`.
     static let heroGlyphSize: CGFloat = 40
+
+    // Welcome and Unlock (issue #102): both are a card centred on `Palette.canvas` in the same
+    // `WindowGroup` the vault browser uses, so neither screen can shrink the *window* to its own
+    // content size — `PassSumoApp.swift` pins that window's floor at 900×560 for the browser. The
+    // honest fix is therefore the other option issue #102 names: let the card's width breathe with
+    // the window rather than sit at one fixed size forever. `authCardWidthFraction` is evaluated
+    // against the window's content width and clamped to [`authCardMinWidth`, `authCardMaxWidth`].
+
+    /// Fraction of the window's width the card claims before clamping. 0.4 keeps the card at its
+    /// floor through the 900pt minimum window (900 × 0.4 = 360 < the floor) and lets it reach its
+    /// ceiling by roughly 2200pt — comfortably below the owner's ~1800pt and 5120pt (fullscreen)
+    /// screenshots in issue #102, so both are visibly wider than the old fixed card, not just the
+    /// smallest one.
+    static let authCardWidthFraction: CGFloat = 0.4
+    /// Floor. The pre-#102 fixed width `WelcomeView`'s card already used — unchanged, so the
+    /// smallest supported window (900×560) still renders exactly as before.
+    static let authCardMinWidth: CGFloat = 420
+    /// Ceiling. A comfortable reading width, well past the old fixed 420/360pt cards, but still a
+    /// deliberate stop — not the "grows without limit" behaviour issue #32 fixed for the
+    /// master-password field, just evaluated against a bigger number this time.
+    static let authCardMaxWidth: CGFloat = 880
+    /// `WelcomeView`'s card height floor — unchanged from before issue #102. Height is not part of
+    /// the breathing treatment above: this screen's content is a fixed handful of rows, and forcing
+    /// it taller on a tall window would only pad blank space *inside* the card, which is not what
+    /// "the card breathes" is meant to fix.
+    static let authCardMinHeight: CGFloat = 360
     /// The label column of a label/value field row.
     static let fieldLabelWidth: CGFloat = 90
     /// The toolbar's search well — the mockup's `.search`. Fixed rather than flexible: it is
