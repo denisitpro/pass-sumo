@@ -19,7 +19,9 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     var url: String
     var notes: String
     var otpAuthURL: String?            // raw `otpauth://...` taken from the "otp" string field
-    var customFields: [String: String] // all other string fields, minus the 5 standard ones + otp
+    /// All other string fields, minus the 5 standard ones + otp. Keyed by field name; see
+    /// `VaultFieldValue` for why the value is not a bare `String`.
+    var customFields: [String: VaultFieldValue]
     /// Index into KeePass's built-in icon set (0…68), stored verbatim as the file's `IconID`.
     ///
     /// Modelled as the raw integer rather than as an app-side enum because the integer is the
@@ -54,6 +56,36 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     /// rest of `entry.history` only reaches the file through `KDBXContentMerge`'s preserved
     /// original rather than through anything `Vault` models live.
     var passwordLastChanged: Date? = nil
+}
+
+// MARK: - Custom fields
+
+/// One custom string field's value, plus whether the file stores that field as a secret.
+///
+/// This used to be a bare `String`, and dropping the protection flag on decode cost two things: a
+/// field another client had marked secret came back rendered in the clear, and the user had no way
+/// to mark one of their own. The flag is deliberately ONE `Bool` rather than KDBXKit's four-case
+/// `ProtectedString.Value`: the domain model must not learn the codec's storage classes (the
+/// architecture contract's dependency-inversion rule — it is what lets the whole UI run against
+/// in-memory fakes), and "is this a secret" is the only distinction the entry view and the writer
+/// actually need. The collapse in both directions lives at the codec boundary, in
+/// `Sources/KDBX/KDBXFieldKeys.swift`.
+struct VaultFieldValue: Sendable, Equatable {
+    /// Plaintext while unlocked, exactly like `VaultEntry.password` and for the same reason.
+    var value: String
+    /// `true` when the field is a secret: concealed in `EntryDetailView` until revealed, and
+    /// written back into a protected on-disk class. Not derived from the value — it is the file's
+    /// own marking, or the user's choice in the edit sheet.
+    var isProtected: Bool
+}
+
+extension VaultFieldValue {
+    /// A field that is not a secret. Spelled out at call sites so "shown in the clear" reads as a
+    /// decision somebody made rather than a default that got inherited.
+    static func plain(_ value: String) -> Self { .init(value: value, isProtected: false) }
+
+    /// A field that is a secret.
+    static func protected(_ value: String) -> Self { .init(value: value, isProtected: true) }
 }
 
 extension VaultEntry {
@@ -664,9 +696,11 @@ extension Vault {
             if entry.notes.searchNormalized.contains(needle) { return true }
             // See the doc comment above: this line is the differentiator, keep it.
             if entry.password.searchNormalized.contains(needle) { return true }
-            for (name, value) in entry.customFields {
+            for (name, field) in entry.customFields {
                 if name.searchNormalized.contains(needle) { return true }
-                if value.searchNormalized.contains(needle) { return true }
+                // A protected field's value is searched like the password above: concealment is a
+                // display rule, and a vault you cannot search by recovery code is worse at its job.
+                if field.value.searchNormalized.contains(needle) { return true }
             }
             return false
         }
@@ -699,7 +733,11 @@ extension Vault {
     /// Backs SwiftUI previews (`#Preview`) and the `-ui-testing` launch fixture used by
     /// `PassSumoUITests` — see the architecture contract's Testing section. A couple of entries
     /// carry `otpAuthURL` (valid-looking base32 TOTP secrets) and a couple carry `customFields`,
-    /// so previews/UI tests exercise those code paths without needing a real KDBX file.
+    /// so previews/UI tests exercise those code paths without needing a real KDBX file. Those
+    /// custom fields deliberately cover BOTH protection states — a concealed one (`Recovery
+    /// Email`) and plain ones (`SSH Key Fingerprint`, `Account ID`, `Role`) — so a preview or a
+    /// screenshot shows what a real vault looks like rather than one uniform rendering. An SSH
+    /// *public*-key fingerprint and an AWS account id are published identifiers, not secrets.
     static let sample: Vault = {
         let groupEmail = VaultGroup(
             id: fixedUUID("10000000-0000-0000-0000-000000000001"),
@@ -831,7 +869,7 @@ extension Vault {
             url: "https://mail.zoho.com",
             notes: "",
             otpAuthURL: nil,
-            customFields: ["Recovery Email": "den.recovery@zohomail.com"],
+            customFields: ["Recovery Email": .protected("den.recovery@zohomail.com")],
             created: emailDates7.created,
             modified: emailDates7.modified
         ))
@@ -848,7 +886,7 @@ extension Vault {
             url: "https://github.com/login",
             notes: "",
             otpAuthURL: "otpauth://totp/GitHub:denisitpro?secret=KRSXG5CTMVRXEZLU&issuer=GitHub&algorithm=SHA1&digits=6&period=30",
-            customFields: ["SSH Key Fingerprint": "SHA256:tZ4kR3F1n9pLwQxM7vC2sB8hY5aU0eD6jK1oI3rT9nQ"],
+            customFields: ["SSH Key Fingerprint": .plain("SHA256:tZ4kR3F1n9pLwQxM7vC2sB8hY5aU0eD6jK1oI3rT9nQ")],
             created: workDates1.created,
             modified: workDates1.modified
         ))
@@ -893,7 +931,7 @@ extension Vault {
             url: "https://console.aws.amazon.com",
             notes: "IAM user, not root — root creds are not in this vault.",
             otpAuthURL: nil,
-            customFields: ["Account ID": "482910337201", "Role": "Admin"],
+            customFields: ["Account ID": .plain("482910337201"), "Role": .plain("Admin")],
             created: workDates4.created,
             modified: workDates4.modified
         ))

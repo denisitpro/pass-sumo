@@ -101,8 +101,9 @@ final class KDBXCodecTests: XCTestCase {
         XCTAssertTrue(vault.entries.contains { $0.title == "Почта 📧" })
 
         let vpn = try XCTUnwrap(vault.entries.first { $0.title == "VPN Access" })
-        // Custom string fields land in `customFields` regardless of whether the file marked them
-        // memory-protected — protection is an on-disk property, not part of the domain model.
+        // Custom string fields land in `customFields` whether or not the file marked them
+        // protected; which of the two it was now travels with the value. See
+        // `testProtectionClassOfCustomFieldsSurvivesDecode` for the assertion on the flag itself.
         XCTAssertEqual(Set(vpn.customFields.keys), ["Recovery Code", "Security Answer"])
     }
 
@@ -535,7 +536,7 @@ final class KDBXCodecTests: XCTestCase {
             url: "https://example.invalid",
             notes: "",
             otpAuthURL: nil,
-            customFields: ["Recovery Code": "abcd-efgh"],
+            customFields: ["Recovery Code": .protected("abcd-efgh")],
             created: Date(),
             modified: Date()
         ))
@@ -550,7 +551,7 @@ final class KDBXCodecTests: XCTestCase {
         XCTAssertTrue(reopened.vault.groups.contains { $0.name == "Added Folder" })
         let added = try XCTUnwrap(reopened.vault.entries.first { $0.title == "Added Entry" })
         XCTAssertEqual(added.password, "s3cret")
-        XCTAssertEqual(added.customFields["Recovery Code"], "abcd-efgh")
+        XCTAssertEqual(added.customFields["Recovery Code"], .protected("abcd-efgh"))
         XCTAssertFalse(reopened.vault.entries.contains { $0.title == "Prod" })
 
         // A deletion has to leave a tombstone, or the next KeePassXC merge resurrects the entry
@@ -869,6 +870,257 @@ final class KDBXCodecTests: XCTestCase {
         )
     }
 
+    // MARK: - Custom-field protection (issue #65)
+    //
+    // What these pin down, and why each one is here rather than being implied by the others:
+    // decode must carry the file's protection marking into the domain model, an untouched save
+    // must give it back byte-for-byte in the same class, and a deliberate change by the user must
+    // actually reach the file. The last one is the subtle half — the writer preserves an existing
+    // field's class on purpose (see `reboxed(with:)`), which is right for a value edit and would
+    // silently swallow a protection edit if nothing distinguished the two.
+    //
+    // The read fixture is `kdbx3-aeskdf-aes256.kdbx`, whose `VPN Access` entry carries one plain
+    // custom field (`Recovery Code`) and one protected one (`Security Answer`). Their classes were
+    // not taken from `Fixtures/README.md` on trust: the file was decoded and the boxed cases read
+    // off directly (`Recovery Code` = `.regular`, `Security Answer` = `.lazyInnerCipher`), which
+    // is what `testProtectedCustomFieldDecodesProtectedAndPlainOneDoesNot` now asserts.
+
+    /// All four `KDBX.ProtectedString.Value` cases collapse to the one `Bool` the domain model
+    /// carries, and each mapping follows from KDBXKit's own writer rather than from the case name.
+    ///
+    /// - `.regular` writes as cleartext XML with no attribute — the only genuinely non-secret case.
+    /// - `.unprotected` writes as base64 `Protected="True"`; the name means "plaintext in memory,
+    ///   not yet encrypted", NOT "written in the clear".
+    /// - `.lazyInnerCipher` also writes as base64 `Protected="True"`, and is what the reader emits
+    ///   for every protected node it parses.
+    /// - `.protectedInMemory` writes as cleartext XML plus `ProtectInMemory="True"`. It is the one
+    ///   judgement call: the bytes are NOT encrypted on disk, but the attribute is the file
+    ///   author's statement that the field is sensitive, so it reads as a secret here. Concealing
+    ///   it costs nothing; revealing it would disclose exactly what the marking asks us not to.
+    func testProtectionClassCollapsesToOneBit() throws {
+        XCTAssertFalse(KDBX.ProtectedString.Value.regular("x").isProtected)
+        XCTAssertTrue(KDBX.ProtectedString.Value.unprotected("x").isProtected)
+        XCTAssertTrue(KDBX.ProtectedString.Value.protectedInMemory("x").isProtected)
+
+        // `.lazyInnerCipher` cannot be built from a String — its payload is ciphertext bound to a
+        // reader's keystream offset — so it comes from a real file, which is also the only place
+        // it is ever produced.
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-aeskdf-aes256"),
+            credentials: credentials(Self.kpxcPassword)
+        )
+        let content = try XCTUnwrap(Self.kdbxContent(of: decoded))
+        let vpn = try XCTUnwrap(Self.entry(titled: "VPN Access", in: content))
+        XCTAssertEqual(Self.protectionCase("Security Answer", in: vpn), "lazyInnerCipher")
+        let lazyValue = try XCTUnwrap(vpn.strings.first { $0.key == "Security Answer" }?.value)
+        XCTAssertTrue(lazyValue.isProtected)
+    }
+
+    /// Decode is where the flag used to be dropped (issue #65). Both states have to survive it,
+    /// with the values still readable.
+    func testProtectedCustomFieldDecodesProtectedAndPlainOneDoesNot() throws {
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-aeskdf-aes256"),
+            credentials: credentials(Self.kpxcPassword)
+        )
+        let vpn = try XCTUnwrap(decoded.vault.entries.first { $0.title == "VPN Access" })
+
+        let answer = try XCTUnwrap(vpn.customFields["Security Answer"])
+        XCTAssertTrue(answer.isProtected, "the file stores this one as Protected=\"True\"")
+        XCTAssertFalse(answer.value.isEmpty, "a protected field must still decrypt to its value")
+
+        let recovery = try XCTUnwrap(vpn.customFields["Recovery Code"])
+        XCTAssertFalse(recovery.isProtected, "the file stores this one as cleartext XML")
+        XCTAssertFalse(recovery.value.isEmpty)
+    }
+
+    /// The regression this whole change risks: a save with nothing edited must not reclassify
+    /// anybody's field. Asserted on the exact boxed case, not just on the bit — see
+    /// `protectionCase(_:in:)`.
+    func testCustomFieldProtectionSurvivesASaveWithNoEdit() throws {
+        let creds = credentials(Self.kpxcPassword)
+        let decoded = try codec.decode(fileData: try fixture("kdbx3-aeskdf-aes256"), credentials: creds)
+
+        let reopened = try codec.decode(
+            fileData: try codec.encode(decoded.vault, credentials: creds, origin: decoded),
+            credentials: creds
+        )
+
+        let vpn = try XCTUnwrap(reopened.vault.entries.first { $0.title == "VPN Access" })
+        XCTAssertEqual(vpn.customFields["Security Answer"]?.isProtected, true)
+        XCTAssertEqual(vpn.customFields["Recovery Code"]?.isProtected, false)
+
+        let content = try XCTUnwrap(Self.kdbxContent(of: reopened))
+        let raw = try XCTUnwrap(Self.entry(titled: "VPN Access", in: content))
+        XCTAssertEqual(Self.protectionCase("Security Answer", in: raw), "lazyInnerCipher")
+        XCTAssertEqual(Self.protectionCase("Recovery Code", in: raw), "regular")
+    }
+
+    /// Toggle on, with the value left alone — which is also the case the writer's
+    /// unchanged-value shortcut would have swallowed if the protection check ran after it.
+    func testMarkingACustomFieldProtectedWritesItProtected() throws {
+        let creds = credentials(Self.kpxcPassword)
+        let decoded = try codec.decode(fileData: try fixture("kdbx3-aeskdf-aes256"), credentials: creds)
+
+        var vault = decoded.vault
+        let index = try XCTUnwrap(vault.entries.firstIndex { $0.title == "VPN Access" })
+        let original = try XCTUnwrap(vault.entries[index].customFields["Recovery Code"])
+        vault.entries[index].customFields["Recovery Code"] = .protected(original.value)
+
+        let reopened = try codec.decode(
+            fileData: try codec.encode(vault, credentials: creds, origin: decoded),
+            credentials: creds
+        )
+        let vpn = try XCTUnwrap(reopened.vault.entries.first { $0.title == "VPN Access" })
+        XCTAssertEqual(vpn.customFields["Recovery Code"]?.isProtected, true)
+        XCTAssertEqual(vpn.customFields["Recovery Code"]?.value, original.value, "the value is untouched")
+
+        let content = try XCTUnwrap(Self.kdbxContent(of: reopened))
+        let raw = try XCTUnwrap(Self.entry(titled: "VPN Access", in: content))
+        XCTAssertEqual(
+            Self.protectionCase("Recovery Code", in: raw), "lazyInnerCipher",
+            "the field must now be a Protected=\"True\" node, which is what the reader boxes lazily"
+        )
+    }
+
+    /// Toggle off. The mirror image, and the direction that actually declassifies bytes, so it
+    /// gets the same class-level assertion.
+    func testUnmarkingACustomFieldWritesItPlain() throws {
+        let creds = credentials(Self.kpxcPassword)
+        let decoded = try codec.decode(fileData: try fixture("kdbx3-aeskdf-aes256"), credentials: creds)
+
+        var vault = decoded.vault
+        let index = try XCTUnwrap(vault.entries.firstIndex { $0.title == "VPN Access" })
+        let original = try XCTUnwrap(vault.entries[index].customFields["Security Answer"])
+        vault.entries[index].customFields["Security Answer"] = .plain(original.value)
+
+        let reopened = try codec.decode(
+            fileData: try codec.encode(vault, credentials: creds, origin: decoded),
+            credentials: creds
+        )
+        let vpn = try XCTUnwrap(reopened.vault.entries.first { $0.title == "VPN Access" })
+        XCTAssertEqual(vpn.customFields["Security Answer"]?.isProtected, false)
+        XCTAssertEqual(vpn.customFields["Security Answer"]?.value, original.value)
+
+        let content = try XCTUnwrap(Self.kdbxContent(of: reopened))
+        let raw = try XCTUnwrap(Self.entry(titled: "VPN Access", in: content))
+        XCTAssertEqual(Self.protectionCase("Security Answer", in: raw), "regular")
+    }
+
+    /// A brand-new custom field takes the flag it was created with, in both directions. Before
+    /// this change the codec forced every new custom field into a protected class, which is what
+    /// made the edit sheet's toggle a prerequisite rather than a nicety.
+    func testNewCustomFieldTakesTheFlagItWasCreatedWith() throws {
+        let creds = credentials(Self.kdbxKitPassword)
+        let decoded = try codec.decode(
+            fileData: try fixture("kpxc-rich", subdirectory: "Fixtures/kdbxkit"),
+            credentials: creds
+        )
+
+        var vault = decoded.vault
+        vault.entries.append(VaultEntry(
+            id: UUID(),
+            groupID: nil,
+            title: "Flag Carrier",
+            username: "",
+            password: "",
+            url: "",
+            notes: "",
+            otpAuthURL: nil,
+            customFields: [
+                "Recovery Code": .protected("abcd-efgh"),
+                "Account ID": .plain("482910337201"),
+            ],
+            created: Date(),
+            modified: Date()
+        ))
+
+        let reopened = try codec.decode(
+            fileData: try codec.encode(vault, credentials: creds, origin: decoded),
+            credentials: creds
+        )
+        let added = try XCTUnwrap(reopened.vault.entries.first { $0.title == "Flag Carrier" })
+        XCTAssertEqual(added.customFields["Recovery Code"], .protected("abcd-efgh"))
+        XCTAssertEqual(added.customFields["Account ID"], .plain("482910337201"))
+
+        let content = try XCTUnwrap(Self.kdbxContent(of: reopened))
+        let raw = try XCTUnwrap(Self.entry(titled: "Flag Carrier", in: content))
+        XCTAssertEqual(Self.protectionCase("Recovery Code", in: raw), "lazyInnerCipher")
+        XCTAssertEqual(
+            Self.protectionCase("Account ID", in: raw), "regular",
+            "a field created with the toggle off must be written in the clear, not protected"
+        )
+    }
+
+    /// `ProtectInMemory="True"` is the class no fixture can supply: `keepassxc-cli` turns the
+    /// attribute into a real inner-stream-protected field on import (verified — the fixture's
+    /// `Security Answer` comes back `.lazyInnerCipher`, not `.protectedInMemory`), and our own
+    /// writer never chooses it. So this drives `KDBXEntryStrings.apply` directly against a
+    /// hand-built base, which is the exact point where the class is decided.
+    ///
+    /// It also pins the standard/custom boundary, which a protection change must not move: a
+    /// `.protectedInMemory` standard field keeps its class through a value edit too (that path
+    /// carries no per-field intent at all), and a reserved key that somehow appears in
+    /// `customFields` must not reach the real field.
+    func testValueEditKeepsAProtectInMemoryFieldInItsOwnClass() throws {
+        let base: [KDBX.ProtectedString] = [
+            .init(key: "Title", value: .regular("VPN")),
+            .init(key: "Notes", value: .protectedInMemory("old notes")),
+            .init(key: "Security Answer", value: .protectedInMemory("old answer")),
+        ]
+        let entry = VaultEntry(
+            id: UUID(),
+            groupID: nil,
+            title: "VPN",
+            username: "",
+            password: "",
+            url: "",
+            notes: "new notes",
+            otpAuthURL: nil,
+            // `.protected` here is the SAME intent the base already expresses, so the class must
+            // be preserved rather than moved to the canonical protected class.
+            customFields: ["Security Answer": .protected("new answer")],
+            created: Date(),
+            modified: Date()
+        )
+
+        let applied = KDBXEntryStrings.apply(entry, to: base, baseTitle: "VPN", memoryProtection: nil)
+
+        func value(_ key: String) -> KDBX.ProtectedString.Value? {
+            applied.first { $0.key == key }?.value
+        }
+        func className(_ key: String) -> String? {
+            guard let value = value(key) else { return nil }
+            switch value {
+            case .regular: return "regular"
+            case .unprotected: return "unprotected"
+            case .protectedInMemory: return "protectedInMemory"
+            case .lazyInnerCipher: return "lazyInnerCipher"
+            }
+        }
+
+        XCTAssertEqual(value("Security Answer")?.withRevealedString { $0 }, "new answer")
+        XCTAssertEqual(
+            className("Security Answer"), "protectedInMemory",
+            "an unchanged protection intent must preserve the exact class, attribute and all"
+        )
+        XCTAssertEqual(value("Notes")?.withRevealedString { $0 }, "new notes")
+        XCTAssertEqual(
+            className("Notes"), "protectedInMemory",
+            "a standard field carries no per-field intent, so its class is always preserved"
+        )
+
+        // Same base, but the caller hands a reserved key in `customFields`. It must be ignored:
+        // `Notes` is owned by the standard-field loop, and the custom loop must never be able to
+        // reclassify it.
+        var smuggler = entry
+        smuggler.customFields["Notes"] = .plain("smuggled")
+        let guarded = KDBXEntryStrings.apply(smuggler, to: base, baseTitle: "VPN", memoryProtection: nil)
+        let notes = try XCTUnwrap(guarded.first { $0.key == "Notes" })
+        XCTAssertEqual(notes.value.withRevealedString { $0 }, "new notes")
+        XCTAssertTrue(notes.value.isProtected)
+    }
+
     private static func kdbxContent(of decoded: DecodedVault) -> KDBXContent? {
         (decoded.opaque as? KDBXOrigin)?.content
     }
@@ -893,6 +1145,24 @@ final class KDBXCodecTests: XCTestCase {
     private static func string(_ key: String, in entry: KDBX.Entry) -> String? {
         entry.strings.first { $0.key == key }?.value.withRevealedString { $0 }
     }
+
+    /// The exact `KDBX.ProtectedString.Value` case one string field is boxed in, as a name.
+    ///
+    /// The protected-custom-field tests assert on the CASE, not only on the `isProtected` bit the
+    /// domain model carries: `.protectedInMemory` and `.unprotected` both report `isProtected ==
+    /// true`, so a field silently promoted from the first to the second — which would strip a
+    /// `ProtectInMemory="True"` attribute another client wrote and replace it with base64
+    /// `Protected="True"` — is invisible to an assertion on the bit alone.
+    private static func protectionCase(_ key: String, in entry: KDBX.Entry) -> String? {
+        guard let value = entry.strings.first(where: { $0.key == key })?.value else { return nil }
+        switch value {
+        case .regular: return "regular"
+        case .unprotected: return "unprotected"
+        case .protectedInMemory: return "protectedInMemory"
+        case .lazyInnerCipher: return "lazyInnerCipher"
+        }
+    }
+
 
     private static func keePassXCCLIOrSkip() throws -> String {
         let candidates = [

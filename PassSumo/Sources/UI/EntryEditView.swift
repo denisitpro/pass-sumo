@@ -23,6 +23,11 @@ private struct CustomFieldDraft: Identifiable {
     let id = UUID()
     var name: String
     var value: String
+    /// Mirrors `VaultFieldValue.isProtected`, and is why this sheet has a per-field lock button:
+    /// without one, every custom field pass-sumo ever created would render concealed forever,
+    /// because the codec used to force new custom fields into a protected class regardless of
+    /// what the field actually holds.
+    var isProtected: Bool
 }
 
 /// Edit form for a `VaultEntry` — also used for a brand-new one, distinguished only by `isNew`
@@ -105,7 +110,9 @@ struct EntryEditView: View {
         _otpAuthURLText = State(initialValue: entry.otpAuthURL ?? "")
         _customFields = State(initialValue: entry.customFields
             .sorted { $0.key < $1.key }
-            .map { CustomFieldDraft(name: $0.key, value: $0.value) })
+            .map {
+                CustomFieldDraft(name: $0.key, value: $0.value.value, isProtected: $0.value.isProtected)
+            })
         _attachments = State(initialValue: entry.attachments.map { AttachmentDraft(attachment: $0) })
         _groupID = State(initialValue: entry.groupID)
         _iconID = State(initialValue: entry.iconID)
@@ -173,6 +180,22 @@ struct EntryEditView: View {
                     HStack(spacing: Spacing.s4) {
                         TextField("Name", text: $field.name)
                         TextField("Value", text: $field.value)
+                        // A quiet glyph, not a `Toggle` — same reasoning as `FieldRow`'s eye: a
+                        // switch or a filled button-style toggle in every row would read as
+                        // heavier than Delete beside it. The label states the ACTION, so
+                        // VoiceOver announces what pressing it does rather than a bare state.
+                        Button {
+                            field.isProtected.toggle()
+                        } label: {
+                            Image(systemName: field.isProtected ? "lock.fill" : "lock.open")
+                        }
+                        .buttonStyle(.tokenGlyph)
+                        .help(field.isProtected
+                            ? "Stored as a secret — hidden until revealed. Click to store in the clear."
+                            : "Stored in the clear. Click to store as a secret.")
+                        .accessibilityLabel(field.isProtected
+                            ? "Store in the clear"
+                            : "Store as a secret")
                         Button(role: .destructive) {
                             customFields.removeAll { $0.id == field.id }
                         } label: {
@@ -182,7 +205,11 @@ struct EntryEditView: View {
                     }
                 }
                 Button("Add Field") {
-                    customFields.append(CustomFieldDraft(name: "", value: ""))
+                    // Protected by default, which is where the codec's old hardcoded
+                    // `defaultProtected: true` moved to: a password manager's custom attributes
+                    // hold recovery codes and security answers far more often than trivia, so the
+                    // safe default is to conceal. Unlike before, the user can now turn it off.
+                    customFields.append(CustomFieldDraft(name: "", value: "", isProtected: true))
                 }
                 .accessibilityIdentifier("edit.addField")
             }
@@ -506,12 +533,12 @@ struct EntryEditView: View {
     func save() {
         guard !wasLockedWhileEditing else { return }
 
-        var fields: [String: String] = [:]
+        var fields: [String: VaultFieldValue] = [:]
         // Last-write-wins on a duplicate name rather than crashing: two drafts can legitimately
         // share a name for a moment while the user is mid-rename, and `Dictionary(uniqueKeysWithValues:)`
         // would trap on that instead of just resolving to one value.
         for field in customFields where !field.name.isEmpty {
-            fields[field.name] = field.value
+            fields[field.name] = VaultFieldValue(value: field.value, isProtected: field.isProtected)
         }
 
         let entry = VaultEntry(

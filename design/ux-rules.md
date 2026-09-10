@@ -1,6 +1,6 @@
 # UX rules
 
-> Status: living · Last verified: 2026-09-09 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
 
 The decisions a contributor would otherwise re-litigate. Every rule here is what the code does, with
 the reason it does it — not what a password manager conventionally does.
@@ -20,9 +20,11 @@ for the rarer "I have to type this by hand" case.
   deactivates or the window loses key status.
 - The reset rules are pure functions — `RevealPolicy` and `PasswordRevealState` — kept out of the
   view bodies specifically so they are testable without driving real SwiftUI or a real `NSWindow`.
-- **The password field is the only field concealed by default.** Custom fields render in plaintext
-  because no protected flag survives into the domain model; that is a data-layer gap, not a decision
-  (issue #65).
+- **A protected custom field is concealed exactly like the password** (issue #65). The view never
+  guesses which ones those are: `VaultFieldValue.isProtected` carries the file's own
+  `Protected="True"` marking, or the user's choice from the edit sheet's per-field lock. Reveal is
+  per field, the reset rules above are shared, and every custom row carries the copy glyph —
+  copy-first is not conditional on secrecy.
 - Attachment payloads are secret material and are never revealed by default either: the only inline
   rendering is a thumbnail, and only for a PNG or JPEG whose extension and magic number agree, under
   a size ceiling. Everything else is listed, sized and exportable with no picture.

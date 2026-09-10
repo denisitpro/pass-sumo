@@ -11,7 +11,7 @@ final class ModelDomainTests: XCTestCase {
         username: String = "",
         password: String = "",
         notes: String = "",
-        customFields: [String: String] = [:]
+        customFields: [String: VaultFieldValue] = [:]
     ) -> VaultEntry {
         VaultEntry(
             id: id,
@@ -49,7 +49,7 @@ final class ModelDomainTests: XCTestCase {
     }
 
     func testSearchMatchesCustomFieldNameAndValue() {
-        let entry = makeEntry(title: "AWS", customFields: ["Account ID": "482910337201"])
+        let entry = makeEntry(title: "AWS", customFields: ["Account ID": .plain("482910337201")])
         let vault = Vault(name: "Test", groups: [], entries: [entry])
 
         XCTAssertEqual(vault.search("Account ID").map(\.id), [entry.id])

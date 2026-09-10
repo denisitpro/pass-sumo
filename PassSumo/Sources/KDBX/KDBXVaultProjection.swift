@@ -114,12 +114,20 @@ enum KDBXVaultProjection {
         let title = revealed(KDBXStandardField.title.rawValue)
         let password = revealed(KDBXStandardField.password.rawValue)
 
-        var customFields: [String: String] = [:]
+        var customFields: [String: VaultFieldValue] = [:]
         for string in entry.strings
             where !KDBXStandardField.allKeys.contains(string.key)
             && !KDBXTOTPConvention.reservedKeys.contains(string.key)
         {
-            customFields[string.key] = string.value.withRevealedString { $0 }
+            // The protection class travels with the value. Dropping it here used to be the single
+            // point where it was lost (issue #65): a field another client stored protected came
+            // back indistinguishable from trivia, so it rendered in the clear, and the user had
+            // nothing to change. `isProtected` collapses KDBXKit's four cases to the one bit the
+            // domain model is allowed to know — see `KDBXFieldKeys.swift` for the mapping.
+            customFields[string.key] = VaultFieldValue(
+                value: string.value.withRevealedString { $0 },
+                isProtected: string.value.isProtected
+            )
         }
 
         // `.distantPast` is the "the file did not record this" sentinel, not a real date. The merge

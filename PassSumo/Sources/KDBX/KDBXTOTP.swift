@@ -134,8 +134,12 @@ extension KDBXTOTPConvention {
         switch convention {
         case .seedAndSettings:
             if let split = splitURL(otpAuthURL) {
-                result.setValue(split.seed, forKey: seedKey, defaultProtected: true)
-                result.setValue(split.settings, forKey: settingsKey, defaultProtected: false)
+                result.setValue(split.seed, forKey: seedKey, protection: .fromFile(whenNew: true))
+                result.setValue(
+                    split.settings,
+                    forKey: settingsKey,
+                    protection: .fromFile(whenNew: false)
+                )
             } else {
                 // The new URI carries something the split form cannot hold (no `secret`, or a
                 // non-numeric digit count). Converting the entry to `otp` is the ONLY way to keep
@@ -143,11 +147,11 @@ extension KDBXTOTPConvention {
                 // factor. This is the single, documented exception to "never change the
                 // convention" — and it is a widening, since KeePassXC reads `otp` too.
                 result.removeAll { $0.key == seedKey || $0.key == settingsKey }
-                result.setValue(otpAuthURL, forKey: otpURLKey, defaultProtected: true)
+                result.setValue(otpAuthURL, forKey: otpURLKey, protection: .fromFile(whenNew: true))
             }
 
         case .otpURL, .absent:
-            result.setValue(otpAuthURL, forKey: otpURLKey, defaultProtected: true)
+            result.setValue(otpAuthURL, forKey: otpURLKey, protection: .fromFile(whenNew: true))
         }
 
         return result
@@ -180,25 +184,35 @@ extension KDBXTOTPConvention {
 // MARK: - String-field mutation
 
 extension [KDBX.ProtectedString] {
-    /// Sets `key` to `value`, preserving the field's existing on-disk protection class if the field
-    /// is already there and using `defaultProtected` only when creating it.
+    /// Sets `key` to `value` in the protection class `protection` asks for — see
+    /// `KDBXFieldProtection` for the difference between the two policies, which is the whole
+    /// reason this takes a policy rather than a `Bool`.
     ///
     /// Position is preserved for an existing key rather than the field being removed and re-appended:
     /// KDBX's inner random stream is consumed in document order, and while KDBXKit's writer
     /// recomputes those offsets correctly either way, keeping the order stable also keeps diffs
     /// against another client's copy of the same vault readable.
-    mutating func setValue(_ value: String, forKey key: String, defaultProtected: Bool) {
-        if let index = firstIndex(where: { $0.key == key }) {
-            // Skip the rewrite when nothing changed — this keeps an untouched field's
-            // `.lazyInnerCipher` box intact instead of decrypting and re-encrypting it for nothing.
-            let unchanged = self[index].value.withRevealedString { $0 == value }
-            guard !unchanged else { return }
-            self[index].value = self[index].value.reboxed(with: value)
-        } else {
+    mutating func setValue(_ value: String, forKey key: String, protection: KDBXFieldProtection) {
+        guard let index = firstIndex(where: { $0.key == key }) else {
             append(KDBX.ProtectedString(
                 key: key,
-                value: .forNewField(value, protected: defaultProtected)
+                value: .canonical(value, protected: protection.whenNew)
             ))
+            return
         }
+
+        let current = self[index].value
+        // A protection change is checked BEFORE the unchanged-value shortcut below: toggling a
+        // field's protection without touching its text is a real edit, and falling through to the
+        // shortcut would report success while writing the old class back out.
+        if case let .chosen(intent) = protection, intent != current.isProtected {
+            self[index].value = .canonical(value, protected: intent)
+            return
+        }
+        // Skip the rewrite when nothing changed — this keeps an untouched field's
+        // `.lazyInnerCipher` box intact instead of decrypting and re-encrypting it for nothing.
+        let unchanged = current.withRevealedString { $0 == value }
+        guard !unchanged else { return }
+        self[index].value = current.reboxed(with: value)
     }
 }
