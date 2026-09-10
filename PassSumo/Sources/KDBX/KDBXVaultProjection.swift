@@ -10,7 +10,8 @@ import KDBXKit
 /// survived this projection. See `KDBXKitCodec` for the full contract.
 ///
 /// What `Vault` does NOT model, and therefore what only survives via the preserved original:
-/// entry history, custom icons, tags, AutoType sequences, foreground/background colours, expiry,
+/// entry history, user-supplied custom icons (`CustomIconUUID` + `Meta/CustomIcons`; the built-in
+/// `IconID` index IS modeled), tags, AutoType sequences, foreground/background colours, expiry,
 /// usage counts, group notes/expansion state, `DeletedObjects` tombstones, `Meta` settings, the
 /// header's public custom data, and any `CustomData` another client wrote on the database, a group
 /// or an entry.
@@ -78,7 +79,9 @@ enum KDBXVaultProjection {
         pool: KDBXBinaryPool,
         blobs: inout [VaultBlobID: VaultBlob]
     ) {
-        groups.append(VaultGroup(id: group.uuid, parentID: parentID, name: group.name ?? ""))
+        groups.append(
+            VaultGroup(id: group.uuid, parentID: parentID, name: group.name ?? "", iconID: group.iconID)
+        )
         for entry in group.entries {
             entries.append(vaultEntry(from: entry, groupID: group.uuid, pool: pool, blobs: &blobs))
         }
@@ -149,6 +152,11 @@ enum KDBXVaultProjection {
             notes: revealed(KDBXStandardField.notes.rawValue),
             otpAuthURL: KDBXTOTPConvention.readOTPAuthURL(from: entry.strings, label: title),
             customFields: customFields,
+            // Taken verbatim, including a value outside KeePass's 0…68 range: the merge writes
+            // back whatever is here, so normalising an unknown index would silently rewrite
+            // another client's file. `entry.customIconUUID` — which shadows this when set — stays
+            // unmodeled and rides along in the preserved original.
+            iconID: entry.iconID,
             attachments: projected.attachments,
             created: times?.creationTime ?? .distantPast,
             modified: times?.lastModificationTime ?? .distantPast,

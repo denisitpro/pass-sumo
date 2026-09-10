@@ -46,6 +46,15 @@ private struct CustomFieldDraft: Identifiable {
 /// encrypted holding area), which is a real feature, not a UI tweak.
 struct EntryEditView: View {
     let originalID: UUID
+    /// The entry's built-in KDBX icon index, carried straight through the edit.
+    ///
+    /// A `let` beside `originalID`, not `@State`, because this form has no icon control yet — the
+    /// picker is the second half of issue #89. It has to be carried all the same: `save()` builds a
+    /// whole new `VaultEntry` from the fields it owns, so any modelled field it forgets is written
+    /// back as that field's default. For `iconID` that default is 0, and the result is an entry
+    /// that arrives in KeePassXC wearing the key icon because someone fixed a typo in its title.
+    /// When the picker lands, this becomes `@State` and the form owns it.
+    let originalIconID: UInt32
     let isNew: Bool
     let store: VaultStore
     let clipboard: ClipboardService
@@ -82,6 +91,7 @@ struct EntryEditView: View {
         onDismiss: @escaping () -> Void
     ) {
         self.originalID = entry.id
+        self.originalIconID = entry.iconID
         self.isNew = isNew
         self.store = store
         self.clipboard = clipboard
@@ -469,7 +479,16 @@ struct EntryEditView: View {
         }
     }
 
-    private func save() {
+    /// Not `private`, so `EntryEditSaveTests` can drive the real thing.
+    ///
+    /// This method's failure mode is silence: it builds a whole new `VaultEntry` from the fields
+    /// the form owns, so a modelled field it does not name is written back as that field's
+    /// default — no compiler error, no warning, just the user's data quietly replaced on their
+    /// next edit. `iconID` did exactly that between its landing in the model and this line
+    /// (issue #89). The one assertion that catches it has to go through `save()` itself; the
+    /// alternatives (checking the captured property, or an XCUITest) either miss the bug or are
+    /// the focus-stealing suite this project does not run on every change.
+    func save() {
         guard !wasLockedWhileEditing else { return }
 
         var fields: [String: VaultFieldValue] = [:]
@@ -490,6 +509,9 @@ struct EntryEditView: View {
             notes: notes,
             otpAuthURL: otpAuthURLText.isEmpty ? nil : otpAuthURLText,
             customFields: fields,
+            // Carried, not defaulted — see `originalIconID`. A new entry's is already the default,
+            // because that is what the blank entry this form was opened on carries.
+            iconID: originalIconID,
             attachments: attachments.map(\.attachment),
             created: created,
             // `VaultStore.upsert` stamps its own `modified` to `Date()` regardless of what's
