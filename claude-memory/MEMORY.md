@@ -10,3 +10,4 @@
 - [ASC record created](pass-sumo-asc-record-created.md) — the app record, subscription products and prices exist since 2026-09-10; what is immutable, and what was left blank on purpose.
 - [StoreKit needs the network entitlement](pass-sumo-storekit-needs-network-entitlement.md) — verified from ShotSumo; it makes the site's "cannot open a connection" claim false, and that claim is now fixed.
 - [Shared checkout git state](pass-sumo-shared-checkout-git-state.md) — HEAD moves under you here; use `git branch --contains`, and never relay a subagent's git claim as your own.
+- [No real personal data in fixtures](no-real-personal-data-in-fixtures.md) — never seed test bases, previews or mockups with the owner's real name or emails; it leaks into screenshots.
