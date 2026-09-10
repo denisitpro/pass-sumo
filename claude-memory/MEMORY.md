@@ -12,3 +12,4 @@
 - [Shared checkout git state](pass-sumo-shared-checkout-git-state.md) — HEAD moves under you here; use `git branch --contains`, and never relay a subagent's git claim as your own.
 - [No real personal data in fixtures](no-real-personal-data-in-fixtures.md) — never seed test bases, previews or mockups with the owner's real name or emails; it leaks into screenshots.
 - [GitHub has two advisory databases](github-has-two-advisory-databases.md) — the global DB lags repo-level advisories and rates them differently; a 404 there is not proof of nonexistence.
+- [A failed e2e wedges the test host](failed-e2e-wedges-the-test-host.md) — `make e2e` cannot start on the mini, and trying it stops every session from running any test until a human resets the host.
