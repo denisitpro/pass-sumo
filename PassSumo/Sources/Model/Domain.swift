@@ -56,6 +56,147 @@ struct VaultEntry: Identifiable, Sendable, Equatable {
     /// rest of `entry.history` only reaches the file through `KDBXContentMerge`'s preserved
     /// original rather than through anything `Vault` models live.
     var passwordLastChanged: Date? = nil
+
+    /// Previous states of this entry that pass-sumo recorded and that the file's own `<History>`
+    /// does not hold yet, oldest first — issue #75.
+    ///
+    /// **This is not "the entry's history".** The `<History>` a KeePass client wrote is NOT
+    /// projected in here and never will be: a snapshot is a full KDBX entry carrying tags,
+    /// AutoType, colours, expiry, custom data and its own positional binary-pool references, none
+    /// of which `VaultEntrySnapshot` models, so round-tripping the file's snapshots through this
+    /// array would quietly strip all of it. The file's own snapshots ride along untouched inside
+    /// the preserved original, exactly as before (see `Vault`'s doc comment); this array carries
+    /// only what pass-sumo itself has to ADD to them, and `KDBXContentMerge` appends it.
+    ///
+    /// It therefore accumulates for as long as the vault stays unlocked, not just until the next
+    /// save: `VaultStore` keeps the same `DecodedVault` for the whole session, so every save
+    /// re-derives the file from that one decode plus this array. Dropping an entry from it after a
+    /// save would delete the snapshot from the file on the save after that.
+    ///
+    /// `VaultStore.upsert` is the only thing that appends here, and it OWNS this property the same
+    /// way it owns `modified` — a caller's value is ignored, because the edit form builds a whole
+    /// new `VaultEntry` and cannot know what the entry it is replacing had accumulated.
+    var historyAdditions: [VaultEntrySnapshot] = []
+}
+
+// MARK: - Entry history
+
+/// One past state of an entry: what a KDBX `<History>` snapshot records, limited to the fields
+/// `VaultEntry` models.
+///
+/// A separate type rather than a `[VaultEntry]`, for two reasons that both bite. A struct cannot
+/// contain an array of itself, so `VaultEntry.historyAdditions: [VaultEntry]` does not even
+/// compile; and the three properties left out here are exactly the three that would be wrong to
+/// keep — `id` (a snapshot shares its live entry's UUID, so a second copy of it is a chance to
+/// disagree), `groupID` (a snapshot records field values, not where the entry sat: moving an entry
+/// between folders is not an edit any KeePass client snapshots), and `historyAdditions` itself
+/// (the format is explicit that a historical entry carries no history of its own, which is what
+/// keeps growth linear rather than quadratic).
+///
+/// `password` is plaintext here for the same reason `VaultEntry.password` is, and with the same
+/// consequence made explicit: a snapshot IS another copy of a secret, so changing a password does
+/// not remove the old one from the database. It is encrypted exactly like the live value — never
+/// less — but it is still there, which is the entire point of the feature and worth stating
+/// rather than discovering.
+struct VaultEntrySnapshot: Sendable, Equatable {
+    var title: String
+    var username: String
+    var password: String
+    var url: String
+    var notes: String
+    var otpAuthURL: String?
+    var customFields: [String: VaultFieldValue]
+    var iconID: UInt32
+    /// The attachments the entry had at the time, as references into `Vault.blobs` — the same
+    /// metadata-only shape `VaultEntry.attachments` uses, and it resolves through the same pool.
+    /// A payload only a snapshot still references stays in the vault (and in the file's binary
+    /// pool, which is append-only), so an old version's attachment is still openable.
+    var attachments: [VaultAttachment]
+    var created: Date
+    /// The entry's `LastModificationTime` AS IT WAS, deliberately not "when this version was
+    /// retired". `KDBXPasswordHistory` reads a snapshot's own modification time as the moment that
+    /// version *became* current, which is the convention every KeePass-family client writes and
+    /// issue #33's derivation already depends on.
+    var modified: Date
+}
+
+extension VaultEntrySnapshot {
+    /// The state `entry` is in right now, ready to be pushed onto its own history.
+    init(of entry: VaultEntry) {
+        self.init(
+            title: entry.title,
+            username: entry.username,
+            password: entry.password,
+            url: entry.url,
+            notes: entry.notes,
+            otpAuthURL: entry.otpAuthURL,
+            customFields: entry.customFields,
+            iconID: entry.iconID,
+            attachments: entry.attachments,
+            created: entry.created,
+            modified: entry.modified
+        )
+    }
+
+    /// This snapshot back in `VaultEntry` shape, so the codec can run its ONE field-mapping
+    /// implementation over a snapshot as well as over a live entry.
+    ///
+    /// The alternative — a second mapping path for snapshots — would have to re-derive the TOTP
+    /// convention, the reserved-key exclusions and the per-field protection classes, and the day
+    /// those two copies disagree is the day a history snapshot is written with a password in the
+    /// clear. `groupID` is `nil` because nothing downstream of the field mapping reads it: a
+    /// snapshot is emitted inside its live entry, never placed in a group of its own.
+    func entry(id: UUID) -> VaultEntry {
+        VaultEntry(
+            id: id,
+            groupID: nil,
+            title: title,
+            username: username,
+            password: password,
+            url: url,
+            notes: notes,
+            otpAuthURL: otpAuthURL,
+            customFields: customFields,
+            iconID: iconID,
+            attachments: attachments,
+            created: created,
+            modified: modified
+        )
+    }
+}
+
+extension VaultEntry {
+    /// Whether replacing `other` with `self` is an EDIT — a change a KDBX client would push onto
+    /// the entry's history — rather than a move or a re-stamp.
+    ///
+    /// Written as "normalise the exclusions away, then `==`", not as a field-by-field comparison,
+    /// and that shape is the point: a property added to `VaultEntry` later is INCLUDED by default.
+    /// The field-by-field form fails silently in the worse direction — a new field nobody thought
+    /// to list here would simply stop being snapshotted, and the loss shows up as a missing old
+    /// password months later. `EntryEditView.save()`'s doc comment records the same class of bug
+    /// biting `iconID` for real.
+    ///
+    /// Three things are deliberately not edits:
+    ///
+    /// - `groupID` — a move, including the move into the recycle bin that is all "delete" is here.
+    ///   No KeePass client snapshots one; the format records it as `LocationChanged` plus a
+    ///   `PreviousParentGroup` breadcrumb, which `KDBXContentMerge` already writes. Snapshotting
+    ///   deletes would also mean every emptied bin had been silently duplicating entries first.
+    /// - `modified` — `upsert` stamps it to now on every call, so comparing it would make every
+    ///   save of an unchanged entry an edit.
+    /// - `passwordLastChanged` and `historyAdditions` — derived and bookkeeping respectively, both
+    ///   owned by `upsert` rather than by whoever built the entry.
+    func differsInSnapshottedFields(from other: VaultEntry) -> Bool {
+        func normalized(_ entry: VaultEntry) -> VaultEntry {
+            var copy = entry
+            copy.groupID = nil
+            copy.modified = .distantPast
+            copy.passwordLastChanged = nil
+            copy.historyAdditions = []
+            return copy
+        }
+        return normalized(self) != normalized(other)
+    }
 }
 
 // MARK: - Custom fields
@@ -333,15 +474,18 @@ extension VaultGroup {
 }
 
 /// Fully decrypted database content — everything the app can show or edit. Deliberately does NOT
-/// model anything a KDBX file can carry that pass-sumo has no UI for yet (entry history,
-/// user-supplied custom icons, unknown header/XML data); that unmodeled remainder is the codec's
-/// job to round-trip via `DecodedVault.opaque`, not this type's job to represent. Two deliberate
-/// exceptions:
+/// model anything a KDBX file can carry that pass-sumo has no UI for yet (the file's own entry
+/// history, user-supplied custom icons, unknown header/XML data); that unmodeled remainder is the
+/// codec's job to round-trip via `DecodedVault.opaque`, not this type's job to represent. Three
+/// deliberate exceptions:
 ///
-/// - `VaultEntry.passwordLastChanged`: history itself still isn't modeled (no list of past
-///   snapshots exists here), but the single date derived from walking it is, because issue #33
-///   needs a sort key and computing that key once at decode time is what keeps the entry list from
-///   re-decrypting history on every render.
+/// - `VaultEntry.passwordLastChanged`: the file's history still isn't modeled (no list of past
+///   snapshots read out of it exists here), but the single date derived from walking it is,
+///   because issue #33 needs a sort key and computing that key once at decode time is what keeps
+///   the entry list from re-decrypting history on every render.
+/// - `VaultEntry.historyAdditions` (issue #75): the snapshots pass-sumo itself takes, which have
+///   to be modeled because the model is what decides an edit happened. Write-only in the same
+///   sense as above — nothing is ever read into it from the file.
 /// - `iconID` on entries and groups (issue #89): KDBX's *built-in* icon index is modeled and
 ///   written back, because the app has to be able to change it. KDBX's *other* icon channel,
 ///   `CustomIconUUID` plus the `Meta/CustomIcons` image pool, is still unmodeled and still

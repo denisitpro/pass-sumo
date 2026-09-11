@@ -357,21 +357,60 @@ final class VaultStore {
     /// Inserts a new entry, or replaces an existing one matched by `id`, stamping `modified` to
     /// now and marking the vault dirty. No-op when nothing is unlocked.
     ///
+    /// **This is where an entry's history snapshot is taken (issue #75).** Replacing an entry
+    /// whose fields actually changed pushes the state it was IN onto
+    /// `VaultEntry.historyAdditions`, which `KDBXContentMerge` appends to the file's own
+    /// `<History>` — so a password overwritten by a typo is recoverable from inside the app
+    /// instead of only from the pre-save backup of the whole database. It is done here, in the
+    /// model, and not in `EntryEditView`, for the reason that made the defect possible in the
+    /// first place: the snapshot has to be a property of "an entry was replaced", not of one
+    /// particular screen, or the next code path that mutates an entry silently skips it.
+    ///
+    /// Three properties are OWNED by this method and a caller's values for them are discarded,
+    /// because the edit form provably cannot supply them — it builds a whole new `VaultEntry` from
+    /// the fields it displays (see `EntryEditView.save()`):
+    ///
+    /// - `modified` — stamped to now, as it always was.
+    /// - `historyAdditions` — carried forward from the entry being replaced, then appended to.
+    ///   Taking the caller's value would drop every snapshot recorded earlier in the session.
+    /// - `passwordLastChanged` — carried forward, or set to now when the password is what changed.
+    ///   It is derived at decode time from the file's `<History>` (issue #33), so the form has no
+    ///   way to know it and passing it through as `nil` would erase the sort key on every edit.
+    ///
     /// `blobs` carries the payloads of any attachment the caller just added, because
     /// `VaultEntry.attachments` holds references only (see `VaultAttachment`) — an entry whose
     /// blob never reached the pool would render as a named attachment with nothing behind it.
     /// Blobs already in the pool are left alone: the id IS the content hash, so re-adding an
-    /// identical payload is a no-op by construction rather than a second copy.
+    /// identical payload is a no-op by construction rather than a second copy. Nothing is ever
+    /// removed from `vault.blobs`, which is what keeps a snapshot's attachment resolvable after
+    /// the live entry drops it.
     func upsert(_ entry: VaultEntry, addingBlobs blobs: [VaultBlob] = []) {
         guard case .unlocked(var vault) = state else { return }
+        let now = Date()
         var stamped = entry
-        stamped.modified = Date()
+        stamped.modified = now
         for blob in blobs where vault.blobs[blob.id] == nil {
             vault.blobs[blob.id] = blob
         }
         if let index = vault.entries.firstIndex(where: { $0.id == entry.id }) {
+            let previous = vault.entries[index]
+            stamped.historyAdditions = previous.historyAdditions
+            stamped.passwordLastChanged = previous.passwordLastChanged
+            if stamped.differsInSnapshottedFields(from: previous) {
+                // Taken BEFORE the new values land, and of `previous` rather than of `stamped`:
+                // a snapshot records what the entry used to look like, carrying its own old
+                // timestamps — which is what lets `KDBXPasswordHistory` read a snapshot's
+                // `modified` as "when that version became current".
+                stamped.historyAdditions.append(VaultEntrySnapshot(of: previous))
+                if stamped.password != previous.password {
+                    stamped.passwordLastChanged = now
+                }
+            }
             vault.entries[index] = stamped
         } else {
+            // A brand-new entry has no previous state, so it has nothing to snapshot — and must
+            // not inherit a caller's stale list either.
+            stamped.historyAdditions = []
             vault.entries.append(stamped)
         }
         decodedOrigin?.vault = vault

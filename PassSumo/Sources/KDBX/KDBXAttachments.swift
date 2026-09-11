@@ -11,7 +11,9 @@ import KDBXKit
 /// **Slots are only ever appended, never removed, reordered or renumbered.** A `<Binary Ref="3">`
 /// is a positional index, and the entries holding one are not only the live entries this codec
 /// rebuilds — every history snapshot on every entry carries its own `binaries` array with its own
-/// refs, and those snapshots are preserved wholesale and never rewritten (see `KDBXContentMerge`).
+/// refs. The snapshots already in the file are preserved wholesale and never rewritten, and the
+/// ones pass-sumo appends resolve their attachments through this same pool (see
+/// `KDBXContentMerge.buildSnapshot`), so both kinds depend on the invariant equally.
 /// Compacting the pool to reclaim a payload whose last live reference was removed would silently
 /// repoint every one of those refs at the wrong payload, or past the end of the pool — KDBXKit's
 /// writer refuses the latter outright (`danglingBinaryRef`), so the *visible* outcome would be a

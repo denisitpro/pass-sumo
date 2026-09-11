@@ -10,7 +10,10 @@ import KDBXKit
 /// survived this projection. See `KDBXKitCodec` for the full contract.
 ///
 /// What `Vault` does NOT model, and therefore what only survives via the preserved original:
-/// entry history, user-supplied custom icons (`CustomIconUUID` + `Meta/CustomIcons`; the built-in
+/// the file's own entry history (pass-sumo only ever APPENDS to it — see
+/// `VaultEntry.historyAdditions` and `KDBXContentMerge.buildSnapshot` — and never projects it
+/// here, because a snapshot carries far more than `VaultEntrySnapshot` can hold),
+/// user-supplied custom icons (`CustomIconUUID` + `Meta/CustomIcons`; the built-in
 /// `IconID` index IS modeled), tags, AutoType sequences, foreground/background colours, expiry,
 /// usage counts, group notes/expansion state, `DeletedObjects` tombstones, `Meta` settings, the
 /// header's public custom data, and any `CustomData` another client wrote on the database, a group
