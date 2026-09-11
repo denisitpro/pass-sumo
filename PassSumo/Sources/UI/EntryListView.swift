@@ -283,7 +283,7 @@ struct EntryListView: View {
             .keyboardShortcut("e", modifiers: .command)
 
         Button("Copy Username") { onCopyUsername(entry) }
-            .keyboardShortcut("b", modifiers: [.command, .shift])
+            .keyboardShortcut("b", modifiers: .command)
             .disabled(entry.username.isEmpty)
 
         Button("Copy Password") { onCopyPassword(entry) }
@@ -291,12 +291,13 @@ struct EntryListView: View {
 
         if let url = EntryURLResolver.resolvedURL(from: entry.url) {
             Button("Open URL") { NSWorkspace.shared.open(url) }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
         }
 
         Divider()
 
         Button("Delete", role: .destructive) { onDeleteEntry(entry.id) }
-            .keyboardShortcut(.delete, modifiers: [])
+            .keyboardShortcut(.delete, modifiers: .command)
     }
 }
 

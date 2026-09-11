@@ -15,6 +15,9 @@ enum MenuRequest: Equatable {
     case openDatabase
     case newDatabase
     case newEntry
+    /// Same reasoning as `newEntry`: creating a folder needs `VaultBrowserView`'s own
+    /// `groupNamePrompt` state (the name-entry alert), which this file has no view to present.
+    case newGroup
     case editEntry(UUID)
     /// Delete goes through this channel even though `VaultStore.delete` needs nothing from a view,
     /// because deciding whether to delete at all can. `VaultStore.plannedDeletion` reports that
@@ -37,8 +40,12 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
+            // Issue #16: matches Strongbox, which has NO binding at all for "create a database" —
+            // a once-in-a-lifetime action — and spends the cheap ⌘N chord on "create an entry"
+            // instead, the thing a user actually does hundreds of times. ⌘⇧N here mirrors that
+            // priority rather than keeping the once-in-a-lifetime action on the cheap chord.
             Button("New Database…") { environment.menuRequest = .newDatabase }
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(!canCreateNewDatabase)
             Button("Open Database…") { environment.menuRequest = .openDatabase }
                 .keyboardShortcut("o", modifiers: .command)
@@ -76,43 +83,87 @@ struct AppCommands: Commands {
         }
 
         // Deliberately `.after(.pasteboard)`, not `.replacing(.pasteboard)`: ⌘C stays the system
-        // copy exactly as-is (see the brief) — these are two ADDITIONAL items with KeePassXC's own
-        // long-standing bindings (⌘⇧B / ⌘⇧C), chosen so muscle memory from KeePassXC transfers
-        // directly instead of the user having to relearn where "copy username" lives.
+        // copy exactly as-is (see the brief) — these are ADDITIONAL items, matching Strongbox's own
+        // bindings (issue #16) so muscle memory from Strongbox transfers directly instead of the
+        // user having to relearn where "copy username" lives.
         CommandGroup(after: .pasteboard) {
             Divider()
+            // ⌘B, not KeePassXC's ⌘⇧B: Strongbox binds Copy Username to the bare ⌘B chord, and
+            // per the owner's instruction this issue matches Strongbox, not KeePassXC.
             Button("Copy Username") { copySelected(\.username) }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .keyboardShortcut("b", modifiers: .command)
                 .disabled(selectedEntry == nil)
+            // ⌘⇧C already matched Strongbox before this issue — left as-is.
             Button("Copy Password") { copySelected(\.password) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(selectedEntry == nil)
+            Button("Copy URL") { copySelected(\.url) }
+                .keyboardShortcut("u", modifiers: .command)
+                .disabled(selectedEntry == nil)
+            // Platform caveat (recorded in thinks/strongbox-menu-bindings.md): plain ⌘T is the
+            // macOS-standard "New Tab" / "Show Fonts" chord, and Strongbox spending it on TOTP is a
+            // divergence from the platform, not a convention to copy uncritically. Adopted anyway,
+            // because (a) this app has no Font panel and no text-formatting `Commands` that would
+            // otherwise claim it, and (b) `DocumentOpenReceiver.applicationDidFinishLaunching`
+            // now turns off automatic window tabbing app-wide, so macOS never installs a
+            // system-supplied "New Tab" item that ⌘T could collide with. A genuinely empty chord,
+            // not just an unclaimed one.
+            //
+            // Disabled on an entry with no one-time code at all, or one whose `otp` field this
+            // build cannot parse — either way there is no code to copy.
+            Button("Copy One-Time Code") { copyTOTP() }
+                .keyboardShortcut("t", modifiers: .command)
+                .disabled(selectedEntryTOTPGenerator == nil)
         }
 
         CommandMenu("Entry") {
+            // ⌘N, not ⌘⇧N: Strongbox binds "Create Entry" to the bare ⌘N chord and has NO binding
+            // at all for "create a database" (see the shortcut on that item above) — swapped to
+            // match.
             Button("New Entry") { environment.menuRequest = .newEntry }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(!isUnlocked)
+            // Adopted from Strongbox's "Create Group" (⌘G). Same enablement as New Entry: both need
+            // an unlocked vault to have somewhere to put the new item.
+            Button("New Group") { environment.menuRequest = .newGroup }
+                .keyboardShortcut("g", modifiers: .command)
                 .disabled(!isUnlocked)
             Button("Edit Entry") {
                 if let id = environment.selectedEntryID { environment.menuRequest = .editEntry(id) }
             }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(selectedEntry == nil)
+            Divider()
+            // Adopted from Strongbox's "Launch Url" (⌘⇧U). Genuinely disabled, not just greyed for
+            // "no selection": `selectedEntryURL` is `nil` for an entry with an empty URL field or
+            // one that fails `EntryURLResolver`'s scheme check (e.g. a bare "example.com" with no
+            // `https://`), so the item never fires on a value it cannot open.
+            Button("Launch URL") { launchSelectedEntryURL() }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(selectedEntryURL == nil)
+            // Adopted from Strongbox's "Copy Password and Launch Url" (⌘↓) — per the owner's brief,
+            // "it is the actual login gesture": one chord does the whole "open the site, paste the
+            // password" motion. Copies the password unconditionally (an entry can have a password
+            // with no URL) and launches the URL only when one resolves, so a URL-less entry still
+            // gets a working copy instead of the combined command refusing to do anything.
+            Button("Copy Password and Launch URL") { copyPasswordAndLaunchURL() }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(selectedEntry == nil)
+            Divider()
             Button("Delete Entry") {
                 if let id = environment.selectedEntryID { environment.menuRequest = .deleteEntry(id) }
             }
-            // Bare ⌫, matching the brief and Finder/Mail's own convention for "delete the selection"
-            // — no ⌘ modifier, since this needs no muscle-memory bridge to another app.
+            // ⌘⌫, not bare ⌫ (issue #16, settling #9 with evidence from the эталон): Strongbox
+            // requires ⌘⌫ for "Delete Item", matching Finder's own convention for destructive
+            // removal, and dropping the bare-⌫ binding also removes the hazard #9 described — AppKit
+            // evaluates menu key equivalents BEFORE the responder chain, so a Backspace typed into
+            // the search field used to risk firing this instead of editing the text. ⌘⌫ needs no
+            // such carve-out: nothing in this app's text fields binds ⌘⌫.
             //
-            // A bare ⌫ menu item is a known hazard: AppKit evaluates menu key equivalents BEFORE
-            // the responder chain, so a Backspace typed into the search field can fire this instead
-            // of editing the text. That is filed separately and is not made worse here — but note
-            // what this binding now does. It used to call `store.delete` straight through, which
-            // erased the entry. It now raises `.deleteEntry`, and `VaultBrowserView` moves the entry
-            // to the recycle bin (undoable, no data lost) or, if it is already in the bin, asks
-            // before destroying it. Whichever way the hazard is eventually fixed, the keystroke can
-            // no longer silently take a password with it.
-            .keyboardShortcut(.delete, modifiers: [])
+            // What it does hasn't changed: it raises `.deleteEntry`, and `VaultBrowserView` moves
+            // the entry to the recycle bin (undoable, no data lost) or, if it is already in the
+            // bin, asks before destroying it.
+            .keyboardShortcut(.delete, modifiers: .command)
             .disabled(selectedEntry == nil)
             Divider()
             // Deliberately without a keyboard shortcut. The sidebar's context menu on the bin is
@@ -190,9 +241,54 @@ struct AppCommands: Commands {
         return vault.entries.first { $0.id == id }
     }
 
+    /// The selected entry's URL, resolved the same way `EntryDetailView`'s URL row and
+    /// `EntryListView`'s row context menu do (`EntryURLResolver`) — a bare host with no scheme
+    /// (`URL(string:)` happily accepts "example.com") is not launchable, so it is treated the same
+    /// as "no URL" here rather than handed to `NSWorkspace` to silently fail on.
+    var selectedEntryURL: URL? {
+        guard let entry = selectedEntry else { return nil }
+        return EntryURLResolver.resolvedURL(from: entry.url)
+    }
+
+    /// The selected entry's TOTP generator, parsed from `otpAuthURL` the same way `TOTPView`
+    /// parses it for display. `nil` for an entry with no one-time code at all, or — via the
+    /// deliberately swallowed `try?` — one whose `otp` field this build cannot parse; either way
+    /// there is no code to copy, so `Copy One-Time Code` disables rather than firing on nothing.
+    var selectedEntryTOTPGenerator: TOTPGenerator? {
+        guard let entry = selectedEntry, let otpAuthURL = entry.otpAuthURL, !otpAuthURL.isEmpty
+        else { return nil }
+        return try? TOTPGenerator(parsing: otpAuthURL)
+    }
+
     private func copySelected(_ field: (VaultEntry) -> String) {
         guard let entry = selectedEntry else { return }
         environment.clipboard.copy(field(entry))
+    }
+
+    /// Computes the current one-time code and puts it on the pasteboard. Mirrors
+    /// `TOTPView`'s own `(try? generator.code(at:)) ?? "······"` tolerance: the config already
+    /// parsed successfully to reach here, so a failure at code-generation time is not expected, and
+    /// there is nothing useful to copy if it happens.
+    private func copyTOTP() {
+        guard let generator = selectedEntryTOTPGenerator, let code = try? generator.code(at: Date())
+        else { return }
+        environment.clipboard.copy(code)
+    }
+
+    private func launchSelectedEntryURL() {
+        guard let url = selectedEntryURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Strongbox's "Copy Password and Launch Url" (⌘↓): copies the password unconditionally, then
+    /// opens the URL if one resolves. Not gated on `selectedEntryURL != nil` — an entry can have a
+    /// password with no URL, and the copy half of the gesture should still work for it.
+    private func copyPasswordAndLaunchURL() {
+        guard let entry = selectedEntry else { return }
+        environment.clipboard.copy(entry.password)
+        if let url = selectedEntryURL {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Opens the backup directory in Finder, creating it first if no save has needed it yet.
