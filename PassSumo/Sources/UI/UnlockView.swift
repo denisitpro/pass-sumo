@@ -113,6 +113,38 @@ struct UnlockView: View {
         }
     }
 
+    /// Why THIS vault is locked, as a short, calm sentence — or `nil` when there is nothing worth
+    /// saying.
+    ///
+    /// `nil` covers two different facts, deliberately merged into one neutral outcome: no lock has
+    /// fired yet this session (first launch, or a database just selected via `VaultStore.select`
+    /// but never unlocked — `AutoLockController.lastLockReason` starts `nil` and
+    /// `PassSumoApp`'s state mirror clears it again with `forgetLockReason()` when the locked
+    /// database changes, see issue #62), and `.userRequested` — the user just clicked Lock or hit
+    /// ⌘L, so telling them why would be telling them something they already know. Every other case
+    /// is reachable: `.idleTimeout` from `AutoLockController.tick()`, and `.systemSleep`/
+    /// `.screenLocked`/`.sessionResignedActive` from the three system notifications
+    /// `WorkspaceLockEventSource` forwards into `AutoLockController.lock(reason:)`.
+    ///
+    /// No file paths, no vault contents — just which of five known triggers fired, which is the
+    /// most this screen may safely say (the brief for issue #62).
+    ///
+    /// Not `private`, so `UnlockLockReasonTests` can drive the real mapping.
+    var lockReasonNote: String? {
+        switch environment.autoLock.lastLockReason {
+        case nil, .userRequested:
+            return nil
+        case .idleTimeout:
+            return "Locked after a period of inactivity."
+        case .systemSleep:
+            return "Locked because the Mac went to sleep."
+        case .screenLocked:
+            return "Locked because the screen locked."
+        case .sessionResignedActive:
+            return "Locked because you switched to another user."
+        }
+    }
+
     var body: some View {
         VStack(spacing: Spacing.s6) {
             Image(systemName: "lock.doc")
@@ -132,6 +164,17 @@ struct UnlockView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityIdentifier("unlock.path")
+
+            // Why this vault is locked (issue #62) — quiet and tertiary, the same treatment as
+            // `biometricsUnavailableNote` below: a standing fact, not an alert, and there is
+            // nothing to retry or dismiss. Absent entirely when there is nothing worth saying — see
+            // `lockReasonNote`'s doc comment.
+            if let reason = lockReasonNote {
+                Text(reason)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .accessibilityIdentifier("unlock.lockReason")
+            }
 
             // The one-line instruction Strongbox stacks between the database identity and the
             // field (issue #107) — this screen otherwise jumps straight from "which file" to "type

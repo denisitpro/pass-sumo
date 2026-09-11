@@ -83,7 +83,7 @@ struct PassSumoApp: App {
                 // `.empty` branch here is what covers a lock that happened some other way (e.g. the
                 // "Lock Database" command calling `store.lock()` directly), which the controller has
                 // no way to notice on its own.
-                .onChange(of: environment.store.state) { _, newState in
+                .onChange(of: environment.store.state) { oldState, newState in
                     switch newState {
                     case .unlocked:
                         environment.autoLock.vaultDidUnlock()
@@ -96,7 +96,19 @@ struct PassSumoApp: App {
                         if let url = environment.store.currentURL {
                             environment.rememberRecentDatabase(url)
                         }
-                    case .locked, .empty:
+                    case .locked(let url):
+                        environment.autoLock.stop()
+                        // `VaultOpenRouter`'s `.replace` (issue #84) moves the store straight from
+                        // one locked database to another — `.locked(A)` → `.locked(B)` — with no
+                        // `.unlocked` in between, so nothing else notices that B was never touched
+                        // this session. Left alone, `UnlockView` would show B the reason A locked
+                        // for. This is the one place that sees both URLs, so it is the one place
+                        // that can tell a genuine re-lock of the SAME database (reason still valid)
+                        // apart from a switch to a different one (reason stale) — see issue #62.
+                        if case .locked(let previousURL) = oldState, previousURL != url {
+                            environment.autoLock.forgetLockReason()
+                        }
+                    case .empty:
                         environment.autoLock.stop()
                     case .unlocking:
                         break

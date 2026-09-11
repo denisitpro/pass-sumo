@@ -210,6 +210,21 @@ final class AutoLockController {
         }
     }
 
+    /// Clears a recorded reason that no longer describes the vault now on screen.
+    ///
+    /// This controller is shared for the whole app session — there is exactly one `VaultStore`
+    /// holding exactly one vault at a time (`VaultOpenRouter`'s doc comment) — so `lastLockReason`
+    /// is not scoped to a URL. The one path that leaves it stale: vault A locks with a reason, then
+    /// the user opens a *different* database (`VaultOpenRouter`'s `.replace`) without ever
+    /// unlocking A again. `VaultStore.select(url:)` moves the store straight from `.locked(A)` to
+    /// `.locked(B)`, which passes through neither `vaultDidUnlock()` (the only other place this is
+    /// cleared) nor `lock(reason:)`. `PassSumoApp`'s state mirror is the only place that can tell
+    /// the two `.locked` transitions apart — it sees the previous URL — so it is the only caller.
+    /// See issue #62.
+    func forgetLockReason() {
+        lastLockReason = nil
+    }
+
     /// Stops the idle timer and unsubscribes. For app teardown; does not itself lock.
     func stop() {
         timer?.invalidate()
