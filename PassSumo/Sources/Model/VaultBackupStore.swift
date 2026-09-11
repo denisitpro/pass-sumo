@@ -207,7 +207,11 @@ final class VaultBackupStore: Sendable {
     /// starts a fresh backup set; the previous one is left in place rather than adopted or deleted.
     /// That is the deliberate choice. "This path no longer resolves" is indistinguishable from
     /// "that external disk is not plugged in right now", and deleting somebody's backups on that
-    /// guess is the one mistake a backup system may never make.
+    /// guess is the one mistake a backup system may never make. The previous directory is not
+    /// abandoned outright, though: `pruneAllBackupDirectories` keeps revisiting it under the same
+    /// age/count/byte caps as any other, so it converges to its own single newest backup instead of
+    /// staying frozen at however many it held at the moment of the move (issue #42) — while still
+    /// never losing that last copy.
     static func directoryName(for url: URL) -> String {
         let digest = SHA256.hash(data: Data(url.standardizedFileURL.path.utf8))
         let fingerprint = digest.compactMap { String(format: "%02x", $0) }.joined().prefix(12)
@@ -235,6 +239,34 @@ final class VaultBackupStore: Sendable {
         // hidden, and the trim can also leave nothing at all.
         let trimmed = cleaned.drop { $0 == "." }
         return trimmed.isEmpty ? "database" : String(trimmed)
+    }
+
+    /// The inverse of `directoryName(for:)`: recovers the `stem` a directory's backups are named
+    /// with, from the directory name alone — no `URL` required.
+    ///
+    /// Exists for `pruneAllBackupDirectories`, which walks the backup root and finds directories it
+    /// did not just create for a live save, so it has no path to hash and compare. `directoryName`
+    /// always appends exactly `-<12 lowercase hex>`, so stripping that fixed-width, fixed-alphabet
+    /// suffix recovers the same `stem` `listing(in:stem:)` needs — including one that itself
+    /// contains hyphens, since only the final 13 characters are inspected. `nil` for anything that
+    /// does not have that shape, so a directory this store did not create (or a user's own folder
+    /// dropped next to ours under the root) is left alone rather than swept as if it were one of
+    /// ours — the same "recognise our own files exactly, touch nothing else" rule `listing(in:stem:)`
+    /// already applies within a directory, extended to which directories get walked at all.
+    static func stem(fromDirectoryName name: String) -> String? {
+        let hexLength = 12
+        guard name.count > hexLength + 1 else { return nil }
+        let fingerprint = name.suffix(hexLength)
+        // `isHexDigit` alone also accepts uppercase A–F; `directoryName` only ever emits lowercase
+        // (`String(format: "%02x", ...)`), so a character must additionally be a digit or lowercase
+        // to count — digits have no case of their own, hence the `isNumber` half of this check.
+        guard fingerprint.allSatisfy({ $0.isHexDigit && ($0.isNumber || $0.isLowercase) }) else {
+            return nil
+        }
+        let withoutFingerprint = name.dropLast(hexLength)
+        guard withoutFingerprint.hasSuffix("-") else { return nil }
+        let stem = withoutFingerprint.dropLast()
+        return stem.isEmpty ? nil : String(stem)
     }
 
     // MARK: Making a backup
@@ -270,7 +302,11 @@ final class VaultBackupStore: Sendable {
         // Deliberately after the copy and deliberately best-effort: a backup that exists is worth
         // more than a tidy directory, so a prune that cannot delete something must not turn a
         // successful backup into a reported failure.
-        prune(in: directory, stem: Self.sanitized(url.deletingPathExtension().lastPathComponent))
+        //
+        // Sweeps every per-database directory under the root, not only this one (issue #42): see
+        // `pruneAllBackupDirectories` for why an orphaned directory must be revisited by the same
+        // caps, not left frozen at whatever it held when its database was last saved here.
+        pruneAllBackupDirectories()
         return .made(destination)
     }
 
@@ -384,6 +420,71 @@ final class VaultBackupStore: Sendable {
             try? fileManager.removeItem(at: oldest.url)
             totalBytes -= oldest.byteCount
             remaining.removeFirst()
+        }
+    }
+
+    // MARK: Orphaned directories (issue #42)
+
+    /// Applies `prune(in:stem:)` to every per-database subdirectory under the backup root, not only
+    /// the one the current `backUp` call just wrote to.
+    ///
+    /// ## The bug this closes
+    ///
+    /// Before this method existed, `prune` only ever ran for the directory of the database
+    /// currently being saved. Renaming or moving a database (`directoryName(for:)` hashes the
+    /// standardized path, deliberately) starts a fresh directory, and the old one is never the
+    /// target of a `backUp` call again — so it was never pruned again either. It kept whatever it
+    /// held at the moment it was abandoned: bounded per directory by the usual caps, but unbounded
+    /// in the number of such directories, since nothing ever revisited them. Ten relocations of one
+    /// vault could leave up to ten directories each still near its own count/byte ceiling.
+    ///
+    /// ## Why this is not "delete directories whose database no longer exists at that path"
+    ///
+    /// That check is exactly the one this deliberately does NOT make. A path that fails to resolve
+    /// is indistinguishable from a database on a volume that is simply not mounted right now — an
+    /// external drive, a network share, removable media. Treating "the file isn't there" as "the
+    /// database is gone" would let a plugged-out drive silently cost someone their only backups of
+    /// a database they still have, which is a worse failure than the space leak this method fixes.
+    /// So every directory under the root is swept by the SAME caps every directory has always been
+    /// subject to, whether or not this call's `url` is the one that put it there, and whether or not
+    /// anything currently exists at the path that directory's name was derived from.
+    ///
+    /// ## Why this still bounds the leak, even without deleting anything based on existence
+    ///
+    /// `prune` already never deletes a directory's newest backup, and that floor is unconditional
+    /// here too — sweeping does not add a way around it, it just makes the AGE cap actually apply to
+    /// directories that used to be exempt from ever running it again. A directory that stops being
+    /// written to converges, within `maxAge`, to holding exactly its one newest backup — not the up
+    /// to `maxCount` / `maxTotalBytes` it could have been frozen at before. That does not bound the
+    /// total size of `Backups/` as the number of relocations grows without limit (each surviving
+    /// directory still costs at least one backup's worth of bytes forever), but it converts an
+    /// unbounded-per-directory leak into a bounded-per-directory one, which is the trade this issue's
+    /// "never delete the last copy" requirement forces: a policy that reclaims that last file too
+    /// would have to guess "orphaned" from "unmounted", and guessing wrong destroys data a
+    /// space leak never does.
+    ///
+    /// ## Recognising a directory as ours
+    ///
+    /// A directory only counts if `stem(fromDirectoryName:)` can recover a stem from its name — the
+    /// same "match our own naming exactly, touch nothing else" rule `listing(in:stem:)` already
+    /// applies to individual files, extended to deciding which directories get walked at all. A
+    /// folder a user dropped directly under the (Finder-visible) backup root is left alone.
+    ///
+    /// Best-effort throughout, like `prune` itself: nothing here can turn the backup that was just
+    /// made into a reported failure.
+    private func pruneAllBackupDirectories() {
+        guard let root = try? policy.root() else { return }
+        let entries = (try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        for entry in entries {
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+            guard isDirectory == true else { continue }
+            guard let stem = Self.stem(fromDirectoryName: entry.lastPathComponent) else { continue }
+            prune(in: entry, stem: stem)
         }
     }
 }

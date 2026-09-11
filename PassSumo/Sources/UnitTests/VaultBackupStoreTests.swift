@@ -412,4 +412,228 @@ final class VaultBackupStoreTests: XCTestCase {
             "the message must say which database went unprotected: \(detail)"
         )
     }
+
+    // MARK: - Orphaned directories (issue #42)
+
+    /// The `<stem>-<stamp>.kdbx` name `VaultBackupStore` itself would have written, built directly
+    /// rather than through `backUp`.
+    private func orphanFileName(stem: String, date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "\(stem)-\(formatter.string(from: date)).kdbx"
+    }
+
+    /// Plants a directory under `temp/Backups`, shaped exactly like one `VaultBackupStore` would
+    /// have created for a database, with one file per date in `dates` — without ever creating a
+    /// file at the database's own path. That absence is the point: every test below is about a
+    /// directory whose owning database cannot currently be reached, whether because it was moved,
+    /// deleted, or sits on a volume that is not mounted right now — and this store must not need to
+    /// tell those apart to decide what to prune.
+    ///
+    /// `stem` must already be filesystem-safe (no `sanitized(_:)` call here, since that helper is
+    /// private) — the plain names used below all pass through unchanged.
+    @discardableResult
+    private func makeOrphanDirectory(stem: String, dates: [Date], byteCount: Int = 64) throws -> URL {
+        let ownerURL = URL(fileURLWithPath: "/Volumes/NotCurrentlyMounted/\(stem).kdbx")
+        let directoryName = VaultBackupStore.directoryName(for: ownerURL)
+        let directory = temp.appendingPathComponent("Backups", isDirectory: true)
+            .appendingPathComponent(directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for date in dates {
+            let file = directory.appendingPathComponent(orphanFileName(stem: stem, date: date))
+            try Data(repeating: 0xCD, count: byteCount).write(to: file)
+        }
+        return directory
+    }
+
+    /// `directoryName(for:)` always appends `-<12 lowercase hex>`; `stem(fromDirectoryName:)` is the
+    /// exact inverse `pruneAllBackupDirectories` needs to recognise a directory with no `URL` to
+    /// hash. Round-tripped against real output of the forward direction, including a stem that
+    /// itself contains hyphens — the case a naive "split on the last hyphen" would get wrong.
+    func testStemFromDirectoryNameRecoversTheSanitizedStemDirectoryNameUsed() {
+        let cases: [(URL, expectedStem: String)] = [
+            (URL(fileURLWithPath: "/Users/somebody/Personal.kdbx"), "Personal"),
+            (URL(fileURLWithPath: "/Volumes/Stick/My-Hyphenated-Vault.kdbx"), "My-Hyphenated-Vault"),
+            (URL(fileURLWithPath: "/tmp/database.kdbx"), "database"),
+        ]
+        for (url, expectedStem) in cases {
+            let directoryName = VaultBackupStore.directoryName(for: url)
+            XCTAssertEqual(
+                VaultBackupStore.stem(fromDirectoryName: directoryName), expectedStem,
+                "did not recover the stem from '\(directoryName)'"
+            )
+        }
+    }
+
+    /// A directory this store did not create — no `-<12 hex>` suffix, or the right length but not
+    /// actually hex — must never be swept, or `pruneAllBackupDirectories` would delete files inside
+    /// folders the user made themselves under the (Finder-visible) backup root.
+    func testStemFromDirectoryNameRejectsNamesWithoutOurShape() {
+        let names = [
+            "NotOurs",
+            "Personal",
+            "Personal-" + String(repeating: "g", count: 12), // right length, not hex
+            "-123456789012", // 12 valid hex digits, but no stem in front of the separator
+        ]
+        for name in names {
+            XCTAssertNil(
+                VaultBackupStore.stem(fromDirectoryName: name),
+                "'\(name)' should not have been recognised as one of ours"
+            )
+        }
+    }
+
+    /// The core of issue #42: before `pruneAllBackupDirectories`, an orphaned directory was never
+    /// revisited once its database stopped being saved through this store, so it stayed frozen at
+    /// however many backups it held at that moment. A save of a completely different, unrelated
+    /// database must now also age the orphan down to its single newest backup — the same age cap
+    /// every directory has always been subject to, just finally applied to this one too.
+    func testAnOrphanedDirectoryIsAgedDownWhenAnUnrelatedSaveTriggersASweep() throws {
+        let day: TimeInterval = 24 * 60 * 60
+        let orphanDates = [0.0, 1.0, 2.0].map { Self.epoch.addingTimeInterval($0 * day) }
+        let orphan = try makeOrphanDirectory(stem: "Stranded", dates: orphanDates)
+
+        let live = try makeVault("Live.kdbx")
+        // 200 days after the orphan's last backup — comfortably past the 90-day default age cap.
+        let clock = FrozenClock(daysAfterEpoch: 200)
+        let store = makeStore(maxAge: 90 * day, now: { clock.read() })
+
+        _ = store.backUp(live)
+
+        let survivors = try FileManager.default.contentsOfDirectory(
+            at: orphan, includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(
+            survivors.count, 1,
+            "the orphan should have converged to its single newest backup, kept: \(survivors.map(\.lastPathComponent))"
+        )
+        XCTAssertEqual(
+            survivors.first?.lastPathComponent,
+            orphanFileName(stem: "Stranded", date: orphanDates.last!),
+            "the orphan's NEWEST backup specifically must be the one kept"
+        )
+    }
+
+    /// The unmounted-volume case, named explicitly: a directory whose database cannot currently be
+    /// reached, holding exactly one ancient backup, under the harshest possible caps. It must
+    /// survive regardless — this store has no way to tell "the database was deleted" from "the
+    /// external disk isn't plugged in right now", and guessing wrong here would delete someone's
+    /// only remaining copy of a database they still have, which is strictly worse than the
+    /// unbounded-directory-count leak this sweep exists to fix.
+    func testAnOrphanedDirectorysSoleBackupSurvivesEvenUnderTheHarshestCaps() throws {
+        let orphan = try makeOrphanDirectory(stem: "OnUnmountedDisk", dates: [Self.epoch])
+
+        let live = try makeVault("Live.kdbx")
+        let tenYearsLater = FrozenClock(daysAfterEpoch: 3650)
+        let store = makeStore(
+            maxCount: 0, maxAge: 0, maxTotalBytes: 0, now: { tenYearsLater.read() }
+        )
+
+        _ = store.backUp(live)
+
+        let survivors = try FileManager.default.contentsOfDirectory(
+            at: orphan, includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(
+            survivors.count, 1,
+            "the sole backup of a possibly-unmounted database's directory was deleted"
+        )
+    }
+
+    /// The count cap, applied to an orphan the same way `testRetentionPrunesOldestFirstAgainstTheCountCap`
+    /// already proves it applies to a live directory.
+    func testAnOrphanedDirectoryIsPrunedByTheCountCapViaAnUnrelatedSave() throws {
+        let clock = TickingClock()
+        let orphanDates = (0 ..< 6).map { _ in clock.next() }
+        let orphan = try makeOrphanDirectory(stem: "Stranded", dates: orphanDates)
+
+        let live = try makeVault("Live.kdbx")
+        let store = makeStore(maxCount: 3, now: { clock.next() })
+        _ = store.backUp(live)
+
+        let survivors = Set(
+            try FileManager.default.contentsOfDirectory(at: orphan, includingPropertiesForKeys: nil)
+                .map(\.lastPathComponent)
+        )
+        let expected = Set(orphanDates.suffix(3).map { orphanFileName(stem: "Stranded", date: $0) })
+        XCTAssertEqual(survivors, expected, "the count cap did not prune the orphan oldest-first")
+    }
+
+    /// The byte cap, applied to an orphan the same way `testRetentionPrunesAgainstTheTotalByteCap`
+    /// already proves it applies to a live directory.
+    func testAnOrphanedDirectoryIsPrunedByTheByteCapViaAnUnrelatedSave() throws {
+        let clock = TickingClock()
+        let orphanDates = (0 ..< 5).map { _ in clock.next() }
+        let orphan = try makeOrphanDirectory(stem: "Big", dates: orphanDates, byteCount: 1024)
+
+        let live = try makeVault("Live.kdbx")
+        let store = makeStore(maxCount: 100, maxTotalBytes: 2560, now: { clock.next() })
+        _ = store.backUp(live)
+
+        let survivors = try FileManager.default.contentsOfDirectory(
+            at: orphan, includingPropertiesForKeys: [.fileSizeKey]
+        )
+        XCTAssertEqual(survivors.count, 2, "the byte cap did not bind on the orphan")
+        let expected = Set(orphanDates.suffix(2).map { orphanFileName(stem: "Big", date: $0) })
+        XCTAssertEqual(Set(survivors.map(\.lastPathComponent)), expected)
+    }
+
+    /// A directory this store did not create must never be walked into by the sweep, even while
+    /// aggressively pruning everything that IS ours in the same call.
+    func testSweepNeverTouchesADirectoryItDidNotCreate() throws {
+        let root = temp.appendingPathComponent("Backups", isDirectory: true)
+        let stranger = root.appendingPathComponent("Notes From The User", isDirectory: true)
+        try FileManager.default.createDirectory(at: stranger, withIntermediateDirectories: true)
+        let strangerFile = stranger.appendingPathComponent("shopping-list.txt")
+        try Data("keep me".utf8).write(to: strangerFile)
+
+        let live = try makeVault("Live.kdbx")
+        let store = makeStore(maxCount: 1)
+        _ = store.backUp(live)
+        _ = store.backUp(live)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: strangerFile.path),
+            "the sweep deleted or touched a directory it did not create"
+        )
+    }
+
+    /// Acceptance criterion from issue #42: a database that moves away and later moves back must
+    /// reunite with its original directory (because the identity is a pure function of the path)
+    /// rather than losing what accumulated there while it was "gone", and rather than starting a
+    /// third directory.
+    func testADatabaseThatMovesAwayAndBackReunitesWithItsOriginalDirectory() throws {
+        let home = try makeVault("home/Personal.kdbx")
+        let elsewhere = try makeVault("elsewhere/Other.kdbx")
+        let clock = TickingClock()
+        let store = makeStore(now: { clock.next() })
+
+        let firstAtHome = try XCTUnwrap(store.backUp(home).url)
+        let homeDirectory = firstAtHome.deletingLastPathComponent()
+
+        // The database "moves away": saves now happen at `elsewhere`. Each of these also sweeps
+        // `homeDirectory` (it is just another directory under the root), but it holds only its own
+        // newest backup, so the sweep has nothing to do there.
+        _ = store.backUp(elsewhere)
+        _ = store.backUp(elsewhere)
+        XCTAssertEqual(
+            store.backups(of: home).map(\.url.lastPathComponent), [firstAtHome.lastPathComponent],
+            "the abandoned directory changed while the database was being saved elsewhere"
+        )
+
+        // The database "moves back" — a save at the very path it started at.
+        let secondAtHome = try XCTUnwrap(store.backUp(home).url)
+
+        XCTAssertEqual(
+            secondAtHome.deletingLastPathComponent().lastPathComponent, homeDirectory.lastPathComponent,
+            "returning to the same path started a new directory instead of reusing the original"
+        )
+        XCTAssertEqual(
+            store.backups(of: home).map(\.url.lastPathComponent),
+            [firstAtHome, secondAtHome].map(\.lastPathComponent),
+            "the directory should hold both the pre-move and post-move backups"
+        )
+    }
 }
