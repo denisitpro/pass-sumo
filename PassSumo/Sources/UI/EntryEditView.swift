@@ -493,6 +493,11 @@ struct EntryEditView: View {
             }
             .buttonStyle(.tokenGlyph)
             .help(isPasswordVisible ? "Hide password" : "Reveal password")
+            // Mirrors `detail.revealPassword` in `EntryDetailView`/`FieldRow` — that one had an id,
+            // this one didn't, which was a real gap (issue #6's e2e run): there was no way to read
+            // this field's real value from a test without it, since a concealed `SecureField`'s
+            // accessibility value is a run of bullets, not the password.
+            .accessibilityIdentifier("edit.revealPassword")
         }
     }
 

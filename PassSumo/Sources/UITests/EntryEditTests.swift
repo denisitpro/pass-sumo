@@ -14,8 +14,9 @@ final class EntryEditTests: XCTestCase {
         titleField.replaceText(newTitle)
         app.byID("edit.save").click()
 
-        // The list row (a plain `Text(entry.title)`, no identifier of its own) shows the new title…
-        XCTAssertTrue(app.waitForLabel(newTitle))
+        // The list row (`EntryListView` combines its whole row into one accessibility element,
+        // issue #6) shows the new title…
+        XCTAssertTrue(app.waitForEntryListRow(containing: newTitle))
         // …and so does the detail column, read the same way every other detail assertion in this
         // suite is: through `FieldRow`'s combined label+value element, not screen text.
         XCTAssertEqual(app.fieldRowValue("Title"), newTitle)
@@ -35,7 +36,12 @@ final class EntryEditTests: XCTestCase {
 
         app.byID("edit.save").click()
 
-        XCTAssertTrue(app.waitForLabel(title))
+        // Proves the new entry appears as a ROW IN THE ENTRY LIST specifically, not merely as
+        // "text somewhere in the window" — `waitForLabel` alone can't distinguish those two.
+        XCTAssertTrue(
+            app.waitForEntryListRow(containing: title),
+            "no row in the entry list carried the new entry's title \"\(title)\" after saving"
+        )
     }
 
     func testCancelingAnEditLeavesTheEntryUnchanged() {

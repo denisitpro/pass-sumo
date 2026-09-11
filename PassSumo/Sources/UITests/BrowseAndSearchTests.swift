@@ -32,7 +32,47 @@ final class BrowseAndSearchTests: XCTestCase {
     func testSelectingAnEntryShowsItsDetail() {
         let app = launchUITestingApp(self)
 
-        app.byID("list.entry.\(SampleVault.gmailPersonalID)").click()
+        // TEMP DIAGNOSTIC (issue #6, to be removed before this task is done): H-A (focus) is
+        // already disproven (app.activate() changed nothing). Three probes to separate H-C
+        // (click never reaches List's selection machinery) from H-D (selection is set then
+        // immediately cleared) from "double-click's own gesture doesn't fire either".
+        let identifier = "list.entry.\(SampleVault.gmailPersonalID)"
+
+        func detailState() -> String {
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier == 'browser.detail'"))
+                .allElementsBoundByIndex
+                .map { "\($0.label)|\($0.value ?? "nil")" }
+                .joined(separator: " // ")
+        }
+
+        // Probe 1: keyboard-only selection, no mouse involved at all yet.
+        app.typeKey(.downArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey(.downArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.5)
+        print("DIAG P1 keyboard-only: detail.edit exists = \(app.byID("detail.edit").exists), detail = \(detailState())")
+
+        // Probe 2: single click, then check the CELL's own AX-reported selection state directly,
+        // to see whether the click reached List's selection machinery at all (isSelected true)
+        // even if the detail pane doesn't reflect it (which would point at H-D).
+        let cell = app.descendants(matching: .cell)
+            .containing(NSPredicate(format: "identifier == %@", identifier))
+            .firstMatch
+        cell.click()
+        Thread.sleep(forTimeInterval: 1.0)
+        print("DIAG P2 after single click: cell.isSelected = \(cell.isSelected), detail.edit exists = \(app.byID("detail.edit").exists), detail = \(detailState())")
+
+        // Probe 3: double-click — EntryListView wires this to `onOpenEntry` (opens the edit
+        // sheet) independently of List's own selection. If this fires, the row's own gesture
+        // recognizer works even though single-click selection doesn't.
+        cell.doubleClick()
+        Thread.sleep(forTimeInterval: 1.0)
+        let editSheetAppeared = app.byID("edit.save").exists
+        print("DIAG P3 after double-click: edit.save exists = \(editSheetAppeared), detail = \(detailState())")
+        if editSheetAppeared {
+            app.byID("edit.cancel").click()
+        }
 
         XCTAssertEqual(app.fieldRowValue("Title"), SampleVault.gmailPersonalTitle)
         XCTAssertEqual(app.fieldRowValue("Username"), SampleVault.gmailPersonalUsername)
