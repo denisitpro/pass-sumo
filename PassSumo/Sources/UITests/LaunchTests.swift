@@ -25,13 +25,24 @@ final class LaunchTests: XCTestCase {
     }
 
     /// Beyond "a window exists": the browser must be showing `Vault.sample`, not an empty vault.
-    /// "All Entries" carries the vault's total entry count as its trailing digit label (see
-    /// `GroupSidebar.swift`) — the simplest single assertion that the sample fixture, specifically,
-    /// is what loaded.
+    /// "All Entries" carries the vault's total entry count as part of its own row (see
+    /// `GroupSidebar.swift`) — checked scoped to that row's OWN identifier
+    /// (`waitForElement(identifiedBy:containing:)`), not "this text exists somewhere in the
+    /// window", which is what proves the count belongs to this row and not to some unrelated
+    /// element that happens to share the digits. Backed up by two known sample entries, from two
+    /// different groups, actually appearing as list rows — the count alone can't tell "the sample
+    /// vault" apart from "any 20-entry vault".
     func testLaunchLoadsSampleVault() {
         let app = launchUITestingApp(self)
 
         XCTAssertTrue(app.byID("sidebar.allEntries").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.waitForLabel("\(SampleVault.totalEntryCount)"))
+        XCTAssertTrue(
+            app.waitForElement(identifiedBy: "sidebar.allEntries", containing: "\(SampleVault.totalEntryCount)"),
+            "no element of the \"sidebar.allEntries\" row showed the sample vault's total entry " +
+            "count (\(SampleVault.totalEntryCount))"
+        )
+
+        XCTAssertTrue(app.byID("list.entry.\(SampleVault.gmailPersonalID)").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.byID("list.entry.\(SampleVault.payPalID)").waitForExistence(timeout: 5))
     }
 }
