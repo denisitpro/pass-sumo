@@ -93,7 +93,8 @@ struct RootView: View {
                 store: environment.store,
                 clipboard: environment.clipboard,
                 generator: environment.generator,
-                autoLock: environment.autoLock
+                autoLock: environment.autoLock,
+                settings: environment.settings
             )
             .accessibilityIdentifier("root.browser")
         }

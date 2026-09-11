@@ -657,4 +657,73 @@ final class BrowserLogicTests: XCTestCase {
         let sheet = GeneratorSheet(generator: PasswordGenerator(), clipboard: ClipboardService(), onUse: { _ in })
         XCTAssertNotNil(sheet.onUse)
     }
+
+    // MARK: - Generator recipe wiring (issue #106)
+    //
+    // Persisting the recipe (`AppSettings.generatorRecipe` round-tripping through `UserDefaults`)
+    // was already covered by `AppShellTests` and passed throughout this bug's life — the defect was
+    // entirely that neither call site below ever read the saved value back. These two tests drive
+    // the actual `EntryEditView`/`VaultBrowserView` construction and call its real method, the same
+    // "build the real view, call its real method, no rendering" pattern `EntryEditSaveTests.save()`
+    // already uses, and assert on `GeneratorSheet.openingRecipe` — the one observable trace the
+    // plumbing leaves on a freshly-constructed sheet. If either call site goes back to hardcoding
+    // `GeneratorSheet(generator:, clipboard:)` with no `recipe:`, these fail.
+
+    /// A fresh scratch `UserDefaults` suite per test, removed in a `defer` — never
+    /// `UserDefaults.standard`, which is the app's real preferences domain. Mirrors
+    /// `AppShellTests`' own private helper of the same shape.
+    private func makeScratchSettings() -> (settings: AppSettings, cleanup: () -> Void) {
+        let suiteName = "app.passsumo.tests.\(UUID().uuidString)"
+        guard let scratch = UserDefaults(suiteName: suiteName) else {
+            XCTFail("could not create a scratch UserDefaults suite")
+            return (AppSettings(), {})
+        }
+        return (AppSettings(defaults: scratch), { scratch.removePersistentDomain(forName: suiteName) })
+    }
+
+    func testEntryEditViewOpensTheGeneratorWithItsInjectedRecipe() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 42
+        recipe.symbols = false
+
+        let editor = EntryEditView(
+            entry: makeEntry("00000000-0000-0000-0000-0000000000e1", group: nil, title: "Router"),
+            isNew: false,
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            generatorRecipe: recipe,
+            onSave: { _ in },
+            onDismiss: {}
+        )
+
+        XCTAssertEqual(editor.makeGeneratorSheet().openingRecipe, recipe)
+    }
+
+    /// Same regression, at `VaultBrowserView`'s own toolbar call site — the one with no entry-edit
+    /// form around it, so it has no field-filling reason to exist and no other way to reach a
+    /// `Recipe` except the injected `settings`.
+    func testVaultBrowserViewOpensTheGeneratorWithTheSettingsRecipe() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 55
+        recipe.lowercase = false
+
+        let (settings, cleanup) = makeScratchSettings()
+        defer { cleanup() }
+        settings.generatorRecipe = recipe
+
+        let browser = VaultBrowserView(
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            // `FakeLockEventSource`, never the real `WorkspaceLockEventSource` default — this
+            // controller is an unused constructor dependency here, and registering for real
+            // `NSWorkspace` notifications is exactly the side effect `SecurityAutoLockTests`'s own
+            // doc comment warns a test must not risk.
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
+            settings: settings
+        )
+
+        XCTAssertEqual(browser.makeGeneratorSheet().openingRecipe, recipe)
+    }
 }

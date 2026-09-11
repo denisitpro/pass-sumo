@@ -10,15 +10,29 @@ import SwiftUI
 /// `nil`, and this view hides "Use" entirely rather than disabling it with no explanation — it
 /// stays agnostic about which caller it's in either way.
 ///
-/// Reads its starting `Recipe` from whatever the caller hands it and never persists a change back —
-/// there is no `Settings`/`SettingsStore` type in this repo yet (checked before writing this file),
-/// so "remember the user's last recipe" is deferred to whoever adds one; until then every open
-/// starts from `PasswordGenerator.Recipe`'s own defaults (20 chars, every class on, ambiguous
-/// glyphs excluded — see that type's doc comment).
+/// Reads its starting `Recipe` from whatever the caller hands it and never persists a change back
+/// to `AppSettings` itself (issue #106): the recipe this sheet opens with is the user's saved
+/// default (`AppSettings.generatorRecipe`, threaded through by both call sites below), but a tweak
+/// made *inside* the sheet — dragging the length slider, flipping a class off for one password —
+/// is a one-off for this generation only. Persisting only happens through the Settings screen's own
+/// controls. Both directions are defensible (see issue #106's discussion); one-off was picked
+/// because it matches every other generator this product is positioned against (Strongbox,
+/// 1Password): opening the sheet is not an implicit promise to overwrite the saved default.
+/// `PasswordGenerator.Recipe()`'s own hardcoded defaults (20 chars, every class on, ambiguous
+/// glyphs excluded — see that type's doc comment) are used only where no caller-supplied recipe
+/// exists at all, e.g. `#Preview`s and pre-#106 test fixtures.
 struct GeneratorSheet: View {
     let generator: PasswordGenerator
     let clipboard: ClipboardService
     var onUse: ((String) -> Void)?
+
+    /// The `Recipe` this sheet was constructed with — distinct from the live-edited `@State private
+    /// var recipe` below, and kept as its own plain, non-`@State` property so a caller's wiring is
+    /// assertable directly on a freshly-constructed instance without rendering (issue #106: neither
+    /// `EntryEditView` nor `VaultBrowserView` passed a `recipe:` at all, `GeneratorSheet` silently
+    /// fell back to `Recipe()`'s default, and nothing about `GeneratorSheet` itself would ever have
+    /// caught that — the regression test for this lives at each caller, checking this property).
+    let openingRecipe: PasswordGenerator.Recipe
 
     @Environment(\.dismiss) private var dismiss
 
@@ -35,6 +49,7 @@ struct GeneratorSheet: View {
         self.generator = generator
         self.clipboard = clipboard
         self.onUse = onUse
+        self.openingRecipe = recipe
         _recipe = State(initialValue: recipe)
     }
 
