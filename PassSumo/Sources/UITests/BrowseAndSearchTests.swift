@@ -27,6 +27,41 @@ final class BrowseAndSearchTests: XCTestCase {
         // Email's own entry stays; Finance's own entry is filtered out.
         XCTAssertTrue(app.byID("list.entry.\(SampleVault.gmailPersonalID)").waitForExistence(timeout: 5))
         XCTAssertFalse(app.byID("list.entry.\(SampleVault.payPalID)").waitForExistence(timeout: 2))
+
+        // The reverse path is the owner's #129 bug: after a group is selected (or a new
+        // folder is created and left selected), clicking All Entries did nothing, so
+        // there was no way back to the unfiltered list.
+        app.selectRow(identifiedBy: "sidebar.allEntries")
+        XCTAssertTrue(app.byID("list.entry.\(SampleVault.gmailPersonalID)").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.byID("list.entry.\(SampleVault.payPalID)").waitForExistence(timeout: 5))
+    }
+
+    /// Right-click on a group row must surface the folder actions (issue #129). The
+    /// menu used to live only on the row's text/icon content, so a click on the
+    /// trailing empty area — or on All Entries, which had no menu at all — did nothing.
+    func testGroupRowContextMenuOffersFolderActions() {
+        let app = launchUITestingApp(self)
+
+        let identifier = "sidebar.group.\(SampleVault.groupEmailID)"
+        // Same cell-not-leaf rule as `selectRow`: SwiftUI copies the identifier onto
+        // every Text/Image inside the row, and right-clicking a leaf can miss the
+        // view that owns `.contextMenu`.
+        let cell = app.descendants(matching: .cell)
+            .containing(NSPredicate(format: "identifier == %@", identifier))
+            .firstMatch
+        if cell.waitForExistence(timeout: 5) {
+            cell.rightClick()
+        } else {
+            let leaf = app.byID(identifier)
+            XCTAssertTrue(leaf.waitForExistence(timeout: 5), "no row identified by \(identifier)")
+            leaf.rightClick()
+        }
+
+        // Menu item identifiers often do not surface as XCUIElement.menuItems on macOS;
+        // assert by the visible names the group-row menu actually offers.
+        XCTAssertTrue(app.menuItems["New Group…"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["Rename…"].exists)
+        XCTAssertTrue(app.menuItems["Change Icon…"].exists)
     }
 
     func testSelectingAnEntryShowsItsDetail() {

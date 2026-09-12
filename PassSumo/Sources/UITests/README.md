@@ -35,8 +35,9 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
 ## What each file covers
 
 - `LaunchTests.swift` — the app launches, the window exists, the sample vault is loaded.
-- `BrowseAndSearchTests.swift` — sidebar groups, group filtering, entry selection/detail, search
-  (including the password-field search differentiator), an empty search result.
+- `BrowseAndSearchTests.swift` — sidebar groups, group filtering (including returning to All
+  Entries), the group-row context menu, entry selection/detail, search (including the
+  password-field search differentiator), an empty search result.
 - `EntryEditTests.swift` — edit / create / cancel / delete an entry, and the list's own Return-to-
   edit keyboard wiring.
 - `SecretHandlingTests.swift` — password concealment/reveal, Copy Password → pasteboard, locking.
@@ -62,7 +63,9 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
   screen position, and never by matching a localized string that isn't also the identifier.
   **Selecting a list or sidebar row uses `selectRow(identifiedBy:)`, not `byID(_:).click()`.**
   `byID` resolves to a leaf `Text`/`Image` inside the row, and clicking that leaf does not drive
-  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead.
+  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead. **Right-clicking
+  a sidebar row uses the containing cell's `rightClick()` for the same reason** — a leaf's
+  frame can miss the view that owns `.contextMenu`.
 - **A plain SwiftUI `Text` puts its string in the accessibility VALUE, not the LABEL, on macOS.**
   Confirmed against the real AX tree captured from this suite's first run on actual hardware
   (issue #6) — every `StaticText` in the dump had an empty `label` and the string in `value`.
