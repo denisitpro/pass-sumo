@@ -261,8 +261,18 @@ final class GroupManagementTests: XCTestCase {
 
         XCTAssertEqual(created.name, "Suppliers")
         XCTAssertEqual(created.parentID, tree.work)
+        XCTAssertEqual(created.iconID, VaultGroup.defaultIconID)
         XCTAssertEqual(try unlockedVault(of: store).group(created.id), created)
         XCTAssertTrue(store.isDirty)
+    }
+
+    func testStoreAddGroupHonoursANonDefaultIconID() async throws {
+        let store = await makeStore(makeVault())
+        // 37 is KeePass's Homebanking icon, well away from the default folder (48).
+        let created = try XCTUnwrap(store.addGroup(named: "Bank", parentID: nil, iconID: 37))
+
+        XCTAssertEqual(created.iconID, 37)
+        XCTAssertEqual(try unlockedVault(of: store).group(created.id)?.iconID, 37)
     }
 
     func testStoreAddGroupTrimsTheNameAndRefusesABlankOne() async throws {

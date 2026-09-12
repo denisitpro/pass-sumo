@@ -16,8 +16,9 @@ This regenerates the Xcode project and runs the whole `PassSumoUITests` target. 
       -destination 'platform=macOS' \
       -only-testing:PassSumoUITests/BrowseAndSearchTests test
 
-Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, or
-`GeneratorTests`; add `/testMethodName` after the class name to run a single test.
+Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`,
+`GeneratorTests`, or `GroupSidebarTests`; add `/testMethodName` after the class name to run a
+single test.
 
 ## Before you run it
 
@@ -35,15 +36,18 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
 ## What each file covers
 
 - `LaunchTests.swift` — the app launches, the window exists, the sample vault is loaded.
-- `BrowseAndSearchTests.swift` — sidebar groups, group filtering, entry selection/detail, search
-  (including the password-field search differentiator), an empty search result.
+- `BrowseAndSearchTests.swift` — sidebar groups, group filtering (including returning to All
+  Entries), the group-row context menu, entry selection/detail, search (including the
+  password-field search differentiator), an empty search result.
+- `GroupSidebarTests.swift` — creating a folder from the toolbar New Group sheet lands a row in
+  the sidebar.
 - `EntryEditTests.swift` — edit / create / cancel / delete an entry, and the list's own Return-to-
   edit keyboard wiring.
 - `SecretHandlingTests.swift` — password concealment/reveal, Copy Password → pasteboard, locking.
   The suite's most important file: a regression here is a real secret showing up somewhere it
   shouldn't, not just a broken UI flow.
-- `GeneratorTests.swift` — the password generator sheet: length/entropy, "Use" fills the edit
-  form's password field.
+- `GeneratorTests.swift` — generate-now fills the edit form's password field; the generator
+  sheet (opened from `edit.generatorSettings`) covers length/entropy and "Use".
 - `UITestSupport.swift` — shared launch helper, element lookup helpers, and `SampleVault` (hand-
   copied `Vault.sample` values these tests assert against — see its own doc comment on why this
   can't just `@testable import PassSumo` and reuse the real fixture).
@@ -62,7 +66,9 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
   screen position, and never by matching a localized string that isn't also the identifier.
   **Selecting a list or sidebar row uses `selectRow(identifiedBy:)`, not `byID(_:).click()`.**
   `byID` resolves to a leaf `Text`/`Image` inside the row, and clicking that leaf does not drive
-  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead.
+  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead. **Right-clicking
+  a sidebar row uses the containing cell's `rightClick()` for the same reason** — a leaf's
+  frame can miss the view that owns `.contextMenu`.
 - **A plain SwiftUI `Text` puts its string in the accessibility VALUE, not the LABEL, on macOS.**
   Confirmed against the real AX tree captured from this suite's first run on actual hardware
   (issue #6) — every `StaticText` in the dump had an empty `label` and the string in `value`.
@@ -91,7 +97,8 @@ work around by adding identifiers itself:
 
 - `VaultBrowserView`'s standalone toolbar "Generator" button — only reachable by its ⌘⇧G keyboard
   shortcut in a test, not by id. `GeneratorTests` sidesteps this by opening the (identical)
-  generator sheet through `EntryEditView`'s "Generate…" button (`edit.generate`) instead.
+  generator sheet through `EntryEditView`'s settings gear (`edit.generatorSettings`) instead.
+  `edit.generate` is generate-now: it fills the password field and does not present the sheet.
 
 **Closed since this list was written:**
 
@@ -99,7 +106,7 @@ work around by adding identifiers itself:
   mirroring `detail.revealPassword` in `EntryDetailView`. Closed by issue #6: `edit.password`'s
   accessibility value is a run of bullet characters while concealed (a `SecureField`), so reading
   the REAL generated value back — what
-  `GeneratorTests.testUsePutsTheGeneratedValueIntoTheEditFormsPasswordField` needs — requires
+  `GeneratorTests.testGenerateNowFillsThePasswordFieldFromTheCurrentRecipe` needs — requires
   revealing it first, and there was previously no id to click to do that.
 - The search field. It used to be `.searchable`'s, whose toolbar item did not inherit the
   `"browser.search"` identifier set on the content column, so tests reached it through

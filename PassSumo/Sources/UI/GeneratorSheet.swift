@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Standalone password-generator sheet. Opened from two places with a genuinely different meaning
-/// for "Use": `EntryEditView`'s "Generate" button, where "Use" fills the password field being
+/// for "Use": `EntryEditView`'s generator-settings gear, where "Use" fills the password field being
 /// edited, and `VaultBrowserView`'s toolbar, where there is no field to fill at all. It used to
 /// paper over that second case by making "Use" just copy — identical to the "Copy" button right
 /// next to it, with nothing on screen saying so (issue #45: the owner could not tell them apart
@@ -10,21 +10,22 @@ import SwiftUI
 /// `nil`, and this view hides "Use" entirely rather than disabling it with no explanation — it
 /// stays agnostic about which caller it's in either way.
 ///
-/// Reads its starting `Recipe` from whatever the caller hands it and never persists a change back
-/// to `AppSettings` itself (issue #106): the recipe this sheet opens with is the user's saved
-/// default (`AppSettings.generatorRecipe`, threaded through by both call sites below), but a tweak
-/// made *inside* the sheet — dragging the length slider, flipping a class off for one password —
-/// is a one-off for this generation only. Persisting only happens through the Settings screen's own
-/// controls. Both directions are defensible (see issue #106's discussion); one-off was picked
-/// because it matches every other generator this product is positioned against (Strongbox,
-/// 1Password): opening the sheet is not an implicit promise to overwrite the saved default.
-/// `PasswordGenerator.Recipe()`'s own hardcoded defaults (20 chars, every class on, ambiguous
-/// glyphs excluded — see that type's doc comment) are used only where no caller-supplied recipe
-/// exists at all, e.g. `#Preview`s and pre-#106 test fixtures.
+/// Reads its starting `Recipe` from whatever the caller hands it. A tweak made *inside* the sheet
+/// — dragging the length slider, flipping a class off — is forwarded through `onRecipeChanged` so
+/// the caller's saved default and the next generate-now both pick it up (issue #129, Strongbox's
+/// two-control pattern). That supersedes issue #106's one-off choice: opening the sheet is no
+/// longer a throwaway generation, it is also the settings UI. This view still never writes
+/// `UserDefaults` itself — the callback is the only persist path, and `AppSettings.generatorRecipe`
+/// already writes on `didSet`. `PasswordGenerator.Recipe()`'s own hardcoded defaults (20 chars,
+/// every class on, ambiguous glyphs excluded — see that type's doc comment) are used only where no
+/// caller-supplied recipe exists at all, e.g. `#Preview`s and pre-#106 test fixtures.
 struct GeneratorSheet: View {
     let generator: PasswordGenerator
     let clipboard: ClipboardService
     var onUse: ((String) -> Void)?
+    /// Optional so existing call sites still compile. Invoked on every recipe edit (the same
+    /// `onChange(of: recipe)` that regenerates), never from this type's own storage.
+    var onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
 
     /// The `Recipe` this sheet was constructed with — distinct from the live-edited `@State private
     /// var recipe` below, and kept as its own plain, non-`@State` property so a caller's wiring is
@@ -44,11 +45,13 @@ struct GeneratorSheet: View {
         generator: PasswordGenerator,
         recipe: PasswordGenerator.Recipe = .init(),
         clipboard: ClipboardService,
-        onUse: ((String) -> Void)? = nil
+        onUse: ((String) -> Void)? = nil,
+        onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
     ) {
         self.generator = generator
         self.clipboard = clipboard
         self.onUse = onUse
+        self.onRecipeChanged = onRecipeChanged
         self.openingRecipe = recipe
         _recipe = State(initialValue: recipe)
     }
@@ -157,7 +160,12 @@ struct GeneratorSheet: View {
         // ANY toggle/length change without listing each `@State` var separately — a new recipe
         // means the on-screen password no longer matches what the controls say, so it must be
         // redrawn immediately rather than waiting for the user to notice and hit Regenerate.
-        .onChange(of: recipe, regenerate)
+        // The same hook is the persist path (issue #129): a slider tick is a settings change, not
+        // a one-off for this generation.
+        .onChange(of: recipe) {
+            regenerate()
+            onRecipeChanged?(recipe)
+        }
     }
 
     @ViewBuilder

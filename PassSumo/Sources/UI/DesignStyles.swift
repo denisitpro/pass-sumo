@@ -453,6 +453,10 @@ private struct SidebarRowSurface: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: Radius.sm, style: .continuous).fill(background)
             )
+            // The whole row must be hit-testable, not just its text/icon content. An
+            // `HStack`'s `Spacer()` is otherwise a hole in the hover/click hit area —
+            // the same class of bug `EntryListView` already fixed with this modifier.
+            .contentShape(Rectangle())
             .onHover { isHovered = $0 }
     }
 }

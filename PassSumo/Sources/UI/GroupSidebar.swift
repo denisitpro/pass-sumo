@@ -185,6 +185,17 @@ struct GroupSidebar: View {
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar.allEntries")
+            // `List(selection:)` + `OutlineGroup` on macOS does not write this binding on a
+            // click (issue #129). Programmatic `selection = .group(created.id)` already
+            // worked, which is why a newly created folder appeared selected while a mouse
+            // click on All Entries / another group did nothing. Write it ourselves.
+            // `.onTapGesture` is left-click only, so it does not steal the context menu.
+            // `nil` is "deselected", not All Entries (issue #85).
+            .onTapGesture { selection = .allEntries }
+            .contextMenu {
+                Button("New Group…") { onGroupCommand(.create(parentID: nil)) }
+                    .accessibilityIdentifier("sidebar.allEntries.newGroup")
+            }
 
             OutlineGroup(nodes, children: \.children) { node in
                 row(for: node)
@@ -266,6 +277,10 @@ struct GroupSidebar: View {
         .accessibilityIdentifier(
             isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"
         )
+        // Same reason as All Entries above: the List does not consume the click, so
+        // the binding is written here. Menu stays after the tap so a right-click still
+        // reaches `.contextMenu` rather than being eaten as a tap.
+        .onTapGesture { selection = .group(node.group.id) }
         .contextMenu {
             if isRecycleBin {
                 Button("Empty Recycle Bin", role: .destructive, action: onEmptyRecycleBin)
