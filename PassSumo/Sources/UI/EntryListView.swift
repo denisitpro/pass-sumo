@@ -149,6 +149,9 @@ struct EntryListView: View {
     var onCopyUsername: (VaultEntry) -> Void
     var onCopyPassword: (VaultEntry) -> Void
     var onDeleteEntry: (UUID) -> Void
+    /// Empty-state context menu (issue #129). Wired to the same "New Entry" path the toolbar plus
+    /// uses, so an empty group is not a dead surface that can only be filled from the chrome.
+    var onNewEntry: () -> Void
 
     /// Local to this column, unlike `searchText`/`selectedEntryID`: nothing outside the list cares
     /// how its rows are ordered, so it does not belong on `VaultBrowserView`'s cross-column state
@@ -174,6 +177,13 @@ struct EntryListView: View {
                 .foregroundStyle(Palette.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
+                // The unavailable view's text is a small centred cluster; without a content
+                // shape, a right-click in the empty rest of the column hits nothing.
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("New Entry", action: onNewEntry)
+                        .accessibilityIdentifier("list.empty.newEntry")
+                }
             } else {
                 // `List(selection:)` + `ForEach`, not `List(entries, selection:)`. The binding is
                 // `UUID?`, and a macOS `List` only writes a tag that is the same type as the
@@ -321,6 +331,7 @@ struct EntryListView: View {
         onOpenEntry: { _ in },
         onCopyUsername: { _ in },
         onCopyPassword: { _ in },
-        onDeleteEntry: { _ in }
+        onDeleteEntry: { _ in },
+        onNewEntry: {}
     )
 }

@@ -16,8 +16,9 @@ This regenerates the Xcode project and runs the whole `PassSumoUITests` target. 
       -destination 'platform=macOS' \
       -only-testing:PassSumoUITests/BrowseAndSearchTests test
 
-Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, or
-`GeneratorTests`; add `/testMethodName` after the class name to run a single test.
+Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`,
+`GeneratorTests`, or `GroupSidebarTests`; add `/testMethodName` after the class name to run a
+single test.
 
 ## Before you run it
 
@@ -37,6 +38,8 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
 - `LaunchTests.swift` — the app launches, the window exists, the sample vault is loaded.
 - `BrowseAndSearchTests.swift` — sidebar groups, group filtering, entry selection/detail, search
   (including the password-field search differentiator), an empty search result.
+- `GroupSidebarTests.swift` — creating a folder from the toolbar New Group sheet lands a row in
+  the sidebar.
 - `EntryEditTests.swift` — edit / create / cancel / delete an entry, and the list's own Return-to-
   edit keyboard wiring.
 - `SecretHandlingTests.swift` — password concealment/reveal, Copy Password → pasteboard, locking.
