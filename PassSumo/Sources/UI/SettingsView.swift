@@ -173,6 +173,8 @@ struct SettingsView: View {
     /// `BiometricUnlock`/the keychain are for) nor observed by anything outside this view.
     @State private var isTouchIDBusy = false
     @State private var touchIDError: String?
+    /// Cached so the toggle's `get` does not hit the keychain on every `body` pass (issue #138).
+    @State private var isTouchIDEnabled = false
 
     /// Whether the About row's label is currently showing "Copied to clipboard" instead of the
     /// version string — local, transient UI state, reset by `copyVersionInfo`'s own timer.
@@ -258,6 +260,7 @@ struct SettingsView: View {
         .onChange(of: environment.settings.autoLockTimeout) { _, newValue in
             environment.autoLock.idleTimeout = newValue
         }
+        .onAppear { refreshTouchIDEnabled() }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in
             environment.clipboard.clearInterval = newValue
         }
@@ -298,25 +301,32 @@ struct SettingsView: View {
         }
     }
 
-    /// `get` never prompts (`isEnabled` is `hasSecret`, not `retrieve` — see `BiometricUnlock`'s own
-    /// doc comment), so reading this on every `body` re-evaluation is cheap and safe. `set` kicks off
-    /// the actual enable/disable asynchronously; a `Binding` cannot itself be `async`.
+    /// `set` is async (keychain + maybe a save); a `Binding` cannot be. `get` reads the cache
+    /// filled by `refreshTouchIDEnabled`, not the keychain — a body pass must not call `isEnabled`.
     private var touchIDBinding: Binding<Bool> {
         Binding(
-            get: {
-                guard let id = environment.store.currentDatabaseID else { return false }
-                return environment.biometrics.isEnabled(for: VaultKeyIdentifier(id.uuidString))
-            },
+            get: { isTouchIDEnabled },
             set: { newValue in
                 Task { await setTouchIDEnabled(newValue) }
             }
         )
     }
 
+    private func refreshTouchIDEnabled() {
+        guard let id = environment.store.currentDatabaseID else {
+            isTouchIDEnabled = false
+            return
+        }
+        isTouchIDEnabled = environment.biometrics.isEnabled(for: VaultKeyIdentifier(id.uuidString))
+    }
+
     private func setTouchIDEnabled(_ enabled: Bool) async {
         touchIDError = nil
         isTouchIDBusy = true
-        defer { isTouchIDBusy = false }
+        defer {
+            isTouchIDBusy = false
+            refreshTouchIDEnabled()
+        }
 
         guard enabled else {
             // Turning off is a pure keychain deletion — `currentDatabaseID` is only a read here, so
