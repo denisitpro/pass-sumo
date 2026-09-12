@@ -263,10 +263,9 @@ struct GroupSidebar: View {
         sidebarRow(
             label: node.group.name,
             systemImage: node.group.symbolName,
-            // Direct membership only (not descendants) — matches `entries(inGroup:)`, which
-            // `EntryListView` uses for the same group filter, so the number shown here always
-            // equals what selecting this row actually reveals.
-            count: vault.entries(inGroup: node.group.id).count,
+            // Subtree, not direct membership (issue #143) — matches `EntryListFilter`, so
+            // the number shown here always equals what selecting this row actually reveals.
+            count: vault.entries(inSubtreeOf: node.group.id).count,
             isSelected: selection == .group(node.group.id),
             // The bin's row is de-emphasised (`.side-row.is-muted`): it is the one group whose
             // contents are not live credentials, and a user who cannot tell it apart at a glance

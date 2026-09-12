@@ -307,6 +307,10 @@ struct VaultBrowserView: View {
             .navigationSplitViewColumnWidth(min: 165, ideal: 220, max: 320)
         } detail: {
             detailColumn
+                // Without a floor this column can be dragged to zero and SwiftUI crashes
+                // (issue #139). 165 + 220 + 400 = 785, which still fits the browser window's
+                // 900pt minimum.
+                .navigationSplitViewColumnWidth(min: 220, ideal: 360)
         }
         // The toolbar shares the sidebar's tone, as the mockup's `.toolbar` does — otherwise the
         // window's chrome is the one band still painted by the system.
@@ -837,7 +841,7 @@ struct VaultBrowserView: View {
             id: UUID(),
             groupID: groupSelection.containingGroupID,
             title: "",
-            username: "",
+            username: appEnvironment?.settings.defaultUsername ?? "",
             password: "",
             url: "",
             notes: "",

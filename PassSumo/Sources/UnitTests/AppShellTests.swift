@@ -67,6 +67,7 @@ final class AppShellTests: XCTestCase {
             settings.showPasswordStrength = false
             settings.generatorRecipe = recipe
             settings.detailPaneVisible = false
+            settings.defaultUsername = "user@example.com"
         }
 
         let reloaded = AppSettings(defaults: scratch)
@@ -75,6 +76,7 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(reloaded.showPasswordStrength, false)
         XCTAssertEqual(reloaded.generatorRecipe, recipe)
         XCTAssertEqual(reloaded.detailPaneVisible, false)
+        XCTAssertEqual(reloaded.defaultUsername, "user@example.com")
     }
 
     func testSettingsDefaultsWhenNothingStoredYet() {
@@ -90,6 +92,7 @@ final class AppShellTests: XCTestCase {
         // always-visible `detail:` column behavior, so upgrading from a build with no saved
         // preference does not silently hide it.
         XCTAssertTrue(settings.detailPaneVisible)
+        XCTAssertEqual(settings.defaultUsername, "")
     }
 
     // MARK: - AppCommands enablement

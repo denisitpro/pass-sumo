@@ -227,12 +227,23 @@ struct KeychainSecretStore: SecretStore {
         // putting a Touch ID sheet in front of a user who has not asked to unlock anything.
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        // Current macOS still raises a sheet for a `.biometryCurrentSet` item on an
+        // attributes-only query (issue #138). The default copy is "PassSumo needs to
+        // authenticate to continue" / Cancel — not `retrieve`'s "Use Master Password" —
+        // which is exactly the screenshot. Fail closed rather than prompt.
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
+        case errSecInteractionNotAllowed:
+            // Item exists; we were not allowed to show UI. That is still "enrolled".
+            return true
         default: throw Self.mapped(status: status)
         }
     }

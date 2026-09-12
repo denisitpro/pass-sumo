@@ -6,13 +6,22 @@ import SwiftUI
 struct RootView: View {
     let environment: AppEnvironment
 
+    /// Welcome and Unlock sit on white like Strongbox (issue #137). The browser paints its
+    /// own pane grounds, so the window fill behind it can stay the mint canvas.
+    private var authWindowBackground: Color {
+        switch environment.store.state {
+        case .unlocked: return Palette.canvas
+        default: return Palette.surface
+        }
+    }
+
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Every screen sits on one of two grounds: `canvas` behind a centred card (Welcome,
             // Unlock) and `surface` inside the browser's panes, which paint their own. Painting
             // the canvas once here is what stops the system window background showing through.
-            .background(Palette.canvas)
+            .background(authWindowBackground)
             // The app-wide accent, so the controls this design pass does not hand-draw — a
             // `Slider`'s fill, a `Toggle`'s knob, a `ProgressView`'s bar, `List`'s focus ring —
             // follow palette C instead of the system blue.

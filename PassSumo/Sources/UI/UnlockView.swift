@@ -206,6 +206,20 @@ struct UnlockView: View {
                     focused: $passwordFieldFocused
                 )
 
+                if canOfferBiometrics {
+                    Button {
+                        Task { await unlockWithBiometrics() }
+                    } label: {
+                        Image(systemName: "touchid")
+                    }
+                    .buttonStyle(.tokenSecondary)
+                    .frame(width: Metrics.fieldHeight, height: Metrics.fieldHeight)
+                    .disabled(isUnlocking)
+                    .help("Unlock with Touch ID")
+                    .accessibilityLabel("Unlock with Touch ID")
+                    .accessibilityIdentifier("unlock.biometric")
+                }
+
                 // The one accent-filled action on this screen — everything else here is quiet by
                 // comparison, which is the whole point of the primary style (design/BRAND.md).
                 Button("Unlock") { Task { await submit() } }
@@ -254,17 +268,7 @@ struct UnlockView: View {
                     .controlSize(.small)
             }
 
-            if canOfferBiometrics {
-                Button {
-                    Task { await unlockWithBiometrics() }
-                } label: {
-                    Label("Unlock with Touch ID", systemImage: "touchid")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.tokenSecondary)
-                .disabled(isUnlocking)
-                .accessibilityIdentifier("unlock.biometric")
-            } else if let note = biometricsUnavailableNote {
+            if !canOfferBiometrics, let note = biometricsUnavailableNote {
                 // Tertiary and quiet, not `danger`: nothing has failed and there is nothing to
                 // retry — this is a standing fact about the Mac, in the space where the Touch ID
                 // button would otherwise be.
@@ -297,7 +301,7 @@ struct UnlockView: View {
         // The card the mockup centres on the canvas — `surface` ground, hairline edge, card shadow.
         .cardSurface()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.canvas)
+        .background(Palette.surface)
         .task {
             // Held in a local as well as in `@State`: the automatic attempt below needs the value
             // resolved by THIS call, not whatever a re-render might have left in the property.

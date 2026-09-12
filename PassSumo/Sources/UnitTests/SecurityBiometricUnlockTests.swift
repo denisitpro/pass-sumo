@@ -247,6 +247,10 @@ final class SecurityBiometricUnlockTests: XCTestCase {
     /// `SecItemCopyMatching` are Apple's code, the query construction is a handful of dictionary
     /// keys, and the error mapping — the only logic in the file — is tested above without them.
     ///
+    /// `hasSecret` (issue #138) uses `interactionNotAllowed` plus `kSecUseAuthenticationUIFail`
+    /// so an attributes-only query cannot raise a sheet. That path is still not exercised here
+    /// against the real keychain — the skip below covers the whole store.
+    ///
     /// The real store is therefore verified by hand on a machine with Touch ID, and the protocol
     /// boundary exists so that everything above it can be tested without one. This method is a
     /// skip rather than a comment so the decision shows up in the test report instead of being

@@ -29,6 +29,7 @@ final class AppSettings {
         static let generatorUppercase = "settings.generator.uppercase"
         static let generatorDigits = "settings.generator.digits"
         static let generatorSymbols = "settings.generator.symbols"
+        static let defaultUsername = "settings.defaultUsername"
     }
 
     /// Mirrors `AutoLockController.idleTimeout`'s own default (300s) so a database that has never
@@ -66,6 +67,11 @@ final class AppSettings {
         didSet { persistRecipe() }
     }
 
+    /// Prefill for a brand-new entry's username (issue #140). Empty means leave it blank.
+    var defaultUsername: String {
+        didSet { defaults.set(defaultUsername, forKey: Key.defaultUsername) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -80,6 +86,7 @@ final class AppSettings {
         if let value = defaults.object(forKey: Key.generatorUppercase) as? Bool { recipe.uppercase = value }
         if let value = defaults.object(forKey: Key.generatorDigits) as? Bool { recipe.digits = value }
         if let value = defaults.object(forKey: Key.generatorSymbols) as? Bool { recipe.symbols = value }
+        defaultUsername = defaults.string(forKey: Key.defaultUsername) ?? ""
         generatorRecipe = recipe
         // Note on `didSet` during `init`: assigning the stored properties above does run their
         // `didSet` (Swift only skips observers for a property's own *declaration-time* default, not
@@ -199,6 +206,11 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings.clipboardClearTimeout")
             }
 
+            Section("New Entries") {
+                TextField("Default username", text: $environment.settings.defaultUsername)
+                    .accessibilityIdentifier("settings.defaultUsername")
+            }
+
             Section("Password Generator") {
                 Stepper(
                     "Length: \(environment.settings.generatorRecipe.length)",
@@ -237,7 +249,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .font(Typography.body)
         .foregroundStyle(Palette.text)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 480)
         .background(Palette.canvas)
         .accessibilityIdentifier("root.settings")
         // Push edits into the already-running services immediately — a timeout change should take
