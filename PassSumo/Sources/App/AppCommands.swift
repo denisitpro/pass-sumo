@@ -90,11 +90,11 @@ struct AppCommands: Commands {
             Divider()
             // ⌘B, not KeePassXC's ⌘⇧B: Strongbox binds Copy Username to the bare ⌘B chord, and
             // per the owner's instruction this issue matches Strongbox, not KeePassXC.
-            Button("Copy Username") { copySelected(\.username) }
+            Button("Copy Username") { copySelected(\.username, notice: "Copied username") }
                 .keyboardShortcut("b", modifiers: .command)
                 .disabled(selectedEntry == nil)
             // ⌘⇧C already matched Strongbox before this issue — left as-is.
-            Button("Copy Password") { copySelected(\.password) }
+            Button("Copy Password") { copySelected(\.password, notice: "Copied password") }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(selectedEntry == nil)
             Button("Copy URL") { copySelected(\.url) }
@@ -245,9 +245,13 @@ struct AppCommands: Commands {
         return try? TOTPGenerator(parsing: otpAuthURL)
     }
 
-    private func copySelected(_ field: (VaultEntry) -> String) {
+    private func copySelected(_ field: (VaultEntry) -> String, notice: String? = nil) {
         guard let entry = selectedEntry else { return }
-        environment.clipboard.copy(field(entry))
+        if let notice {
+            environment.copy(field(entry), notice: notice)
+        } else {
+            environment.clipboard.copy(field(entry))
+        }
     }
 
     /// Computes the current one-time code and puts it on the pasteboard. Mirrors
@@ -257,7 +261,7 @@ struct AppCommands: Commands {
     private func copyTOTP() {
         guard let generator = selectedEntryTOTPGenerator, let code = try? generator.code(at: Date())
         else { return }
-        environment.clipboard.copy(code)
+        environment.copy(code, notice: "Copied one-time code")
     }
 
     private func launchSelectedEntryURL() {
@@ -270,7 +274,7 @@ struct AppCommands: Commands {
     /// password with no URL, and the copy half of the gesture should still work for it.
     private func copyPasswordAndLaunchURL() {
         guard let entry = selectedEntry else { return }
-        environment.clipboard.copy(entry.password)
+        environment.copy(entry.password, notice: "Copied password")
         if let url = selectedEntryURL {
             NSWorkspace.shared.open(url)
         }
