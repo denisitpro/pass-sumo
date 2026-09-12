@@ -54,16 +54,12 @@ struct EntryEditView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
-    /// The user's saved generator default (`AppSettings.generatorRecipe`), read by the caller and
-    /// handed in here rather than fetched from `UserDefaults` in this file (issue #106: this used
-    /// to be silently absent, so "Generate…" always produced a password from
-    /// `PasswordGenerator.Recipe()`'s hardcoded default regardless of what Settings said). A plain
-    /// value, not a live reference, because this view is short-lived — opened and torn down for a
-    /// single edit — so a snapshot taken when the sheet opens is not at risk of the staleness a
-    /// long-lived view (`VaultBrowserView`) would have to guard against.
-    let generatorRecipe: PasswordGenerator.Recipe
     var onSave: (VaultEntry) -> Void
     var onDismiss: () -> Void
+    /// Optional so existing call sites still compile (the browser is another lane). The only
+    /// persist path for a recipe tweak made here — this view never writes `UserDefaults` itself;
+    /// `AppSettings.generatorRecipe` already does on `didSet`.
+    var onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
 
     @State private var title: String
     @State private var username: String
@@ -85,16 +81,23 @@ struct EntryEditView: View {
     /// discards both together. Seeded from `original` and written back in `save()`; everything
     /// else on the entry rides through the copy untouched (issue #95).
     @State private var iconID: UInt32
+    /// Seeded from the caller's saved default (`AppSettings.generatorRecipe`) and then owned here
+    /// so generate-now and the settings sheet share one live recipe (issue #129). Tweaks inside
+    /// the sheet write back through `onRecipeChanged` — they used to be one-off (issue #106).
+    @State private var generatorRecipe: PasswordGenerator.Recipe
+    /// Set when generate-now's recipe cannot be satisfied, shown under the password row the same
+    /// way `GeneratorSheet` reports an impossible recipe. Cleared on the next successful generate.
+    @State private var generatorError: PasswordGenerator.GeneratorError?
 
     @State private var isPasswordVisible = false
     @State private var showingGenerator = false
     /// Presentation state for the icon picker, held here beside `showingGenerator` rather than
     /// inside the button that raises it. Both sheets are then attached at this view's own body
-    /// level, which is the arrangement already proven to work from inside this `Form` — a `.sheet`
-    /// hung off a control nested in a `Section` is a different, less-travelled path, and this file
-    /// is not the place to find out where it stops working.
+    /// level, which is the arrangement already proven to work from inside a nested control — a
+    /// `.sheet` hung off a button in a `ScrollView` is a different, less-travelled path.
     @State private var showingIconPicker = false
     @State private var wasLockedWhileEditing = false
+    @FocusState private var isPasswordFocused: Bool
 
     init(
         entry: VaultEntry,
@@ -104,16 +107,17 @@ struct EntryEditView: View {
         generator: PasswordGenerator,
         generatorRecipe: PasswordGenerator.Recipe,
         onSave: @escaping (VaultEntry) -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
     ) {
         self.original = entry
         self.isNew = isNew
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
-        self.generatorRecipe = generatorRecipe
         self.onSave = onSave
         self.onDismiss = onDismiss
+        self.onRecipeChanged = onRecipeChanged
         _title = State(initialValue: entry.title)
         _username = State(initialValue: entry.username)
         _password = State(initialValue: entry.password)
@@ -128,12 +132,17 @@ struct EntryEditView: View {
         _attachments = State(initialValue: entry.attachments.map { AttachmentDraft(attachment: $0) })
         _groupID = State(initialValue: entry.groupID)
         _iconID = State(initialValue: entry.iconID)
+        _generatorRecipe = State(initialValue: generatorRecipe)
     }
 
     var body: some View {
-        Form {
-            if wasLockedWhileEditing {
-                Section {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Spacing.s5) {
+                Text(isNew ? "New Entry" : "Edit Entry")
+                    .font(Typography.headline)
+                    .foregroundStyle(Palette.text)
+
+                if wasLockedWhileEditing {
                     Label(
                         "The vault locked while you were editing. This entry was NOT saved.",
                         systemImage: "exclamationmark.triangle.fill"
@@ -142,107 +151,38 @@ struct EntryEditView: View {
                     .foregroundStyle(Palette.danger)
                 }
             }
+            .padding(.horizontal, Spacing.s7)
+            .padding(.top, Spacing.s7)
+            .padding(.bottom, Spacing.s5)
 
-            Section {
-                TextField("Title", text: $title)
-                    .accessibilityIdentifier("edit.title")
-                iconField
-                TextField("Username", text: $username)
-                    .accessibilityIdentifier("edit.username")
-
-                passwordField
-                strengthMeter
-
-                Button("Generate…") { showingGenerator = true }
-                    .accessibilityIdentifier("edit.generate")
-
-                TextField("URL", text: $url)
-                    .accessibilityIdentifier("edit.url")
-
-                // Until this existed an entry could never change folder (issue #88): `groupID` was
-                // seeded from the entry, passed back to `save()` unchanged, and nothing between the
-                // two ever wrote to it.
-                Picker("Group", selection: $groupID) {
-                    // `VaultEntry.groupID`'s own "nil == the vault's top level", spelled for a user
-                    // rather than left as an absent row — without it there is no way back OUT of a
-                    // folder once an entry is in one.
-                    Text("No Group").tag(UUID?.none)
-                    ForEach(groupOptions) { option in
-                        Text(option.path).tag(UUID?.some(option.group.id))
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.s6) {
+                    headerRow
+                    labeled("Username") {
+                        EditLineField(placeholder: "Username", text: $username, identifier: "edit.username")
                     }
-                }
-                .accessibilityIdentifier("edit.group")
-            }
-
-            Section("Notes") {
-                TextEditor(text: $notes)
-                    .frame(minHeight: 80)
-                    .accessibilityIdentifier("edit.notes")
-            }
-
-            Section("One-Time Password") {
-                TextField("otpauth:// URL or base32 secret", text: $otpAuthURLText)
-                    .font(Typography.monoBody)
-                    .accessibilityIdentifier("edit.totp")
-            }
-
-            Section("Custom Fields") {
-                ForEach($customFields) { $field in
-                    HStack(spacing: Spacing.s4) {
-                        TextField("Name", text: $field.name)
-                        TextField("Value", text: $field.value)
-                        // A quiet glyph, not a `Toggle` — same reasoning as `FieldRow`'s eye: a
-                        // switch or a filled button-style toggle in every row would read as
-                        // heavier than Delete beside it. The label states the ACTION, so
-                        // VoiceOver announces what pressing it does rather than a bare state.
-                        Button {
-                            field.isProtected.toggle()
-                        } label: {
-                            Image(systemName: field.isProtected ? "lock.fill" : "lock.open")
-                        }
-                        .buttonStyle(.tokenGlyph)
-                        .help(field.isProtected
-                            ? "Stored as a secret — hidden until revealed. Click to store in the clear."
-                            : "Stored in the clear. Click to store as a secret.")
-                        .accessibilityLabel(field.isProtected
-                            ? "Store in the clear"
-                            : "Store as a secret")
-                        Button(role: .destructive) {
-                            customFields.removeAll { $0.id == field.id }
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }
-                        .buttonStyle(.tokenDestructiveGlyph)
+                    passwordBlock
+                    labeled("URL") {
+                        EditLineField(placeholder: "URL", text: $url, identifier: "edit.url")
                     }
+                    labeled("Group") { groupPicker }
+                    notesBlock
+                    totpBlock
+                    customFieldsBlock
+                    attachmentsBlock
                 }
-                Button("Add Field") {
-                    // Protected by default, which is where the codec's old hardcoded
-                    // `defaultProtected: true` moved to: a password manager's custom attributes
-                    // hold recovery codes and security answers far more often than trivia, so the
-                    // safe default is to conceal. Unlike before, the user can now turn it off.
-                    customFields.append(CustomFieldDraft(name: "", value: "", isProtected: true))
-                }
-                .accessibilityIdentifier("edit.addField")
+                .padding(.horizontal, Spacing.s7)
+                .padding(.bottom, Spacing.s6)
             }
 
-            attachmentsSection
+            Divider().overlay(Palette.border)
+
+            footer
+                .padding(.horizontal, Spacing.s7)
+                .padding(.vertical, Spacing.s5)
         }
-        .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 480)
-        .navigationTitle(isNew ? "New Entry" : "Edit Entry")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel", action: onDismiss)
-                    .accessibilityIdentifier("edit.cancel")
-                    .keyboardShortcut(.escape)
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save", action: save)
-                    .accessibilityIdentifier("edit.save")
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(wasLockedWhileEditing)
-            }
-        }
+        .background(Palette.surface)
         .onChange(of: store.state) { _, newState in
             guard case .unlocked = newState else {
                 wasLockedWhileEditing = true
@@ -261,32 +201,91 @@ struct EntryEditView: View {
         }
     }
 
-    /// The icon row, directly under Title because it is the other half of what identifies the entry
-    /// in the list — the row draws the two together.
-    ///
-    /// A button that opens the grid rather than the grid inline: this form is already long, and
-    /// seven rows of glyphs wedged in among the identity fields would push everything else down for
-    /// a setting most edits never touch. The button's own label is the icon currently in effect, so
-    /// the form still answers "which one is it?" without opening anything.
-    private var iconField: some View {
-        LabeledContent("Icon") {
+    /// Icon + title on one row. The icon IS the control that opens the picker — not a trailing
+    /// "Change…" next to a separate Icon label, which is what made this look like a grouped Form
+    /// row (issue #129). No favourite star: there is no favourite model.
+    private var headerRow: some View {
+        HStack(alignment: .center, spacing: Spacing.s4) {
             Button {
                 showingIconPicker = true
             } label: {
-                HStack(spacing: Spacing.s4) {
-                    Image(
-                        systemName: StandardIconCatalog.symbolName(
-                            for: iconID,
-                            fallingBackTo: VaultEntry.defaultIconID
-                        )
+                Image(
+                    systemName: StandardIconCatalog.symbolName(
+                        for: iconID,
+                        fallingBackTo: VaultEntry.defaultIconID
                     )
-                    .font(Typography.body)
-                    .frame(width: Metrics.rowIconSlot)
-                    Text("Change…")
-                }
+                )
             }
             .buttonStyle(.tokenSecondary)
+            .help("Change icon")
+            .accessibilityLabel("Change icon")
             .accessibilityIdentifier("edit.icon")
+
+            EditLineField(placeholder: "Title", text: $title, identifier: "edit.title")
+        }
+    }
+
+    private var passwordBlock: some View {
+        labeled("Password") {
+            VStack(alignment: .leading, spacing: Spacing.s2) {
+                HStack(spacing: Spacing.s3) {
+                    passwordField
+                    revealButton
+                    generateNowButton
+                    generatorSettingsButton
+                }
+                strengthMeter
+                if let generatorError {
+                    Text(errorMessage(for: generatorError))
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.danger)
+                        .accessibilityIdentifier("edit.generatorError")
+                }
+            }
+        }
+    }
+
+    /// Trailing of the password row, not a labelled "Generate…" that opened the sheet. Identifier
+    /// stays `edit.generate` so existing e2e that click it still have a target — they now fill
+    /// the field instead of presenting `GeneratorSheet`.
+    private var generateNowButton: some View {
+        Button {
+            _ = generatePasswordNow()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.tokenGlyph)
+        .help("Generate password")
+        .accessibilityLabel("Generate password")
+        .accessibilityIdentifier("edit.generate")
+    }
+
+    private var generatorSettingsButton: some View {
+        Button {
+            showingGenerator = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .buttonStyle(.tokenGlyph)
+        .help("Generator settings")
+        .accessibilityLabel("Generator settings")
+        .accessibilityIdentifier("edit.generatorSettings")
+    }
+
+    private var footer: some View {
+        HStack {
+            Button("Cancel", action: onDismiss)
+                .buttonStyle(.tokenQuiet)
+                .keyboardShortcut(.escape)
+                .accessibilityIdentifier("edit.cancel")
+
+            Spacer()
+
+            Button("Save", action: save)
+                .buttonStyle(.tokenPrimary)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(wasLockedWhileEditing)
+                .accessibilityIdentifier("edit.save")
         }
     }
 
@@ -309,13 +308,105 @@ struct EntryEditView: View {
         return GroupTreeBuilder.paths(from: vault.groups)
     }
 
+    private var groupPicker: some View {
+        // Until this existed an entry could never change folder (issue #88): `groupID` was
+        // seeded from the entry, passed back to `save()` unchanged, and nothing between the
+        // two ever wrote to it.
+        Picker("Group", selection: $groupID) {
+            // `VaultEntry.groupID`'s own "nil == the vault's top level", spelled for a user
+            // rather than left as an absent row — without it there is no way back OUT of a
+            // folder once an entry is in one.
+            Text("No Group").tag(UUID?.none)
+            ForEach(groupOptions) { option in
+                Text(option.path).tag(UUID?.some(option.group.id))
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("edit.group")
+    }
+
+    private var notesBlock: some View {
+        VStack(alignment: .leading, spacing: Spacing.s2) {
+            sectionTitle("Notes")
+            TextEditor(text: $notes)
+                .font(Typography.body)
+                .foregroundStyle(Palette.text)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 80)
+                .padding(Spacing.s4)
+                .sunkenWell()
+                .accessibilityIdentifier("edit.notes")
+        }
+    }
+
+    private var totpBlock: some View {
+        VStack(alignment: .leading, spacing: Spacing.s2) {
+            sectionTitle("One-Time Password")
+            // Placeholder is deliberately human. The field still accepts an otpauth URI or a
+            // bare base32 secret (`TOTPGenerator`); storage stays KeePassXC's `otp` field. The
+            // jargon belongs in `docs/feature.md`, not in the control the user types into.
+            EditLineField(
+                placeholder: "Authenticator secret",
+                text: $otpAuthURLText,
+                identifier: "edit.totp",
+                monospaced: true
+            )
+        }
+    }
+
+    private var customFieldsBlock: some View {
+        VStack(alignment: .leading, spacing: Spacing.s3) {
+            sectionTitle("Custom Fields")
+            ForEach($customFields) { $field in
+                HStack(spacing: Spacing.s4) {
+                    TextField("Name", text: $field.name)
+                    TextField("Value", text: $field.value)
+                    // A quiet glyph, not a `Toggle` — same reasoning as `FieldRow`'s eye: a
+                    // switch or a filled button-style toggle in every row would read as
+                    // heavier than Delete beside it. The label states the ACTION, so
+                    // VoiceOver announces what pressing it does rather than a bare state.
+                    Button {
+                        field.isProtected.toggle()
+                    } label: {
+                        Image(systemName: field.isProtected ? "lock.fill" : "lock.open")
+                    }
+                    .buttonStyle(.tokenGlyph)
+                    .help(field.isProtected
+                        ? "Stored as a secret — hidden until revealed. Click to store in the clear."
+                        : "Stored in the clear. Click to store as a secret.")
+                    .accessibilityLabel(field.isProtected
+                        ? "Store in the clear"
+                        : "Store as a secret")
+                    Button(role: .destructive) {
+                        customFields.removeAll { $0.id == field.id }
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.tokenDestructiveGlyph)
+                }
+            }
+            Button("Add Field") {
+                // Protected by default, which is where the codec's old hardcoded
+                // `defaultProtected: true` moved to: a password manager's custom attributes
+                // hold recovery codes and security answers far more often than trivia, so the
+                // safe default is to conceal. Unlike before, the user can now turn it off.
+                customFields.append(CustomFieldDraft(name: "", value: "", isProtected: true))
+            }
+            .buttonStyle(.tokenSecondary)
+            .accessibilityIdentifier("edit.addField")
+        }
+    }
+
     /// Add / remove / export attachments. Preview still lives only in `EntryDetailView` — issue
     /// #52 separated "why no export" from "why no preview": a save-panel write is a user-initiated
     /// egress the same way it is in the detail view, but rendering the payload on screen would
     /// still put a second copy of secret bytes where nobody asked to look at it, so that part of
     /// the original reasoning stands and preview stays detail-view-only.
-    private var attachmentsSection: some View {
-        Section("Attachments") {
+    private var attachmentsBlock: some View {
+        VStack(alignment: .leading, spacing: Spacing.s3) {
+            sectionTitle("Attachments")
             ForEach($attachments) { $draft in
                 HStack(spacing: Spacing.s4) {
                     Image(systemName: "paperclip")
@@ -352,6 +443,7 @@ struct EntryEditView: View {
             }
 
             Button("Add File...") { addAttachments() }
+                .buttonStyle(.tokenSecondary)
                 .accessibilityIdentifier("edit.addAttachment")
 
             if let attachmentError {
@@ -486,30 +578,36 @@ struct EntryEditView: View {
 
     @ViewBuilder
     private var passwordField: some View {
-        HStack(spacing: Spacing.s4) {
-            Group {
-                if isPasswordVisible {
-                    TextField("Password", text: $password)
-                } else {
-                    SecureField("Password", text: $password)
-                }
+        Group {
+            if isPasswordVisible {
+                TextField("Password", text: $password)
+            } else {
+                SecureField("Password", text: $password)
             }
-            .font(Typography.monoBody)
-            .accessibilityIdentifier("edit.password")
-
-            Button {
-                isPasswordVisible.toggle()
-            } label: {
-                Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
-            }
-            .buttonStyle(.tokenGlyph)
-            .help(isPasswordVisible ? "Hide password" : "Reveal password")
-            // Mirrors `detail.revealPassword` in `EntryDetailView`/`FieldRow` — that one had an id,
-            // this one didn't, which was a real gap (issue #6's e2e run): there was no way to read
-            // this field's real value from a test without it, since a concealed `SecureField`'s
-            // accessibility value is a run of bullets, not the password.
-            .accessibilityIdentifier("edit.revealPassword")
         }
+        .textFieldStyle(.plain)
+        .font(Typography.monoField)
+        .foregroundStyle(Palette.text)
+        .padding(.horizontal, Spacing.s4)
+        .frame(height: Metrics.fieldHeight)
+        .fieldChrome(isFocused: isPasswordFocused)
+        .focused($isPasswordFocused)
+        .accessibilityIdentifier("edit.password")
+    }
+
+    private var revealButton: some View {
+        Button {
+            isPasswordVisible.toggle()
+        } label: {
+            Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+        }
+        .buttonStyle(.tokenGlyph)
+        .help(isPasswordVisible ? "Hide password" : "Reveal password")
+        // Mirrors `detail.revealPassword` in `EntryDetailView`/`FieldRow` — that one had an id,
+        // this one didn't, which was a real gap (issue #6's e2e run): there was no way to read
+        // this field's real value from a test without it, since a concealed `SecureField`'s
+        // accessibility value is a run of bullets, not the password.
+        .accessibilityIdentifier("edit.revealPassword")
     }
 
     /// Fed by `PasswordGenerator.strength(of:)` — that method's own doc comment is explicit that
@@ -575,13 +673,97 @@ struct EntryEditView: View {
         onDismiss()
     }
 
+    /// Fills `password` from the current recipe without opening the sheet (issue #129).
+    ///
+    /// Returns the generated value so a unit test can assert on length without rendering; `nil`
+    /// means the recipe was impossible and `generatorError` holds the reason — same sentences
+    /// `GeneratorSheet` already shows, never a crash and never a silent no-op.
+    @discardableResult
+    func generatePasswordNow() -> String? {
+        do {
+            let generated = try generator.generate(generatorRecipe)
+            password = generated
+            generatorError = nil
+            return generated
+        } catch let failure as PasswordGenerator.GeneratorError {
+            generatorError = failure
+            return nil
+        } catch {
+            // `generate(_:)`'s signature only ever throws `GeneratorError` — this branch exists
+            // purely because `catch` must be exhaustive, not because another error type can
+            // actually reach it.
+            return nil
+        }
+    }
+
     /// Factored out of `body`'s `.sheet(isPresented: $showingGenerator)` closure purely so the
     /// wiring is assertable without rendering (issue #106) — a test constructs an `EntryEditView`
     /// with a known `generatorRecipe`, calls this directly, and checks the result's
     /// `openingRecipe`. If this ever goes back to hardcoding `GeneratorSheet(generator:, clipboard:)`
     /// with no `recipe:`, that assertion fails instead of the bug shipping invisibly again.
+    ///
+    /// `onUse` still fills the password field (the sheet's "Use"); `onRecipeChanged` both updates
+    /// the live recipe generate-now reads and forwards to the caller so Settings persists.
     func makeGeneratorSheet() -> GeneratorSheet {
-        GeneratorSheet(generator: generator, recipe: generatorRecipe, clipboard: clipboard, onUse: { password = $0 })
+        GeneratorSheet(
+            generator: generator,
+            recipe: generatorRecipe,
+            clipboard: clipboard,
+            onUse: { password = $0 },
+            onRecipeChanged: { newRecipe in
+                generatorRecipe = newRecipe
+                onRecipeChanged?(newRecipe)
+            }
+        )
+    }
+
+    private func errorMessage(for error: PasswordGenerator.GeneratorError) -> String {
+        switch error {
+        case .noCharacterClassEnabled:
+            return "Turn on at least one character class."
+        case .lengthTooShort(let minimum):
+            return "Length must be at least \(minimum) to include one of each enabled class."
+        case .randomSourceUnavailable:
+            return "The system's secure random generator is unavailable right now."
+        }
+    }
+
+    @ViewBuilder
+    private func labeled(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s2) {
+            Text(title)
+                .font(Typography.captionMedium)
+                .foregroundStyle(Palette.textSecondary)
+            content()
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Typography.bodySemibold)
+            .foregroundStyle(Palette.text)
+    }
+}
+
+/// A single-line field with the token chrome. Local to this file because the edit sheet is the
+/// one screen that left `Form(.grouped)` (issue #129); Unlock already has `MasterPasswordField`.
+private struct EditLineField: View {
+    let placeholder: String
+    @Binding var text: String
+    var identifier: String
+    var monospaced = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .font(monospaced ? Typography.monoField : Typography.field)
+            .foregroundStyle(Palette.text)
+            .padding(.horizontal, Spacing.s4)
+            .frame(height: Metrics.fieldHeight)
+            .fieldChrome(isFocused: isFocused)
+            .focused($isFocused)
+            .accessibilityIdentifier(identifier)
     }
 }
 
