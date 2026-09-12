@@ -22,6 +22,7 @@ final class SettingsAppVersionInfoTests: XCTestCase {
         XCTAssertEqual(info.build, "42")
         XCTAssertEqual(info.gitRevision, "abc1234")
         XCTAssertEqual(info.osVersion, "15.1.2")
+        XCTAssertEqual(info.compactLine, "PassSumo 1.2.3 (42) · abc1234")
         XCTAssertEqual(info.summary, "PassSumo 1.2.3 (build 42) · abc1234 · macOS 15.1.2")
         XCTAssertEqual(info.shortLabel, "1.2.3 (42) · abc1234")
     }
@@ -35,6 +36,7 @@ final class SettingsAppVersionInfoTests: XCTestCase {
         XCTAssertEqual(info.shortVersion, AppVersionInfo.unknownShortVersion)
         XCTAssertEqual(info.build, AppVersionInfo.unknownBuild)
         XCTAssertEqual(info.gitRevision, AppVersionInfo.unknownGitRevision)
+        XCTAssertEqual(info.compactLine, "PassSumo 0.0.0 (1) · dev")
         XCTAssertEqual(info.summary, "PassSumo 0.0.0 (build 1) · dev · macOS 15.1.2")
         XCTAssertEqual(info.shortLabel, "0.0.0 (1) · dev")
     }
@@ -54,6 +56,7 @@ final class SettingsAppVersionInfoTests: XCTestCase {
         XCTAssertEqual(info.shortVersion, "1.0.0")
         XCTAssertEqual(info.build, "7")
         XCTAssertEqual(info.gitRevision, AppVersionInfo.unknownGitRevision)
+        XCTAssertEqual(info.compactLine, "PassSumo 1.0.0 (7) · dev")
     }
 
     /// A key present with the wrong type (e.g. a plist edited by hand) is treated the same as a

@@ -281,11 +281,11 @@ struct UnlockView: View {
                     .accessibilityIdentifier("unlock.biometricUnavailable")
             }
 
-            // The version the owner asked for first (issue #107): "which build am I running,"
-            // visible on the screen he actually looks at before unlocking, not buried a click away
-            // in Settings. Read straight through `AppVersionInfo`, never a literal — see the doc
-            // comment on `versionInfo` above.
-            Text("PassSumo \(versionInfo.shortVersion) (\(versionInfo.build))")
+            // The version the owner asked for first (issue #107), including the short git hash
+            // (issue #146): a screenshot of this screen is how a bug report starts, and a build
+            // number alone does not identify the commit. Assembled by `AppVersionInfo.compactLine`
+            // so Unlock never interpolates the three fields itself.
+            Text(versionInfo.compactLine)
                 .font(Typography.caption2)
                 .foregroundStyle(Palette.textTertiary)
                 .accessibilityIdentifier("unlock.version")

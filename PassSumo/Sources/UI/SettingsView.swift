@@ -122,9 +122,9 @@ final class AppSettings {
 /// dependency-inversion rule) — `AppVersionInfoTests` exercises the assembly, including a plist
 /// missing the git-stamping keys entirely, without touching the real bundle.
 ///
-/// This is **data**, never UI copy: issue #46's localization pass must never reach `summary` or
-/// reformat any part of it — a bug report needs the exact byte-for-byte string regardless of the
-/// reporter's locale.
+/// This is **data**, never UI copy: issue #46's localization pass must never reach `summary`,
+/// `compactLine`, or reformat any part of them — a bug report needs the exact byte-for-byte
+/// string regardless of the reporter's locale.
 struct AppVersionInfo {
     let shortVersion: String
     let build: String
@@ -152,6 +152,12 @@ struct AppVersionInfo {
             // Plain integer interpolation, never a number formatter — see the type's doc comment.
             osVersion: "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         )
+    }
+
+    /// Unlock's version line (issue #146): marketing version, build number, short git hash.
+    /// Settings keeps the longer `summary` (adds the word "build" and the OS). Never localized.
+    var compactLine: String {
+        "PassSumo \(shortVersion) (\(build)) · \(gitRevision)"
     }
 
     /// The exact bug-report string. Never localized, never run through a locale-aware formatter.
