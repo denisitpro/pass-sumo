@@ -1,6 +1,6 @@
 # Screen patterns
 
-> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-12 · [AI - grok-4.6]
 
 How the real screens are assembled, and the empty and error states each one actually has.
 Components are in `design/components-*.md`; token values in `design/BRAND.md`.
@@ -114,7 +114,8 @@ unless the bin itself is what is selected. Order is alphabetical by title, case-
 tie-broken by id — a dense list scanned by eye needs a stable order far more than a recency one.
 
 **Empty states.** "No Entries" for an empty group, "No Results" naming the query, "No Entry Selected"
-in the inspector. All three are `ContentUnavailableView`s.
+in the inspector. All three are `ContentUnavailableView`s. The empty list's right-click menu offers
+"New Entry", wired to the same path as the toolbar plus.
 
 **Error states.** The browser itself surfaces none inline: a backup failure goes to the status bar, a
 failed attachment export to a `danger` line inside the Attachments section, and a lock that arrives
@@ -129,7 +130,9 @@ one value between the two meanings is what made "All Entries" unpickable (issue 
 
 ## Generator sheet
 
-**Purpose.** Produce one password. Opened from the toolbar, or from the edit sheet's "Generate…".
+**Purpose.** Produce one password, and edit the saved recipe. Opened from the toolbar, or from the
+edit sheet's generator-settings gear — not from generate-now, which fills the password field
+directly from the current recipe (issue #129).
 
 **Assembly.** Title in `headline`; the result in `monoField` inside a `sunkenWell`, selectable; a
 length slider with its value in the label above; five toggles; the entropy line in
@@ -142,8 +145,9 @@ entirely** rather than offered as a second button doing exactly what Copy does w
 screen saying so (issue #45). Copy is therefore primary when it is alone and secondary when Use is
 beside it.
 
-**Regeneration is automatic.** Any recipe change redraws the password immediately — a stale result no
-longer matching the controls is worse than an extra regeneration.
+**A recipe change is saved.** Any toggle or slider tick regenerates immediately *and* calls
+`onRecipeChanged`, so Settings and the next generate-now use the new recipe. That supersedes issue
+#106's one-off choice. This sheet still never writes `UserDefaults` itself.
 
 **Error state.** An impossible recipe (no character class, or a length too short to include one of
 each) replaces the result with a `caption`/`danger` sentence naming the fix.
@@ -156,12 +160,17 @@ labels the slider's ends, and renders strength as a segmented bar with a verdict
 **Purpose.** Edit one entry, or create one — the same form, distinguished only by its title and by
 whether Save inserts.
 
-**Assembly.** A `Form(.grouped)` with a native cancel/confirm toolbar: identity fields — Title, then
-an "Icon" row whose secondary button shows the current glyph and opens the icon picker, then
-Username, password, Generate…, URL and Group — then Notes, One-Time Password, Custom Fields and
-Attachments as titled sections. It consumes the token layer for
-type, colour and its glyph buttons, but not the field chrome or the worded button roles, so it is the
-one screen that does not yet look like the rest of the app. No approved mockup exists (issue #63).
+**Assembly.** A leading-aligned `ScrollView` + `VStack`, not a grouped `Form` — labels sit above
+fields, not as trailing `LabeledContent`. Header is the current icon (opens the picker) beside the
+title field; no favourite star. Then Username, Password, URL, Group; then Notes, One-Time Password
+(placeholder: "Authenticator secret"), Custom Fields and Attachments as titled blocks. Footer is
+Cancel (quiet, Esc) on the left and Save (primary, ⌘S) on the right. Add Field and Add File… are
+secondary. No approved mockup exists (issue #63).
+
+**Password row.** The field, a reveal glyph, then two trailing glyphs: generate-now (`arrow.clockwise`,
+identifier `edit.generate`) fills from the current recipe without opening a sheet; the gear
+(`edit.generatorSettings`) opens the generator sheet. An impossible recipe shows the same
+`caption`/`danger` sentence the sheet uses.
 
 **The state that matters.** If the vault locks while this sheet is open, `VaultStore.upsert` would
 silently no-op — the user would hit Save, watch the sheet close, and lose the entry. So the sheet
@@ -192,15 +201,29 @@ straight through `VaultStore.setGroupIcon`, the way "Move to" beside it in the s
 does; an entry's is parked in the edit form's own draft state and lands with Save, so Cancel on the
 form discards it along with everything else typed there.
 
-**Reached from** the sidebar's group context menu ("Change Icon…", beside Rename) and the edit
-sheet's Icon row. Not from the entry list's row context menu: that menu is the pointer mirror of the
-toolbar's copy/open/delete actions, and it opens the edit form anyway.
+**Reached from** the sidebar's group context menu ("Change Icon…", beside Rename), the New Group
+sheet's icon button, and the edit sheet's Icon row. Not from the entry list's row context menu: that
+menu is the pointer mirror of the toolbar's copy/open/delete actions, and it opens the edit form
+anyway.
 
 **States.** The index currently in effect is highlighted with `row-sel-bg` / `row-sel-text`. An index
 outside 0…68 — another client's, a future KeePass's — highlights nothing rather than being snapped
 to a default, because the file's value survives until the user actually picks something. Each cell's
 symbol name reaches the tooltip and VoiceOver; nothing is captioned, because 69 labels is a wall of
 text and KeePass's own names ("PaperQ", "WorldSocket") are 2003 Windows jargon.
+
+## New Group sheet
+
+**Purpose.** Name a new folder, and optionally pick its icon. Replaces the name-only `NSAlert` the
+create path used to share with Rename (issue #129).
+
+**Assembly.** Title in `headline`; a name field with `fieldChrome`; a secondary button showing the
+current glyph (default 48, folder) that opens the icon picker; Cancel / Create. Create is disabled
+while the trimmed name is empty — `addGroup` would refuse a blank name anyway, and a live button
+that silently does nothing is what the alert could not prevent.
+
+**Rename is not this sheet.** Rename stays the name-only alert. Change Icon on an existing folder
+stays the existing picker, reached from the sidebar context menu.
 
 ## Settings
 

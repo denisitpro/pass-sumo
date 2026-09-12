@@ -1,6 +1,6 @@
 # Components — chrome
 
-> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-12 · [AI - grok-4.6]
 
 The window's own surfaces and bands: what content sits on, and what frames it. Token values are in
 `design/BRAND.md`.
@@ -47,12 +47,13 @@ No states.
 **Purpose.** The pointer surface for the browser. **Not the keyboard surface** — that is the menu
 bar; see `design/keyboard-map.md`.
 
-**As implemented.** A native SwiftUI `.toolbar` with one `ToolbarItemGroup`, tinted to the `sidebar`
-tone via `.toolbarBackground(_:for: .windowToolbar)`, under `.windowToolbarStyle(.unified)`. Its
-items, in order: New Entry, Delete Entry, Generator, Lock, Save, Hide/Show Detail. Each is a `Label`
-with an SF Symbol, rendered by the system — the toolbar deliberately does **not** use
-`GlyphButtonStyle`. The search field is this app's own, in a separate `ToolbarItem(placement:
-.principal)` — see below.
+**As implemented.** A native SwiftUI `.toolbar` tinted to the `sidebar` tone via
+`.toolbarBackground(_:for: .windowToolbar)`, under `.windowToolbarStyle(.unified)`. Search is a
+centred `ToolbarItem(placement: .principal)` of this app's own — see below. Lock is its own
+`ToolbarItem(placement: .primaryAction)` so the centred search field cannot overflow it (issue
+#129). The rest — New Entry, New Group, Delete Entry, Generator, Save, Hide/Show Detail — sit in
+one `ToolbarItemGroup`. Each is a `Label` with an SF Symbol, rendered by the system — the toolbar
+deliberately does **not** use `GlyphButtonStyle`.
 
 **States.** Delete Entry is disabled with no selection; Save is disabled when nothing is dirty. The
 detail toggle's label flips between "Hide Detail" and "Show Detail". Everything else is always
@@ -62,9 +63,9 @@ enabled while unlocked.
 
 - The mockup groups its buttons into two `.toolbar-group`s split by `.toolbar-sep` separators, opens
   with a sidebar-collapse glyph and a `.toolbar-title` showing the database filename, and ends with
-  the search well. The code has one flat group, no separators, and no title item (the filename
-  reaches the window title through `navigationTitle` on the sidebar instead). The search well is
-  built, but centred rather than trailing — see the next section.
+  the search well. The code has one flat group plus Lock in `.primaryAction`, no separators, and no
+  title item (the filename reaches the window title through `navigationTitle` on the sidebar
+  instead). The search well is built, but centred rather than trailing — see the next section.
 - The mockup has an **Edit Entry** toolbar button. The code has none; Edit lives in the detail
   pane's header and in the Entry menu.
 - The mockup's toolbar glyphs are `.icon-btn`s with a `.is-danger` variant for delete; the code's are

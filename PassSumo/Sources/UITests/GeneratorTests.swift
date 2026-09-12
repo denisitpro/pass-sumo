@@ -1,11 +1,10 @@
 import XCTest
 
-/// `GeneratorSheet`, reached through `EntryEditView`'s "Generate…" button (`edit.generate`) rather
-/// than `VaultBrowserView`'s standalone toolbar "Generator" button — that toolbar button has no
-/// `.accessibilityIdentifier` (see this suite's own README for the full list of such gaps), only a
-/// ⌘⇧G shortcut, so it can't be targeted directly by id. The sheet itself is identical either way
-/// (`VaultBrowserView` opens the very same `GeneratorSheet`), so this is not a narrower test of the
-/// generator's own behavior — only of a different entry point into it.
+/// `GeneratorSheet`, reached through `EntryEditView`'s generator-settings gear
+/// (`edit.generatorSettings`) rather than `VaultBrowserView`'s standalone toolbar "Generator"
+/// button — that toolbar button has no `.accessibilityIdentifier` (see this suite's own README
+/// for the full list of such gaps), only a ⌘⇧G shortcut, so it can't be targeted directly by id.
+/// `edit.generate` is now generate-now: it fills the password field and does not open this sheet.
 final class GeneratorTests: XCTestCase {
     private func entropyBits(from text: String) -> Int? {
         // "Entropy: 131 bits" -> 131. Deliberately just the digits rather than a stricter regex:
@@ -16,7 +15,7 @@ final class GeneratorTests: XCTestCase {
     func testChangingLengthRegeneratesWithMatchingLengthAndEntropy() throws {
         let app = launchUITestingApp(self)
         app.byID("browser.newEntry").click()
-        app.byID("edit.generate").click()
+        app.byID("edit.generatorSettings").click()
 
         let resultField = app.byID("generator.result")
         let entropyField = app.byID("generator.entropy")
@@ -52,15 +51,48 @@ final class GeneratorTests: XCTestCase {
         XCTAssertGreaterThan(entropyAfter, entropyBefore, "a longer password from the same alphabet is never lower-entropy")
     }
 
-    func testUsePutsTheGeneratedValueIntoTheEditFormsPasswordField() {
+    func testGenerateNowFillsThePasswordFieldFromTheCurrentRecipe() {
         let app = launchUITestingApp(self)
         app.byID("browser.newEntry").click()
         app.byID("edit.generate").click()
 
+        let passwordField = app.byID("edit.password")
+        XCTAssertTrue(passwordField.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.byID("generator.result").waitForExistence(timeout: 1),
+            "generate-now must fill the field, not open the generator sheet"
+        )
+
+        // The field renders concealed by default (`EntryEditView.isPasswordVisible` starts
+        // `false`), so its accessibility value right now is a run of bullet characters, never the
+        // real password — a security-relevant fact worth asserting on its own, not just a nuisance
+        // in the way of the real check below.
+        let concealed = passwordField.value as? String ?? ""
+        XCTAssertFalse(concealed.isEmpty, "generate-now should have written a concealed password")
+
+        // Reveal it — the only way to read the REAL text back, concealed or not, and the same
+        // thing a real user has to do to verify generate-now actually worked (issue #6).
+        app.byID("edit.revealPassword").click()
+        let generated = passwordField.value as? String ?? ""
+        XCTAssertNotEqual(generated, concealed, "revealing must expose the real password, not bullets")
+        XCTAssertFalse(generated.isEmpty)
+        XCTAssertEqual(
+            generated.count, 20,
+            "ui-testing uses a throwaway defaults suite, so generate-now starts from Recipe()'s 20"
+        )
+
+        app.byID("edit.cancel").click()
+    }
+
+    func testUseFromGeneratorSettingsPutsTheValueIntoThePasswordField() {
+        let app = launchUITestingApp(self)
+        app.byID("browser.newEntry").click()
+        app.byID("edit.generatorSettings").click()
+
         let resultField = app.byID("generator.result")
         XCTAssertTrue(resultField.waitForExistence(timeout: 5))
         // `.textValue`, not `.label` — `generator.result` is a plain `Text`, whose string lands in
-        // the accessibility VALUE on macOS (see `GeneratorSheet.swift:151`, `UITestSupport.swift`'s
+        // the accessibility VALUE on macOS (see `GeneratorSheet.swift`, `UITestSupport.swift`'s
         // `waitForLabel` doc comment). Reading `.label` here always returned "", which is why
         // `generated` used to be empty and the field-value comparison below trivially passed.
         let generated = resultField.textValue
@@ -73,18 +105,11 @@ final class GeneratorTests: XCTestCase {
         let passwordField = app.byID("edit.password")
         XCTAssertTrue(passwordField.waitForExistence(timeout: 5))
 
-        // The field renders concealed by default (`EntryEditView.isPasswordVisible` starts
-        // `false`), so its accessibility value right now is a run of bullet characters, never the
-        // real password — a security-relevant fact worth asserting on its own, not just a nuisance
-        // in the way of the real check below.
         XCTAssertNotEqual(
             passwordField.value as? String, generated,
             "a concealed password field must not expose the real password as its accessibility value"
         )
 
-        // Reveal it — the only way to read the REAL text back, concealed or not, and the same
-        // thing a real user has to do to verify "Use" actually worked (issue #6: this button had no
-        // identifier until now; see `EntryEditView.swift`'s `edit.revealPassword`).
         app.byID("edit.revealPassword").click()
         XCTAssertEqual(passwordField.value as? String, generated)
 

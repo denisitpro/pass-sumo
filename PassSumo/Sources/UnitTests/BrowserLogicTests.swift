@@ -651,23 +651,36 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertNil(sheet.onUse)
     }
 
-    /// `EntryEditView`'s "Generate…" call site has a password field to fill, so it provides
+    /// `EntryEditView`'s generator-settings call site has a password field to fill, so it provides
     /// `onUse` — this is what makes "Use" appear there.
     func testGeneratorSheetHasAUseActionWhenTheCallerProvidesOne() {
         let sheet = GeneratorSheet(generator: PasswordGenerator(), clipboard: ClipboardService(), onUse: { _ in })
         XCTAssertNotNil(sheet.onUse)
     }
 
-    // MARK: - Generator recipe wiring (issue #106)
+    func testGeneratorSheetForwardsRecipeChangesWhenTheCallerProvidesACallback() {
+        let sheet = GeneratorSheet(
+            generator: PasswordGenerator(),
+            clipboard: ClipboardService(),
+            onRecipeChanged: { _ in }
+        )
+        XCTAssertNotNil(sheet.onRecipeChanged)
+    }
+
+    // MARK: - Generator recipe wiring (issue #106, persist path issue #129)
     //
     // Persisting the recipe (`AppSettings.generatorRecipe` round-tripping through `UserDefaults`)
-    // was already covered by `AppShellTests` and passed throughout this bug's life — the defect was
-    // entirely that neither call site below ever read the saved value back. These two tests drive
+    // was already covered by `AppShellTests` and passed throughout #106's life — that defect was
+    // entirely that neither call site below ever read the saved value back. These tests drive
     // the actual `EntryEditView`/`VaultBrowserView` construction and call its real method, the same
     // "build the real view, call its real method, no rendering" pattern `EntryEditSaveTests.save()`
     // already uses, and assert on `GeneratorSheet.openingRecipe` — the one observable trace the
     // plumbing leaves on a freshly-constructed sheet. If either call site goes back to hardcoding
     // `GeneratorSheet(generator:, clipboard:)` with no `recipe:`, these fail.
+    //
+    // Issue #129 adds generate-now (fills the field, no sheet) and `onRecipeChanged` so a tweak
+    // inside the sheet is no longer one-off. The edit-form tests below cover that seam; the
+    // browser's toolbar call site is another lane and still only has to pass `openingRecipe`.
 
     /// A fresh scratch `UserDefaults` suite per test, removed in a `defer` — never
     /// `UserDefaults.standard`, which is the app's real preferences domain. Mirrors
@@ -698,6 +711,80 @@ final class BrowserLogicTests: XCTestCase {
         )
 
         XCTAssertEqual(editor.makeGeneratorSheet().openingRecipe, recipe)
+        XCTAssertNotNil(editor.makeGeneratorSheet().onUse)
+        XCTAssertNotNil(
+            editor.makeGeneratorSheet().onRecipeChanged,
+            "the sheet must be able to write the live recipe back, even if the caller passed no persist callback"
+        )
+    }
+
+    /// Generate-now uses the recipe handed in, not `Recipe()`'s hardcoded 20, and does not need
+    /// SwiftUI to be rendered to do it.
+    func testGeneratePasswordNowUsesTheInjectedRecipeLength() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 32
+
+        let editor = EntryEditView(
+            entry: makeEntry("00000000-0000-0000-0000-0000000000e2", group: nil, title: "Router"),
+            isNew: false,
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            generatorRecipe: recipe,
+            onSave: { _ in },
+            onDismiss: {}
+        )
+
+        let generated = editor.generatePasswordNow()
+        XCTAssertEqual(generated?.count, 32)
+    }
+
+    /// An impossible recipe must not crash and must not pretend to have filled the field.
+    func testGeneratePasswordNowReturnsNilForAnImpossibleRecipe() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.lowercase = false
+        recipe.uppercase = false
+        recipe.digits = false
+        recipe.symbols = false
+
+        let editor = EntryEditView(
+            entry: makeEntry("00000000-0000-0000-0000-0000000000e3", group: nil, title: "Router"),
+            isNew: false,
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            generatorRecipe: recipe,
+            onSave: { _ in },
+            onDismiss: {}
+        )
+
+        XCTAssertNil(editor.generatePasswordNow())
+    }
+
+    /// The sheet's `onRecipeChanged` is the persist path (issue #129). A caller that hands one in
+    /// must actually receive the recipe the sheet reports — that is the only write; this view
+    /// never touches `UserDefaults`.
+    func testEntryEditViewForwardsGeneratorRecipeChanges() {
+        var persisted: PasswordGenerator.Recipe?
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 20
+
+        let editor = EntryEditView(
+            entry: makeEntry("00000000-0000-0000-0000-0000000000e4", group: nil, title: "Router"),
+            isNew: false,
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            generatorRecipe: recipe,
+            onSave: { _ in },
+            onDismiss: {},
+            onRecipeChanged: { persisted = $0 }
+        )
+
+        var updated = recipe
+        updated.length = 40
+        editor.makeGeneratorSheet().onRecipeChanged?(updated)
+        XCTAssertEqual(persisted?.length, 40)
     }
 
     /// Same regression, at `VaultBrowserView`'s own toolbar call site — the one with no entry-edit
@@ -724,6 +811,13 @@ final class BrowserLogicTests: XCTestCase {
             settings: settings
         )
 
-        XCTAssertEqual(browser.makeGeneratorSheet().openingRecipe, recipe)
+        let sheet = browser.makeGeneratorSheet()
+        XCTAssertEqual(sheet.openingRecipe, recipe)
+        XCTAssertNotNil(sheet.onRecipeChanged, "toolbar generator must persist recipe tweaks (#129)")
+
+        var updated = recipe
+        updated.length = 40
+        sheet.onRecipeChanged?(updated)
+        XCTAssertEqual(settings.generatorRecipe.length, 40)
     }
 }

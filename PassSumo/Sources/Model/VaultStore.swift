@@ -427,14 +427,24 @@ final class VaultStore {
     /// group this vault does not have. A blank name is refused rather than defaulted to something
     /// — a folder called "" is indistinguishable from a bug in every client that opens the file
     /// afterwards, and what to say about it is the caller's decision, not this type's.
+    ///
+    /// `iconID` is the built-in KDBX index the folder is created wearing. The default is
+    /// `VaultGroup.defaultIconID` (48, the folder), so existing call sites that only have a name
+    /// keep producing the same folder they always did. Passing the index here means the create
+    /// path does not have to follow `addGroup` with `setGroupIcon` — a two-step that would leave
+    /// a default-icon folder on disk if the process died between them.
     @discardableResult
-    func addGroup(named name: String, parentID: UUID?) -> VaultGroup? {
+    func addGroup(
+        named name: String,
+        parentID: UUID?,
+        iconID: UInt32 = VaultGroup.defaultIconID
+    ) -> VaultGroup? {
         guard case .unlocked(var vault) = state else { return nil }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let parentID, !vault.groups.contains(where: { $0.id == parentID }) { return nil }
 
-        let group = VaultGroup(id: UUID(), parentID: parentID, name: trimmed)
+        let group = VaultGroup(id: UUID(), parentID: parentID, name: trimmed, iconID: iconID)
         vault.groups.append(group)
         commit(vault)
         return group
