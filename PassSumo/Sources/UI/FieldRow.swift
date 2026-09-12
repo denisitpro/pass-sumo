@@ -92,11 +92,14 @@ struct FieldRow: View {
             // A link value is clicked, not selected — the same convention as any hyperlink, and
             // why `.textSelection` is deliberately absent only on this branch; every other value
             // keeps it. `.plain` keeps `TokenButtonSurface`'s padding/fill/border out of this —
-            // the row must still look exactly like `FieldRow`'s other values, just clickable.
+            // the row must still look like `FieldRow`'s other values, just as a link.
+            // accent700 (#0F5163) is nearly Palette.text (#10242A), so links were invisible
+            // (issue #150); accent600 + underline is the glanceable treatment.
             Button(action: onActivateLink) {
                 Text(value)
                     .font(isMonospaced ? Typography.monoBody : Typography.body)
-                    .foregroundStyle(Palette.accent700)
+                    .foregroundStyle(Palette.accent600)
+                    .underline()
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
