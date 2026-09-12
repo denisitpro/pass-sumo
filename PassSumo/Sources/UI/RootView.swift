@@ -5,6 +5,11 @@ import SwiftUI
 struct RootView: View {
     let environment: AppEnvironment
 
+    /// Create's sheet lives here, not on `WelcomeView`, so File → New, the tab-bar + menu, and
+    /// Welcome's own Create button can all present it — Welcome is unmounted whenever a tab exists
+    /// (issue #165).
+    @State private var isPresentingCreateSheet = false
+
     /// Welcome and Unlock sit on white like Strongbox (issue #137). The browser paints its
     /// own pane grounds, so the window fill behind it can stay the mint canvas.
     private var authWindowBackground: Color {
@@ -53,14 +58,25 @@ struct RootView: View {
             // explicitly below rather than fished out of the environment, so the view stays
             // constructible in a preview with no environment at all.
             .environment(environment)
-            // "Open Database…" is handled HERE, not in `WelcomeView`, because since issue #84 the
-            // item is enabled while a vault is open — and `WelcomeView` is unmounted in every state
-            // but "no tabs". `RootView` is the only view that exists in all of them.
+            // Open and Create are handled HERE, not in `WelcomeView`: both stay enabled while
+            // tabs exist (issue #84 / #165), and Welcome is unmounted then. One owner so ⌘O,
+            // File → New, the tab-bar + menu, and Welcome's Create button cannot each present
+            // their own panel/sheet for the same request.
             .onChange(of: environment.menuRequest) { _, request in
-                guard request == .openDatabase else { return }
-                environment.menuRequest = nil
-                guard let url = DatabaseFilePicker.chooseExistingDatabase() else { return }
-                environment.openRouter.requestOpen(url)
+                switch request {
+                case .openDatabase:
+                    environment.menuRequest = nil
+                    guard let url = DatabaseFilePicker.chooseExistingDatabase() else { return }
+                    environment.openRouter.requestOpen(url)
+                case .newDatabase:
+                    environment.menuRequest = nil
+                    isPresentingCreateSheet = true
+                default:
+                    break
+                }
+            }
+            .sheet(isPresented: $isPresentingCreateSheet) {
+                CreateDatabaseSheet(environment: environment)
             }
             .confirmationDialog(
                 "Save changes before closing this database?",
