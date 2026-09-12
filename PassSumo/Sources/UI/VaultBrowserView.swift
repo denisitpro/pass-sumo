@@ -123,7 +123,14 @@ struct VaultBrowserView: View {
     /// `GeneratorSheet(generator:, clipboard:)` with no `recipe:`, that assertion fails instead of
     /// the bug shipping invisibly again.
     func makeGeneratorSheet() -> GeneratorSheet {
-        GeneratorSheet(generator: generator, recipe: settings.generatorRecipe, clipboard: clipboard)
+        GeneratorSheet(
+            generator: generator,
+            recipe: settings.generatorRecipe,
+            clipboard: clipboard,
+            // Issue #129: a tweak in this sheet is the saved default, not a one-off. The
+            // callback is the only write — GeneratorSheet never touches UserDefaults itself.
+            onRecipeChanged: { settings.generatorRecipe = $0 }
+        )
     }
 
     /// What `EntryEditView` is editing right now: a brand-new entry, or an existing one opened for
@@ -467,7 +474,8 @@ struct VaultBrowserView: View {
                     // when `VaultBrowserView` itself was constructed (issue #106).
                     generatorRecipe: settings.generatorRecipe,
                     onSave: { saved in selectedEntryID = saved.id },
-                    onDismiss: { editingEntry = nil }
+                    onDismiss: { editingEntry = nil },
+                    onRecipeChanged: { settings.generatorRecipe = $0 }
                 )
             }
             // A folder's icon commits straight through the store, unlike an entry's, which the

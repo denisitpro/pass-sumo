@@ -811,6 +811,13 @@ final class BrowserLogicTests: XCTestCase {
             settings: settings
         )
 
-        XCTAssertEqual(browser.makeGeneratorSheet().openingRecipe, recipe)
+        let sheet = browser.makeGeneratorSheet()
+        XCTAssertEqual(sheet.openingRecipe, recipe)
+        XCTAssertNotNil(sheet.onRecipeChanged, "toolbar generator must persist recipe tweaks (#129)")
+
+        var updated = recipe
+        updated.length = 40
+        sheet.onRecipeChanged?(updated)
+        XCTAssertEqual(settings.generatorRecipe.length, 40)
     }
 }
