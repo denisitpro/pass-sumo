@@ -155,6 +155,34 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         )
     }
 
+    /// A Button action can capture a View copy whose `@State identifier` is still nil. Retrieve
+    /// must then resolve, not `return` (issue #138: click did nothing).
+    func testIdentifierForRetrievePrefersTheCachedValue() {
+        let cached = VaultKeyIdentifier("cached")
+        let resolved = BiometricUnlockRecovery.identifierForRetrieve(cached: cached) {
+            VaultKeyIdentifier("fresh")
+        }
+        XCTAssertEqual(resolved, cached)
+    }
+
+    func testIdentifierForRetrieveResolvesWhenTheCacheIsNil() {
+        let fresh = VaultKeyIdentifier("fresh")
+        XCTAssertEqual(
+            BiometricUnlockRecovery.identifierForRetrieve(cached: nil) { fresh },
+            fresh
+        )
+    }
+
+    func testIdentifierForRetrieveIsNilOnlyWhenResolutionAlsoFails() {
+        XCTAssertNil(BiometricUnlockRecovery.identifierForRetrieve(cached: nil, resolving: { nil }))
+    }
+
+    func testAMissingIdentifierProducesAVisibleFailureNotASilentReturn() {
+        let message = BiometricUnlockRecovery.visibleMessageWhenIdentifierMissing()
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertTrue(message.lowercased().contains("master password"))
+    }
+
     /// Every non-cancel error still surfaces its existing sentence — silence is only for
     /// `.userCancelled`. Enrollment-clearing stays independent of that visibility decision.
     func testEveryNonCancelErrorRemainsVisible() {
@@ -250,11 +278,28 @@ final class SecurityBiometricUnlockTests: XCTestCase {
     /// `hasSecret` (issue #138) sets `kSecUseAuthenticationUIFail` and treats
     /// `errSecInteractionNotAllowed` as "the item exists". It must not also pass an
     /// `LAContext` — that combination is `errSecParam`, and `isEnabled` then reports false
-    /// while the keychain item is still there. Not exercised against the real keychain here.
-    ///
-    /// The real store is therefore verified by hand on a machine with Touch ID, and the protocol
-    /// boundary exists so that everything above it can be tested without one. This method is a
-    /// skip rather than a comment so the decision shows up in the test report instead of being
+    /// while the keychain item is still there. The query itself is asserted below without
+    /// touching the real keychain.
+
+    /// Existence must never present a sheet. The flags that caused the original #138 prompt
+    /// (no UI-fail, or UI-fail combined with an `LAContext`) must not come back.
+    func testHasSecretQueryRefusesUIAndDoesNotAttachLAContext() {
+        let query = KeychainSecretStore().existenceQuery(for: vaultA)
+        XCTAssertEqual(
+            query[kSecUseAuthenticationUI as String] as? String,
+            kSecUseAuthenticationUIFail as String
+        )
+        XCTAssertNil(
+            query[kSecUseAuthenticationContext as String],
+            "LAContext + kSecUseAuthenticationUIFail is errSecParam and hid the button (#138)"
+        )
+        XCTAssertNil(query[kSecReturnData as String], "asking for data is what prompts")
+        XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
+        XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitOne as String)
+    }
+
+    /// The real store is verified by hand on a machine with Touch ID. This method is a skip
+    /// rather than a comment so the decision shows up in the test report instead of being
     /// invisible.
     func testRealKeychainIsNotExercisedByThisSuite() throws {
         throw XCTSkip(

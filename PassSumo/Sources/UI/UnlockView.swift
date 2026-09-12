@@ -23,6 +23,24 @@ enum BiometricUnlockRecovery {
     static func visibleMessage(after error: BiometricUnlockError) -> String? {
         error == .userCancelled ? nil : error.userMessage
     }
+
+    /// Identifier a Touch ID retrieve should use.
+    ///
+    /// Prefers the already-resolved cache. If that is still `nil` — a Button action can capture a
+    /// View copy whose `@State identifier` has the initial value — resolve now rather than
+    /// `guard let identifier else { return }` (issue #138: click was a silent no-op).
+    static func identifierForRetrieve(
+        cached: VaultKeyIdentifier?,
+        resolving: () -> VaultKeyIdentifier?
+    ) -> VaultKeyIdentifier? {
+        cached ?? resolving()
+    }
+
+    /// Shown when even a fresh resolve cannot name this database. Silence here is the same click
+    /// no-op as a missing cache.
+    static func visibleMessageWhenIdentifierMissing() -> String {
+        "Couldn't identify this database for Touch ID. Unlock with your master password instead."
+    }
 }
 
 /// Unlocks one database at `url`. The single screen for `VaultStore.state == .locked(url)`,
@@ -210,7 +228,10 @@ struct UnlockView: View {
 
                 if canOfferBiometrics {
                     Button {
-                        Task { await unlockWithBiometrics() }
+                        // Read `@State` in the Button action (the live view), not later inside an
+                        // unstructured Task that may hold a View copy whose identifier is still nil.
+                        let cached = identifier
+                        Task { await unlockWithBiometrics(using: cached) }
                     } label: {
                         Image(systemName: "touchid")
                     }
@@ -320,7 +341,8 @@ struct UnlockView: View {
         // active. It cannot double-prompt — the first call that is allowed to prompt claims the
         // attempt, and every later call is refused on that.
         .onChange(of: appearsActive) {
-            Task { await attemptAutomaticBiometricUnlockIfAllowed(identifier: identifier) }
+            let cached = identifier
+            Task { await attemptAutomaticBiometricUnlockIfAllowed(identifier: cached) }
         }
     }
 
@@ -332,6 +354,14 @@ struct UnlockView: View {
     /// they are unit-tested — this Mac has no Touch ID sensor, so a rule expressed inline here
     /// would be a rule nothing on this machine could check.
     private func attemptAutomaticBiometricUnlockIfAllowed(identifier: VaultKeyIdentifier?) async {
+        // One turn of the main queue so SwiftUI can paint this screen before `retrieve`
+        // presents a system sheet. Without it, Lock raises Touch ID over a still-visible
+        // vault (issue #138). Both `.task` and `onChange(of: appearsActive)` come through
+        // here, so a first-activation race cannot skip the hop.
+        await waitUntilUnlockScreenIsOnScreen()
+        // The vault UI must already be gone: if state is not this lock, do not present a sheet
+        // over whatever is still on screen.
+        guard case .locked(let lockedURL) = environment.store.state, lockedURL == url else { return }
         guard let identifier else { return }
         let conditions = AutomaticBiometricUnlockPolicy.Conditions(
             isEnrolledForThisVault: isEnrolled,
@@ -345,7 +375,17 @@ struct UnlockView: View {
         // success, a cancel, a wrong finger, an invalidated keychain item and its recovery — is
         // already handled there, and the button stays on screen as the way back in, which is what
         // makes a cancelled automatic prompt a dead end rather than a loop.
-        await unlockWithBiometrics()
+        await unlockWithBiometrics(using: identifier)
+    }
+
+    /// After the current main-queue turn, so Core Animation can commit `UnlockView` before a
+    /// biometric sheet. One hop is the whole delay — not a timer, not a second automatic retrieve.
+    private func waitUntilUnlockScreenIsOnScreen() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
     }
 
     private func submit() async {
@@ -397,11 +437,19 @@ struct UnlockView: View {
         }
     }
 
-    private func unlockWithBiometrics() async {
-        guard let identifier else { return }
+    private func unlockWithBiometrics(using cachedIdentifier: VaultKeyIdentifier?) async {
+        let resolved = BiometricUnlockRecovery.identifierForRetrieve(cached: cachedIdentifier ?? identifier) {
+            environment.biometricsIdentifier(for: url)
+        }
+        guard let resolved else {
+            biometricFailure = BiometricUnlockRecovery.visibleMessageWhenIdentifierMissing()
+            passwordFieldFocused = true
+            return
+        }
+        identifier = resolved
         biometricFailure = nil
         do {
-            let secret = try environment.biometrics.unlock(identifier, reason: "Unlock \(url.lastPathComponent)")
+            let secret = try environment.biometrics.unlock(resolved, reason: "Unlock \(url.lastPathComponent)")
             if let revealed = secret.revealedString() {
                 await environment.store.open(url: url, credentials: VaultCredentials(password: revealed, keyFile: nil))
             } else {
@@ -417,7 +465,7 @@ struct UnlockView: View {
             // keep `isEnabled` (hence `canOfferBiometrics`/`canOfferEnrollment`) reporting "already
             // enrolled" forever.
             if BiometricUnlockRecovery.shouldClearEnrollment(after: error) {
-                try? environment.biometrics.disable(for: identifier)
+                try? environment.biometrics.disable(for: resolved)
                 environment.forgetBiometricsEnrollment(for: url)
             }
         } catch {
