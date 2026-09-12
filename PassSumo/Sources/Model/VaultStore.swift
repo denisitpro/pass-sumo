@@ -504,6 +504,17 @@ final class VaultStore {
         return true
     }
 
+    /// Files an entry under `groupID` (`nil` = the vault's top level). The recycle bin is a
+    /// recycle, not a silent group change — see `Vault.moveEntry`.
+    @discardableResult
+    func moveEntry(_ entryID: UUID, toGroup groupID: UUID?) -> Bool {
+        guard case .unlocked(var vault) = state,
+              vault.moveEntry(entryID, toGroup: groupID)
+        else { return false }
+        commit(vault)
+        return true
+    }
+
     // MARK: - Deletion
 
     /// What deleting a given entry would actually DO, so the UI can decide whether to ask first.

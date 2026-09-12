@@ -85,6 +85,10 @@ final class KDBXCodecTests: XCTestCase {
 
         let prod = try XCTUnwrap(vault.entries.first { $0.title == "Prod" })
         XCTAssertEqual(prod.groupID, servers.id, "entries carry the id of the group holding them")
+        // Issue #143: a parent folder's subtree must include the nested entry, not just
+        // direct members. This is a real KeePassXC-written file, not a hand-built Vault.
+        XCTAssertTrue(vault.entries(inSubtreeOf: work.id).contains { $0.id == prod.id })
+        XCTAssertGreaterThanOrEqual(vault.entries(inSubtreeOf: work.id).count, vault.entries(inSubtreeOf: servers.id).count)
     }
 
     /// KeePassXC's own output — a KDBX 3.1 file, since `keepassxc-cli` cannot produce anything else.

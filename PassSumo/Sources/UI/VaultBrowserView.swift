@@ -266,7 +266,8 @@ struct VaultBrowserView: View {
                 vault: vault,
                 selection: $selectedGroup,
                 onEmptyRecycleBin: { isConfirmingEmptyRecycleBin = true },
-                onGroupCommand: { handle($0) }
+                onGroupCommand: { handle($0) },
+                onDropEntry: handleEntryDrop
             )
             .accessibilityIdentifier("browser.sidebar")
             // Same rule as the inspector's `.inspectorColumnWidth` below (issue #86): without a
@@ -769,6 +770,27 @@ struct VaultBrowserView: View {
         case .delete(let id):
             requestDeleteGroup(id)
         }
+    }
+
+    /// Drop of a list row onto a sidebar folder (issue #142). Always goes through `VaultStore` —
+    /// a view that wrote `groupID` itself would skip the recycle-bin rule and the dirty flag.
+    ///
+    /// Returns `true` when the payload names a real entry, even if the entry was already in that
+    /// folder: a bounce-back on a legal destination reads as a broken drop, not as a no-op.
+    private func handleEntryDrop(_ entryID: UUID, _ destination: GroupSelection) -> Bool {
+        guard vault.entries.contains(where: { $0.id == entryID }) else { return false }
+        _ = store.moveEntry(entryID, toGroup: destination.containingGroupID)
+        // Same "the row left the visible list" cleanup as `requestDelete`: moving out of the
+        // current filter (or into the bin while All Entries is selected) must not leave the
+        // detail column pointing at an entry the list no longer shows. `entries.count` does
+        // not change, so the existing onChange cannot catch this.
+        let stillVisible = EntryListFilter
+            .apply(to: vault, selection: groupSelection, query: searchText)
+            .contains { $0.id == entryID }
+        if !stillVisible, selectedEntryID == entryID {
+            selectedEntryID = nil
+        }
+        return true
     }
 
     private func commitGroupName(_ prompt: GroupNamePrompt) {

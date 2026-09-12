@@ -295,6 +295,84 @@ final class BrowserLogicTests: XCTestCase {
         )
     }
 
+    /// The screenshot that kept issue #143 open after #145: parent `group1` showed 0 while nested
+    /// `group2` showed 1. Both walks must agree, the parent badge is 1, and selecting the parent
+    /// lists that same entry — asserted at the filter layer because that is what the list column
+    /// actually renders.
+    func testParentFolderCountEqualsLiveDescendantEntries() {
+        let parent = makeGroup("00000000-0000-0000-0000-0000000000b1", parent: nil, name: "group1")
+        let child = makeGroup(
+            "00000000-0000-0000-0000-0000000000b2",
+            parent: "00000000-0000-0000-0000-0000000000b1",
+            name: "group2"
+        )
+        let vault = Vault(
+            name: "Test",
+            groups: [parent, child],
+            entries: [
+                makeEntry(
+                    "00000000-0000-0000-0000-0000000000b3",
+                    group: "00000000-0000-0000-0000-0000000000b2",
+                    title: "Nested"
+                ),
+            ]
+        )
+
+        XCTAssertEqual(Set(vault.subtreeGroupIDs(of: parent.id)), [parent.id, child.id])
+        XCTAssertEqual(Set(vault.groupSubtreeIDs(of: parent.id)), [parent.id, child.id])
+        XCTAssertEqual(vault.entries(inSubtreeOf: parent.id).map(\.title), ["Nested"])
+        XCTAssertEqual(vault.entries(inSubtreeOf: child.id).map(\.title), ["Nested"])
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, selection: .group(parent.id), query: "").map(\.title),
+            ["Nested"]
+        )
+        XCTAssertEqual(
+            vault.entries(inSubtreeOf: parent.id).count,
+            EntryListFilter.apply(to: vault, selection: .group(parent.id), query: "").count,
+            "the badge and the list it labels must never disagree"
+        )
+    }
+
+    /// A live parent must not count recycled descendants even if the bin has been re-homed under
+    /// it. Selecting the bin itself still lists them.
+    func testParentFolderSubtreeCountExcludesTheRecycleBin() throws {
+        let parent = makeGroup("00000000-0000-0000-0000-0000000000c1", parent: nil, name: "group1")
+        let child = makeGroup(
+            "00000000-0000-0000-0000-0000000000c2",
+            parent: "00000000-0000-0000-0000-0000000000c1",
+            name: "group2"
+        )
+        var vault = Vault(
+            name: "Test",
+            groups: [parent, child],
+            entries: [
+                makeEntry(
+                    "00000000-0000-0000-0000-0000000000c3",
+                    group: "00000000-0000-0000-0000-0000000000c2",
+                    title: "LiveNested"
+                ),
+                makeEntry(
+                    "00000000-0000-0000-0000-0000000000c4",
+                    group: "00000000-0000-0000-0000-0000000000c1",
+                    title: "Doomed"
+                ),
+            ]
+        )
+        XCTAssertTrue(vault.moveToRecycleBin(entryID: vault.entries[1].id))
+        let binID = try XCTUnwrap(vault.recycleBin.groupID)
+        XCTAssertTrue(vault.moveGroup(binID, under: parent.id))
+
+        XCTAssertEqual(vault.entries(inSubtreeOf: parent.id).map(\.title), ["LiveNested"])
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, selection: .group(parent.id), query: "").map(\.title),
+            ["LiveNested"]
+        )
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, selection: .group(binID), query: "").map(\.title),
+            ["Doomed"]
+        )
+    }
+
     func testEntryListFilterCombinesGroupAndSearchAsAnIntersection() {
         let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000030")!
         let otherGroupID = UUID(uuidString: "00000000-0000-0000-0000-000000000031")!

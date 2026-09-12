@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// One node of the group outline built from `Vault.groups`' flat `parentID` list. `Vault` stores
 /// groups flat, not as a nested tree (see `VaultGroup`'s doc comment in `Domain.swift`) precisely
@@ -141,6 +142,18 @@ enum GroupSelection: Hashable {
     }
 }
 
+/// One entry dragged from the list onto a sidebar folder (issue #142). Intra-app only: a
+/// private UTI so a drop of arbitrary text cannot be mistaken for an entry id.
+struct DraggedEntryID: Codable, Hashable, Transferable {
+    let id: UUID
+
+    static let contentType = UTType(exportedAs: "app.passsumo.entry-id")
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: contentType)
+    }
+}
+
 /// The left column: "All Entries" plus the group outline, each row showing its own entry count.
 ///
 /// The selection is a `GroupSelection?` rather than a `UUID?` — see that type's doc comment for
@@ -157,6 +170,11 @@ struct GroupSidebar: View {
     /// `onEmptyRecycleBin` is one: deleting a folder takes its entries with it, and the view that
     /// can destroy something must not also be the view that decides to.
     var onGroupCommand: (GroupCommand) -> Void
+    /// Drop of a list row onto this sidebar. Returns whether the drop was accepted, including a
+    /// no-op onto the folder the entry already sits in — a bounce-back would read as "refused"
+    /// for a destination that is legal. The sidebar does not hold a `VaultStore`; the owner
+    /// (`VaultBrowserView`) is what actually moves the entry.
+    var onDropEntry: (UUID, GroupSelection) -> Bool = { _, _ in false }
 
     private var nodes: [GroupTreeNode] {
         GroupTreeBuilder.build(from: vault.groups)
@@ -185,13 +203,11 @@ struct GroupSidebar: View {
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("sidebar.allEntries")
-            // `List(selection:)` + `OutlineGroup` on macOS does not write this binding on a
-            // click (issue #129). Programmatic `selection = .group(created.id)` already
-            // worked, which is why a newly created folder appeared selected while a mouse
-            // click on All Entries / another group did nothing. Write it ourselves.
-            // `.onTapGesture` is left-click only, so it does not steal the context menu.
-            // `nil` is "deselected", not All Entries (issue #85).
-            .onTapGesture { selection = .allEntries }
+            .modifier(SidebarRowInteraction(
+                onSelect: { selection = .allEntries },
+                dropDestination: .allEntries,
+                onDropEntry: onDropEntry
+            ))
             .contextMenu {
                 Button("New Group…") { onGroupCommand(.create(parentID: nil)) }
                     .accessibilityIdentifier("sidebar.allEntries.newGroup")
@@ -276,10 +292,11 @@ struct GroupSidebar: View {
         .accessibilityIdentifier(
             isRecycleBin ? "sidebar.recycleBin" : "sidebar.group.\(node.group.id)"
         )
-        // Same reason as All Entries above: the List does not consume the click, so
-        // the binding is written here. Menu stays after the tap so a right-click still
-        // reaches `.contextMenu` rather than being eaten as a tap.
-        .onTapGesture { selection = .group(node.group.id) }
+        .modifier(SidebarRowInteraction(
+            onSelect: { selection = .group(node.group.id) },
+            dropDestination: .group(node.group.id),
+            onDropEntry: onDropEntry
+        ))
         .contextMenu {
             if isRecycleBin {
                 Button("Empty Recycle Bin", role: .destructive, action: onEmptyRecycleBin)
@@ -339,6 +356,30 @@ struct GroupSidebar: View {
             }
         }
         .disabled(destinations.isEmpty && !canGoToTopLevel)
+    }
+}
+
+/// Click-to-select and drop-target behaviour shared by All Entries and every folder row.
+///
+/// `List(selection:)` + `OutlineGroup` on macOS does not write the selection binding on a
+/// click (issue #129). The first workaround was `.onTapGesture`, which is left-click only so it
+/// does not steal the context menu — but nested OutlineGroup rows swallow an exclusive tap,
+/// which is why clicking a parent folder often did nothing after #145 (issue #143). A
+/// simultaneous tap is the same fix the entry list needed (issue #134): the List keeps its
+/// recogniser, the binding is still written, and a right-click still reaches `.contextMenu`.
+private struct SidebarRowInteraction: ViewModifier {
+    let onSelect: () -> Void
+    let dropDestination: GroupSelection
+    let onDropEntry: (UUID, GroupSelection) -> Bool
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded(onSelect))
+            .dropDestination(for: DraggedEntryID.self) { items, _ in
+                guard let id = items.first?.id else { return false }
+                return onDropEntry(id, dropDestination)
+            }
     }
 }
 

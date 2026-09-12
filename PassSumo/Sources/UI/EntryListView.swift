@@ -297,6 +297,7 @@ struct EntryListView: View {
         .simultaneousGesture(
             TapGesture(count: 2).onEnded { onOpenEntry(entry.id) }
         )
+        .draggable(DraggedEntryID(id: entry.id))
         .contextMenu { contextMenuItems(for: entry) }
     }
 
