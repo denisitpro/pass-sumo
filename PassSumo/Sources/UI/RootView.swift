@@ -22,6 +22,22 @@ struct RootView: View {
             // Unlock) and `surface` inside the browser's panes, which paint their own. Painting
             // the canvas once here is what stops the system window background showing through.
             .background(authWindowBackground)
+            // Welcome / Unlock / Unlocking have no status bar. Pin the same compact stamp the
+            // browser puts in `StatusBar`'s trailing end (issue #153) so a leftover build is
+            // obvious before a vault is open too. Hidden once unlocked — that screen already
+            // has the bar. `.allowsHitTesting(false)` so it cannot steal the card's buttons.
+            .overlay(alignment: .bottomTrailing) {
+                if case .unlocked = environment.store.state {
+                    EmptyView()
+                } else {
+                    Text(AppVersionInfo.current().shortLabel)
+                        .font(Typography.monoCaption2)
+                        .foregroundStyle(Palette.textSecondary)
+                        .padding(Spacing.s5)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("window.build")
+                }
+            }
             // The app-wide accent, so the controls this design pass does not hand-draw — a
             // `Slider`'s fill, a `Toggle`'s knob, a `ProgressView`'s bar, `List`'s focus ring —
             // follow palette C instead of the system blue.
