@@ -30,6 +30,8 @@ struct FieldRow: View {
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
                 .frame(width: Metrics.fieldLabelWidth, alignment: .leading)
+                // The combined element on `valueContent` already carries this label.
+                .accessibilityHidden(true)
 
             valueContent
                 .frame(maxWidth: .infinity, alignment: .leading)

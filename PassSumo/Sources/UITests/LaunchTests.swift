@@ -8,7 +8,9 @@ final class LaunchTests: XCTestCase {
     func testLaunchShowsSidebar() {
         let app = XCUIApplication()
         app.launchArguments += ["-ui-testing", "1"]
+        if app.state != .notRunning { app.terminate() }
         app.launch()
+        app.activate()
         addTeardownBlock { app.terminate() }
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
@@ -44,5 +46,15 @@ final class LaunchTests: XCTestCase {
 
         XCTAssertTrue(app.byID("list.entry.\(SampleVault.gmailPersonalID)").waitForExistence(timeout: 5))
         XCTAssertTrue(app.byID("list.entry.\(SampleVault.payPalID)").waitForExistence(timeout: 5))
+    }
+
+    /// Lock sat in the overflow chevron once the search field was centred
+    /// (issue #129). `.primaryAction` is the trailing slot that does not overflow;
+    /// hittable is the proof, not mere existence.
+    func testLockButtonIsHittable() {
+        let app = launchUITestingApp(self)
+        let lock = app.byID("browser.lock")
+        XCTAssertTrue(lock.waitForExistence(timeout: 5))
+        XCTAssertTrue(lock.isHittable, "Lock overflowed behind the toolbar chevron")
     }
 }

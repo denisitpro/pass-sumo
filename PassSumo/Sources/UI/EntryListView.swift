@@ -202,12 +202,6 @@ struct EntryListView: View {
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
-                            // Same reason as `GroupSidebar` (issue #129): a macOS `List` with a
-                            // custom-drawn row does not write `selection` on a pointer click.
-                            // Keyboard and the `Optional` tag still work; the pointer path has to
-                            // set the binding itself. `.onTapGesture` is left-click only, so it
-                            // does not steal the context menu. Issue #134.
-                            .onTapGesture { selectedEntryID = entry.id }
                     }
                 }
                 .listStyle(.plain)
@@ -286,11 +280,20 @@ struct EntryListView: View {
         .entryRowSurface(isSelected: isSelected, showsSeparator: !isLast)
         // The whole row must be hit-testable, not just its text/icon content (an `HStack`'s
         // `Spacer()` is otherwise a hole in the gesture's hit area). Single-click selection is
-        // owned by the `ForEach` row's `.onTapGesture` (issue #134), matching the sidebar; this
-        // double-tap stays `.simultaneousGesture` so it does not wait on, or replace, that
-        // single tap. A plain `.onTapGesture(count: 2)` never fired against a real double-click
-        // in this List — verified when issue #48 landed.
+        // a simultaneous tap because `List(selection:)` owns a click recogniser that does
+        // not write the `UUID?` binding on a custom-drawn row (issue #134). High-priority
+        // stole first-responder from the List, so Return never reached `.onKeyPress`.
+        // A plain `.onTapGesture(count: 2)` never fired against a real double-click in
+        // this List — verified when issue #48 landed.
         .contentShape(Rectangle())
+        .focusable()
+        .onKeyPress(.return) {
+            onOpenEntry(entry.id)
+            return .handled
+        }
+        // Simultaneous, not high-priority: a high-priority tap wrote selection but stole
+        // first-responder from `List`, so Return never reached `.onKeyPress(.return)`.
+        .simultaneousGesture(TapGesture().onEnded { selectedEntryID = entry.id })
         .simultaneousGesture(
             TapGesture(count: 2).onEnded { onOpenEntry(entry.id) }
         )

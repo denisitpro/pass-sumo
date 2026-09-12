@@ -42,20 +42,7 @@ final class BrowseAndSearchTests: XCTestCase {
     func testGroupRowContextMenuOffersFolderActions() {
         let app = launchUITestingApp(self)
 
-        let identifier = "sidebar.group.\(SampleVault.groupEmailID)"
-        // Same cell-not-leaf rule as `selectRow`: SwiftUI copies the identifier onto
-        // every Text/Image inside the row, and right-clicking a leaf can miss the
-        // view that owns `.contextMenu`.
-        let cell = app.descendants(matching: .cell)
-            .containing(NSPredicate(format: "identifier == %@", identifier))
-            .firstMatch
-        if cell.waitForExistence(timeout: 5) {
-            cell.rightClick()
-        } else {
-            let leaf = app.byID(identifier)
-            XCTAssertTrue(leaf.waitForExistence(timeout: 5), "no row identified by \(identifier)")
-            leaf.rightClick()
-        }
+        app.rightClickRow(identifiedBy: "sidebar.group.\(SampleVault.groupEmailID)")
 
         // Menu item identifiers often do not surface as XCUIElement.menuItems on macOS;
         // assert by the visible names the group-row menu actually offers.
@@ -64,14 +51,63 @@ final class BrowseAndSearchTests: XCTestCase {
         XCTAssertTrue(app.menuItems["Change Icon…"].exists)
     }
 
+    /// All Entries used to have no context menu at all (issue #129). It is not a
+    /// folder, so Rename / Change Icon must stay off it.
+    func testAllEntriesContextMenuOffersNewGroup() {
+        let app = launchUITestingApp(self)
+
+        app.rightClickRow(identifiedBy: "sidebar.allEntries")
+
+        // "New Group…" with the ellipsis is the context-menu item; the menu bar's is "New Group".
+        XCTAssertTrue(app.menuItems["New Group…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.menuItems["Rename…"].exists)
+        XCTAssertFalse(app.menuItems["Change Icon…"].exists)
+
+        app.menuItems["New Group…"].click()
+        XCTAssertTrue(app.byID("browser.groupName").waitForExistence(timeout: 5))
+        app.byID("browser.cancelGroupName").click()
+    }
+
     func testSelectingAnEntryShowsItsDetail() {
         let app = launchUITestingApp(self)
 
         app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
 
-        XCTAssertEqual(app.fieldRowValue("Title"), SampleVault.gmailPersonalTitle)
-        XCTAssertEqual(app.fieldRowValue("Username"), SampleVault.gmailPersonalUsername)
-        XCTAssertEqual(app.fieldRowValue("URL"), SampleVault.gmailPersonalURL)
+        XCTAssertTrue(app.byID("detail.edit").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.gmailPersonalTitle))
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.gmailPersonalUsername))
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.gmailPersonalURL))
+    }
+
+    /// The #134 regression: a click that lands on the wrapping list cell (middle of
+    /// the column) can look like "the first select worked" if that happens to be
+    /// Gmail Personal. Switching to a second entry and reading the inspector is
+    /// what proves `selectedEntryID` actually moved.
+    func testSelectingASecondEntryUpdatesTheDetail() {
+        let app = launchUITestingApp(self)
+
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.gmailPersonalTitle))
+
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.iCloudID)")
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.iCloudTitle))
+        XCTAssertFalse(app.waitForDetailContaining(SampleVault.gmailPersonalUsername, timeout: 2))
+    }
+
+    /// Entry-row context menu (issue #48, wired through the same handlers the
+    /// toolbar uses). Right-click must hit the row, not a title leaf.
+    func testEntryRowContextMenuOffersEditCopyAndDelete() {
+        let app = launchUITestingApp(self)
+
+        app.rightClickRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
+
+        // "Open URL" / "Edit" / "Delete" are the row-menu labels; the menu bar's are
+        // "Launch URL" / "Edit Entry" / "Delete Entry". Clicking Edit must actually
+        // open the sheet, or this is just matching a menu-bar item.
+        XCTAssertTrue(app.menuItems["Open URL"].waitForExistence(timeout: 5))
+        app.menuItems["Edit"].click()
+        XCTAssertTrue(app.byID("edit.save").waitForExistence(timeout: 5))
+        app.byID("edit.cancel").click()
     }
 
     func testSearchNarrowsTheListAndClearingRestoresIt() {

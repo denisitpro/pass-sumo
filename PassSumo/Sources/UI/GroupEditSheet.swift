@@ -73,6 +73,7 @@ struct GroupEditSheet: View {
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.tokenQuiet)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("browser.cancelGroupName")
                 Spacer()
                 Button("Create", action: confirmIfAllowed)
                     .buttonStyle(.tokenPrimary)

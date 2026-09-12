@@ -80,18 +80,17 @@ extension XCUIApplication {
             .firstMatch
     }
 
-    /// Clicks the list **row**, not an ancestor that merely contains it.
+    /// The list/sidebar **row** for `identifier`, not an ancestor that merely contains it.
     ///
     /// SwiftUI copies `.accessibilityIdentifier` onto every `Text`/`Image` inside a row (see
     /// `byID`). A parent cell wrapping the whole entry list therefore also "contains"
     /// `list.entry.<uuid>`, and `.containing(identifier).firstMatch` is that ancestor — clicking
-    /// it hits the middle of the column, not the row (issue #134). Used for `list.entry.*` and
-    /// `sidebar.group.*` / `sidebar.allEntries`. Prefers a cell that itself carries the
-    /// identifier; otherwise the leaf. The row's own `.onTapGesture` is what actually writes
-    /// selection on a custom-drawn row (same as the sidebar, issue #129), so a leaf click is
-    /// enough once that gesture is in place. Do not walk `allElementsBoundByIndex` to pick the
-    /// smallest containing cell — that query is how XCUITest hangs this suite.
-    func selectRow(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// it hits the middle of the column, not the row (issue #134). Prefers a cell that itself
+    /// carries the identifier; then a containing cell no taller than two entry rows (34pt × 2);
+    /// otherwise the leaf. The row's own `.onTapGesture` is what writes selection on a
+    /// custom-drawn row (same as the sidebar, issue #129). Do not walk `allElementsBoundByIndex`
+    /// — that query is how XCUITest hangs this suite.
+    func rowElement(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let idPredicate = NSPredicate(format: "identifier == %@", identifier)
         let leaf = byID(identifier)
         XCTAssertTrue(
@@ -102,11 +101,41 @@ extension XCUIApplication {
 
         let identifiedCell = descendants(matching: .cell).matching(idPredicate).firstMatch
         if identifiedCell.exists {
-            identifiedCell.click()
-            return
+            return identifiedCell
         }
 
-        leaf.click()
+        let containing = descendants(matching: .cell).containing(idPredicate).firstMatch
+        // Taller than two 34pt entry rows is a wrapping ancestor (the whole column), not the row.
+        if containing.exists, containing.frame.height > 0, containing.frame.height <= 80 {
+            return containing
+        }
+        return leaf
+    }
+
+    func selectRow(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+        clickLeadingEdge(of: rowElement(identifiedBy: identifier, file: file, line: line))
+    }
+
+    /// Right-clicks the row, not a leaf whose frame can miss the view that owns `.contextMenu`.
+    func rightClickRow(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+        rightClickLeadingEdge(of: rowElement(identifiedBy: identifier, file: file, line: line))
+    }
+
+    /// `.inspector` sits on top of the trailing end of the list column, so the AX cell for an
+    /// entry row is as wide as the column (measured 1190pt) and a centre-click lands in the
+    /// inspector, not on the row. Click ~40pt from the leading edge — the icon/title — instead.
+    private func clickLeadingEdge(of element: XCUIElement) {
+        leadingEdgeCoordinate(of: element).click()
+    }
+
+    private func rightClickLeadingEdge(of element: XCUIElement) {
+        leadingEdgeCoordinate(of: element).rightClick()
+    }
+
+    private func leadingEdgeCoordinate(of element: XCUIElement) -> XCUICoordinate {
+        let width = element.frame.width
+        let dx = width > 0 ? min(40 / width, 0.2) : 0.1
+        return element.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.5))
     }
 
     /// True once some element with accessibility LABEL *or* VALUE `text` exists anywhere in the
@@ -167,12 +196,12 @@ extension XCUIApplication {
     /// buttons kept outside it — this is how that combined element's value is read without
     /// depending on screen text or position. `nil` if no such row exists (wrong screen, typo'd
     /// label) or it hasn't appeared within `timeout`.
-    func fieldRowValue(_ label: String, timeout: TimeInterval = 5) -> String? {
-        let element = descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", label))
-            .firstMatch
-        guard element.waitForExistence(timeout: timeout) else { return nil }
-        return element.value as? String
+    /// True once the inspector (`browser.detail`) shows `text`. SwiftUI on macOS does not
+    /// expose `FieldRow`'s `.accessibilityValue` through `XCUIElement.value` (it comes back
+    /// empty), so detail assertions read the inspector's own descendants — the header title
+    /// and the field `Text`s — the same way `waitForElement(identifiedBy:containing:)` does.
+    func waitForDetailContaining(_ text: String, timeout: TimeInterval = 5) -> Bool {
+        waitForElement(identifiedBy: "browser.detail", containing: text, timeout: timeout)
     }
 }
 
@@ -231,7 +260,12 @@ func launchUITestingApp(
     // (min 400pt) and overflows the search field into the toolbar menu, which is how
     // `typeText` timed out synthesizing a click on issue #6's first real run.
     app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+    // A leftover `-ui-testing` process from a killed run sits in `.runningBackground`
+    // and makes `launch()` fail with "Failed to activate application". Terminate first,
+    // then activate after launch so the new window is front even if Terminal is.
+    if app.state != .notRunning { app.terminate() }
     app.launch()
+    app.activate()
     testCase.addTeardownBlock { app.terminate() }
 
     XCTAssertTrue(
