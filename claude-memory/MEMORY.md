@@ -12,4 +12,5 @@
 - [Shared checkout git state](pass-sumo-shared-checkout-git-state.md) — HEAD moves under you here; use `git branch --contains`, and never relay a subagent's git claim as your own.
 - [No real personal data in fixtures](no-real-personal-data-in-fixtures.md) — never seed test bases, previews or mockups with the owner's real name or emails; it leaks into screenshots.
 - [GitHub has two advisory databases](github-has-two-advisory-databases.md) — the global DB lags repo-level advisories and rates them differently; a 404 there is not proof of nonexistence.
-- [A failed e2e wedges the test host](failed-e2e-wedges-the-test-host.md) — `make e2e` cannot start on the mini, and trying it stops every session from running any test until a human resets the host.
+- [A failed e2e wedges the test host](failed-e2e-wedges-the-test-host.md) — a *failed start* (no Developer Tools TCC, or a wedged `testmanagerd`) stops every session from running any test until a human resets the host. TCC is granted as of 2026-09-12; the suite now actually runs.
+- [e2e selectRow must click the row cell](e2e-selectrow-must-click-the-row-cell.md) — `.containing(identifier).firstMatch` is an ancestor wrapping the whole list; custom-drawn entry rows also need their own `.onTapGesture` (issue #134).

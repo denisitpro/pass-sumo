@@ -5,14 +5,18 @@ metadata:
   type: project
 ---
 
-Two facts about this Mac mini (`gamma@m4q1`), established 2026-09-10.
+Two facts about this Mac mini (`gamma@m4q1`), established 2026-09-10. Point 1 is **partially
+stale as of 2026-09-12**: the owner granted Developer Tools TCC and `make e2e` now actually
+runs (and fails on real assertions — see [[e2e-selectrow-must-click-the-row-cell]]). The wedge
+in point 2 still applies if a run cannot *start*.
 
-**1. `make e2e` cannot start here at all.** It fails with `The test runner failed to initialize for UI
-testing. (Underlying Error: Timed out while enabling automation mode.)`, and `com.apple.TCC` logs
-`Service kTCCServiceDeveloperTool does not allow prompting; returning denied` (responsible: the
-terminal binary, e.g. iTerm2). That service forbids a runtime consent dialog, so **no permission
-prompt ever appears** — it has to be pre-granted by a human in System Settings → Privacy & Security →
-Developer Tools. Do not wait for a dialog and do not try to work around TCC.
+**1. Without the Developer Tools TCC grant, `make e2e` cannot start at all.** It fails with
+`The test runner failed to initialize for UI testing. (Underlying Error: Timed out while
+enabling automation mode.)`, and `com.apple.TCC` logs `Service kTCCServiceDeveloperTool does
+not allow prompting; returning denied` (responsible: the terminal binary, e.g. iTerm2). That
+service forbids a runtime consent dialog, so **no permission prompt ever appears** — it has to
+be pre-granted by a human in System Settings → Privacy & Security → Developer Tools. Do not
+wait for a dialog and do not try to work around TCC. Granted on this mini as of 2026-09-12.
 
 **2. A failed attempt wedges `testmanagerd` for the whole machine, and it does not self-heal.** After
 one failed attempt at 16:20, every hosted `xcodebuild test` on the machine executed **zero tests** —
