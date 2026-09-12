@@ -154,6 +154,11 @@ struct EntryDetailView: View {
     var resolveAttachment: (VaultAttachment) -> Data?
     var onEdit: () -> Void
 
+    /// Optional on purpose: the `#Preview` below constructs this view standalone, and a
+    /// non-optional `@Environment(AppEnvironment.self)` traps at render time when nothing
+    /// supplied it. Username / password / TOTP copies go through it when present (issue #167).
+    @Environment(AppEnvironment.self) private var appEnvironment: AppEnvironment?
+
     @State private var isPasswordRevealed = false
     /// Names of the protected custom fields currently revealed. A set of names rather than one
     /// flag per row so revealing one secret does not reveal the rest, and so the reveal state
@@ -176,13 +181,13 @@ struct EntryDetailView: View {
                     FieldRow(label: "Title", value: entry.title)
                     FieldRow(
                         label: "Username", value: entry.username,
-                        onCopy: { clipboard.copy(entry.username) },
+                        onCopy: { copy(entry.username, notice: "Copied username") },
                         copyIdentifier: "detail.copyUsername"
                     )
                     FieldRow(
                         label: "Password", value: entry.password, isMonospaced: true,
                         isRevealed: $isPasswordRevealed,
-                        onCopy: { clipboard.copy(entry.password) },
+                        onCopy: { copy(entry.password, notice: "Copied password") },
                         copyIdentifier: "detail.copyPassword",
                         revealIdentifier: "detail.revealPassword"
                     )
@@ -191,7 +196,10 @@ struct EntryDetailView: View {
                 }
 
                 if let otpAuthURL = entry.otpAuthURL {
-                    TOTPView(otpAuthURL: otpAuthURL, clipboard: clipboard)
+                    TOTPView(
+                        otpAuthURL: otpAuthURL,
+                        onCopy: { copy($0, notice: "Copied one-time code") }
+                    )
                 }
 
                 if !entry.customFields.isEmpty {
@@ -339,6 +347,16 @@ struct EntryDetailView: View {
                     revealIdentifier: "detail.revealCustomField.\(key)"
                 )
             }
+        }
+    }
+
+    /// Username / password / TOTP copies go through `AppEnvironment.copy` so the toast and the
+    /// pasteboard write cannot diverge. Previews have no environment and fall back to `clipboard`.
+    private func copy(_ value: String, notice: String) {
+        if let appEnvironment {
+            appEnvironment.copy(value, notice: notice)
+        } else {
+            clipboard.copy(value)
         }
     }
 

@@ -1,6 +1,13 @@
 import Foundation
 import Observation
 
+/// The in-window copy toast (issue #167). `id` changes on every copy so a second copy of the same
+/// field replaces the first toast instead of being swallowed as "same message".
+struct CopyNotice: Equatable {
+    let message: String
+    let id: UUID
+}
+
 /// The composition root: the one place that constructs every long-lived collaborator and decides
 /// which concrete types back them. No view constructs a `VaultStore`, a codec, or a
 /// `VaultFileAccess` itself — they all receive this object (or values read off it) instead.
@@ -101,6 +108,11 @@ final class AppEnvironment {
     /// case.
     var menuRequest: MenuRequest?
 
+    /// The in-window copy toast (issue #167). `nil` when nothing was just copied. Set by
+    /// `copy(_:notice:)` and cleared ~1.5 s later; a second copy replaces the first rather than
+    /// stacking.
+    private(set) var copyNotice: CopyNotice?
+
     private init(
         clipboard: ClipboardService,
         generator: PasswordGenerator,
@@ -164,13 +176,16 @@ final class AppEnvironment {
     /// bypassed, `Vault.sample` pre-loaded. Every `PassSumoUITests` case depends on this being wired
     /// correctly.
     ///
+    /// `clipboard` is injectable so a hosted unit test can call `copy(_:notice:)` without writing
+    /// to `NSPasteboard.general`. Production and e2e omit it and get a real `ClipboardService`.
+    ///
     /// Returns synchronously with no tabs yet — `VaultStore.open` is `async` (it always
     /// round-trips through a detached `Task`, even against a fake codec with nothing slow to do;
     /// see that method's doc comment), and a synchronous factory called from a `View`/`App`'s
     /// `@State` initial value cannot `await` anything. Call `loadUITestingFixture()` once, from an
     /// `async` context, to actually reach `.unlocked` — `PassSumoApp` does this via `.task`;
     /// `AppShellTests` awaits it directly so the assertion has no race to lose.
-    static func uiTesting() -> AppEnvironment {
+    static func uiTesting(clipboard: ClipboardService? = nil) -> AppEnvironment {
         let fileAccess: any VaultFileAccess = InMemoryVaultFileAccess()
         let codec: any VaultCodec = InMemoryVaultCodec()
 
@@ -194,7 +209,7 @@ final class AppEnvironment {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettings(defaults: defaults)
-        let clipboard = ClipboardService(clearInterval: settings.clipboardClearTimeout)
+        let clipboard = clipboard ?? ClipboardService(clearInterval: settings.clipboardClearTimeout)
 
         // `NoBiometricsSecretStore` (below) rather than the real `KeychainSecretStore`: a hosted
         // `make e2e` run must never depend on this Mac's keychain state or prompt for Touch ID, and
@@ -242,6 +257,22 @@ final class AppEnvironment {
     /// Welcome's "Create New Database" path: a new tab, unlocked, on success.
     func createDatabase(at url: URL, credentials: VaultCredentials) async -> VaultStore {
         await sessionList.createDatabase(at: url, credentials: credentials)
+    }
+
+    /// Copies `value` to the pasteboard and publishes `notice` for the browser toast.
+    ///
+    /// Username, password, and TOTP copies all go through here so the menu, the list context
+    /// menu, and the detail glyphs cannot diverge. Settings About and the generator keep their
+    /// own copy paths — they are not this toast.
+    func copy(_ value: String, notice: String) {
+        clipboard.copy(value)
+        let issued = CopyNotice(message: notice, id: UUID())
+        copyNotice = issued
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.copyNotice?.id == issued.id else { return }
+            self.copyNotice = nil
+        }
     }
 
     // MARK: - Narrow file-access capabilities for the UI layer
