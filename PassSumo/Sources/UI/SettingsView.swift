@@ -271,7 +271,7 @@ struct SettingsView: View {
         // effect on the vault the user has open right now, not only on the next launch. `settings`
         // itself is the thing that survives a relaunch; these two lines are the live-wiring on top.
         .onChange(of: environment.settings.autoLockTimeout) { _, newValue in
-            environment.autoLock.idleTimeout = newValue
+            environment.applyAutoLockTimeout(newValue)
         }
         .onAppear { refreshTouchIDEnabled() }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in

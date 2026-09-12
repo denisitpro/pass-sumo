@@ -75,10 +75,10 @@ struct AppCommands: Commands {
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(!isUnlocked)
             Divider()
-            // AppKit's own window action, dispatched through the responder chain (nil target) —
-            // there is no `WindowGroup`-supplied Close item once this group is replaced, so this is
-            // what keeps ⌘W working at all.
-            Button("Close") { NSApp.keyWindow?.performClose(nil) }
+            // Issue #47: ⌘W closes the front tab, not the window, unless Welcome is showing.
+            // There is no `WindowGroup`-supplied Close item once this group is replaced, so this
+            // is also what keeps ⌘W working at all on the empty-session screen.
+            Button("Close") { closeTabOrWindow() }
                 .keyboardShortcut("w", modifiers: .command)
         }
 
@@ -190,34 +190,18 @@ struct AppCommands: Commands {
         return false
     }
 
-    /// "Open Database…" is no longer scoped to "nothing open yet" (issue #84).
-    ///
-    /// It used to be, on the grounds that `VaultStore` holds one vault and had no "replace the open
-    /// one" flow — but Launch Services can still hand us a `.kdbx` (Open With, a Dock drop; we are
-    /// `Alternate`, not Owner — issue #131), so the system can make that request whether or not a
-    /// menu item was enabled for it. There is now a replace-the-open-one flow (`VaultOpenRouter`,
-    /// including the Save/Discard/Cancel prompt the old comment said this shell did not implement),
-    /// and the menu goes through the same one, so greying the item out would only hide a capability
-    /// the app already has.
-    ///
-    /// Still disabled mid-unlock: `VaultOpenRouter` drops a request that arrives while Argon2 is
-    /// running (see `Decision.ignore`), and a menu item that is enabled but provably does nothing
-    /// is worse than one that is greyed out.
-    var canOpenDatabase: Bool {
-        if case .unlocking = environment.store.state { return false }
-        return true
-    }
+    /// "Open Database…" is no longer scoped to "nothing open yet" (issue #84), and with tabs
+    /// (issue #47) it is never a replace: a second file becomes another tab. Always enabled —
+    /// including mid-unlock of the front tab, which used to drop the request.
+    var canOpenDatabase: Bool { true }
 
-    /// "New Database…" stays scoped to "nothing open yet", deliberately.
+    /// "New Database…" stays scoped to "no tabs", deliberately.
     ///
-    /// Creating a database while one is open would blow the open vault away through
-    /// `VaultStore.createNew`, which — unlike `select` — has no unsaved-changes guard, and its
-    /// sheet lives inside `WelcomeView`, which is unmounted whenever a vault is open. Issue #84 is
-    /// about *opening* an existing file; giving Create the same treatment is its own change, with
-    /// its own prompt and its own tests, not a side effect of this one.
+    /// The create sheet lives inside `WelcomeView`, which is unmounted whenever a tab exists.
+    /// Giving Create the same add-a-tab treatment as Open is its own change, with its own tests,
+    /// not a side effect of issue #47.
     var canCreateNewDatabase: Bool {
-        if case .empty = environment.store.state { return true }
-        return false
+        environment.sessionList.sessions.isEmpty
     }
 
     /// Whether the open database has anything in its recycle bin. Drives the enablement of
@@ -289,6 +273,15 @@ struct AppCommands: Commands {
         environment.clipboard.copy(entry.password)
         if let url = selectedEntryURL {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// ⌘W closes the front tab. With no tabs (Welcome) it closes the window, same as before.
+    private func closeTabOrWindow() {
+        if environment.sessionList.sessions.isEmpty {
+            NSApp.keyWindow?.performClose(nil)
+        } else {
+            _ = environment.sessionList.requestCloseSelected()
         }
     }
 

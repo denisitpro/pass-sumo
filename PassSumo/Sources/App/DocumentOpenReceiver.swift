@@ -20,44 +20,42 @@ import AppKit
 /// **The buffer is the reason this is a type and not a closure.** On a cold launch the system
 /// delivers the URL before the window (and therefore its `.task`) exists, so a request that
 /// arrives before `onOpen(_:)` is wired would simply be lost — which is the same bug from a
-/// different direction. One slot, not a queue: the app holds exactly one vault, so a second
-/// request arriving before the first is drained supersedes it.
+/// different direction. A queue, not one slot: issue #47 opens every file as a tab, so a
+/// multi-selection handed over before the handler is wired must not collapse to the last URL.
 @MainActor
 final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     private var handler: ((URL) -> Void)?
-    private var pending: URL?
+    private var pending: [URL] = []
 
     /// **Issue #16's ⌘T caveat.** macOS turns on automatic window tabbing for every resizable
     /// window by default, which is what installs a system-supplied Window ▸ "New Tab" item bound
     /// to ⌘T — the same chord `AppCommands` now spends on "Copy One-Time Code" (matching
-    /// Strongbox). This app is a one-window, three-pane browser with no use for tabs, so turning
-    /// tabbing off removes the collision at its source instead of leaving ⌘T merely unclaimed by
-    /// our own menus and hoping the system item never appears.
+    /// Strongbox). Database tabs (issue #47) are a custom bar inside the one window, not
+    /// NSWindow tabbing, so this stays off.
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        // Only the first file URL. Finder can hand over a multi-selection, and this app has one
-        // window holding one vault — opening them all is issue #47, and opening the last one
-        // would make which database you land on depend on the order Finder happened to pass.
-        guard let url = urls.first(where: { $0.isFileURL }) else { return }
-        deliver(url)
+        // Issue #47: every file URL becomes a tab. Finder can hand over a multi-selection;
+        // opening only the first (or only the last) was the single-vault leftover.
+        for url in urls where url.isFileURL {
+            deliver(url)
+        }
     }
 
     /// Registers the one consumer, and immediately hands it anything that arrived before it was
     /// there. Called once, from `PassSumoApp`'s `.task`.
     func onOpen(_ handler: @escaping (URL) -> Void) {
         self.handler = handler
-        if let buffered = pending {
-            pending = nil
-            handler(buffered)
-        }
+        let buffered = pending
+        pending = []
+        buffered.forEach(handler)
     }
 
     private func deliver(_ url: URL) {
         guard let handler else {
-            pending = url
+            pending.append(url)
             return
         }
         handler(url)

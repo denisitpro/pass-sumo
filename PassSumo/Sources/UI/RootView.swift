@@ -1,22 +1,26 @@
 import SwiftUI
 
-/// The app's single top-level switch: what's on screen is a pure function of `VaultStore.state`
-/// (plus the one documented bridge below), never a separately-tracked navigation flag that could
-/// drift out of sync with it.
+/// The app's single top-level switch: what's on screen is a function of the tab list (issue #47)
+/// and the selected session's `VaultStore.state`, never a separately-tracked navigation flag.
 struct RootView: View {
     let environment: AppEnvironment
 
     /// Welcome and Unlock sit on white like Strongbox (issue #137). The browser paints its
     /// own pane grounds, so the window fill behind it can stay the mint canvas.
     private var authWindowBackground: Color {
-        switch environment.store.state {
-        case .unlocked: return Palette.canvas
-        default: return Palette.surface
+        if let session = environment.sessionList.selected, case .unlocked = session.store.state {
+            return Palette.canvas
         }
+        return Palette.surface
     }
 
     var body: some View {
-        content
+        VStack(spacing: 0) {
+            if !environment.sessionList.sessions.isEmpty {
+                DatabaseTabBar(environment: environment)
+            }
+            content
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Every screen sits on one of two grounds: `canvas` behind a centred card (Welcome,
             // Unlock) and `surface` inside the browser's panes, which paint their own. Painting
@@ -51,7 +55,7 @@ struct RootView: View {
             .environment(environment)
             // "Open Database…" is handled HERE, not in `WelcomeView`, because since issue #84 the
             // item is enabled while a vault is open — and `WelcomeView` is unmounted in every state
-            // but `.empty`. `RootView` is the only view that exists in all of them.
+            // but "no tabs". `RootView` is the only view that exists in all of them.
             .onChange(of: environment.menuRequest) { _, request in
                 guard request == .openDatabase else { return }
                 environment.menuRequest = nil
@@ -59,42 +63,52 @@ struct RootView: View {
                 environment.openRouter.requestOpen(url)
             }
             .confirmationDialog(
-                "Save changes before opening another database?",
+                "Save changes before closing this database?",
                 isPresented: Binding(
-                    get: { environment.openRouter.unsavedChangesPrompt != nil },
+                    get: { environment.sessionList.unsavedChangesCloseID != nil },
                     // Anything that dismisses the dialog without picking a button (Esc, a click
-                    // outside) means Cancel, and Cancel is a true no-op: the request is dropped and
-                    // the open vault keeps its state, its edits and its selection.
-                    set: { if !$0 { environment.openRouter.cancelPending() } }
+                    // outside) means Cancel, and Cancel is a true no-op: the tab stays.
+                    set: { if !$0 { environment.sessionList.cancelClose() } }
                 ),
-                presenting: environment.openRouter.unsavedChangesPrompt
-            ) { _ in
-                // The presented URL is named in the message below, not on a button: a button label
-                // carrying a filename would make the destructive choice the widest one on screen.
-                Button("Save") { Task { await environment.openRouter.saveThenOpenPending() } }
-                    .accessibilityIdentifier("root.openRequest.save")
+                presenting: environment.sessionList.unsavedChangesCloseSession
+            ) { session in
+                Button("Save") { Task { await environment.sessionList.saveThenClosePending() } }
+                    .accessibilityIdentifier("root.closeTab.save")
                 Button("Discard", role: .destructive) {
-                    environment.openRouter.discardThenOpenPending()
+                    environment.sessionList.discardThenClosePending()
                 }
-                .accessibilityIdentifier("root.openRequest.discard")
-                Button("Cancel", role: .cancel) { environment.openRouter.cancelPending() }
-            } message: { requested in
-                // Both filenames, because "unsaved changes" alone does not say which database is
-                // about to be closed — and with two databases in play that is the whole question.
+                .accessibilityIdentifier("root.closeTab.discard")
+                Button("Cancel", role: .cancel) { environment.sessionList.cancelClose() }
+            } message: { session in
                 Text(
-                    "“\(environment.store.currentURL?.lastPathComponent ?? "The open database")” "
-                        + "has unsaved changes. Opening “\(requested.lastPathComponent)” closes it."
+                    "“\(session.title)” has unsaved changes. Closing it discards them unless you save first."
                 )
+            }
+            // One monitor per tab, including background ones: auto-lock and Touch ID re-arm have
+            // to follow that session's store, not whichever tab is selected.
+            .background {
+                ForEach(environment.sessionList.sessions) { session in
+                    SessionLifecycleMonitor(session: session) { url in
+                        environment.rememberRecentDatabase(url)
+                    }
+                }
             }
     }
 
     @ViewBuilder
     private var content: some View {
-        // What is on screen is now a *pure* function of `VaultStore.state`, with no extra branch:
-        // a file the user just picked reaches `.locked` through `VaultStore.select(url:)` rather
-        // than through an app-level URL held beside the store, so there is nothing left that could
-        // disagree with `state` about which screen is correct.
-        switch environment.store.state {
+        if let session = environment.sessionList.selected {
+            sessionContent(session)
+                .id(session.id)
+        } else {
+            WelcomeView(environment: environment)
+                .accessibilityIdentifier("root.welcome")
+        }
+    }
+
+    @ViewBuilder
+    private func sessionContent(_ session: VaultSession) -> some View {
+        switch session.store.state {
         case .empty:
             WelcomeView(environment: environment)
                 .accessibilityIdentifier("root.welcome")
@@ -115,13 +129,38 @@ struct RootView: View {
 
         case .unlocked:
             VaultBrowserView(
-                store: environment.store,
+                store: session.store,
                 clipboard: environment.clipboard,
                 generator: environment.generator,
-                autoLock: environment.autoLock,
+                autoLock: session.autoLock,
                 settings: environment.settings
             )
             .accessibilityIdentifier("root.browser")
+        }
+    }
+}
+
+/// Keeps a session's auto-lock and Touch ID policy honest about *that* vault's state, including
+/// when the tab is in the background. `onAppear` covers the case where the store reached
+/// `.unlocked` before this view was mounted (the `-ui-testing` fixture load does exactly that).
+private struct SessionLifecycleMonitor: View {
+    let session: VaultSession
+    let onUnlocked: (URL) -> Void
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onAppear { apply(from: .empty, to: session.store.state) }
+            .onChange(of: session.store.state) { oldState, newState in
+                apply(from: oldState, to: newState)
+            }
+    }
+
+    private func apply(from oldState: VaultStore.State, to newState: VaultStore.State) {
+        session.handleStoreStateChange(from: oldState, to: newState)
+        if case .unlocked = oldState { return }
+        if case .unlocked = newState, let url = session.store.currentURL {
+            onUnlocked(url)
         }
     }
 }

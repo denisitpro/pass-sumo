@@ -215,13 +215,16 @@ private struct CreateDatabaseSheet: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         isCreating = true
-        await environment.store.createNew(at: url, credentials: VaultCredentials(password: password, keyFile: nil))
+        let created = await environment.createDatabase(
+            at: url,
+            credentials: VaultCredentials(password: password, keyFile: nil)
+        )
         isCreating = false
 
-        if case .unlocked = environment.store.state {
+        if case .unlocked = created.state {
             dismiss()
         } else {
-            errorMessage = environment.store.lastError?.displayMessage ?? "Couldn't create the database."
+            errorMessage = created.lastError?.displayMessage ?? "Couldn't create the database."
         }
     }
 }
