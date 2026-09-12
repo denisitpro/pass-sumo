@@ -265,6 +265,36 @@ final class BrowserLogicTests: XCTestCase {
         XCTAssertEqual(result.map(\.title), ["InGroup"])
     }
 
+    /// Issue #143: a parent folder with everything in a child used to look empty.
+    func testEntryListFilterIncludesDescendantEntries() {
+        let parentID = UUID(uuidString: "00000000-0000-0000-0000-000000000040")!
+        let childID = UUID(uuidString: "00000000-0000-0000-0000-000000000041")!
+        let vault = Vault(
+            name: "Test",
+            groups: [
+                makeGroup("00000000-0000-0000-0000-000000000040", parent: nil, name: "Parent"),
+                makeGroup("00000000-0000-0000-0000-000000000041", parent: "00000000-0000-0000-0000-000000000040", name: "Child"),
+            ],
+            entries: [
+                makeEntry("00000000-0000-0000-0000-000000000042", group: "00000000-0000-0000-0000-000000000040", title: "InParent"),
+                makeEntry("00000000-0000-0000-0000-000000000043", group: "00000000-0000-0000-0000-000000000041", title: "InChild"),
+                makeEntry("00000000-0000-0000-0000-000000000044", group: nil, title: "Ungrouped"),
+            ]
+        )
+        XCTAssertEqual(
+            Set(vault.subtreeGroupIDs(of: parentID)),
+            Set([parentID, childID])
+        )
+        XCTAssertEqual(
+            Set(EntryListFilter.apply(to: vault, selection: .group(parentID), query: "").map(\.title)),
+            Set(["InParent", "InChild"])
+        )
+        XCTAssertEqual(
+            EntryListFilter.apply(to: vault, selection: .group(childID), query: "").map(\.title),
+            ["InChild"]
+        )
+    }
+
     func testEntryListFilterCombinesGroupAndSearchAsAnIntersection() {
         let groupID = UUID(uuidString: "00000000-0000-0000-0000-000000000030")!
         let otherGroupID = UUID(uuidString: "00000000-0000-0000-0000-000000000031")!

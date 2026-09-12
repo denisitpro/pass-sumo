@@ -62,7 +62,7 @@ enum EntryListFilter {
             candidates = vault.entries
             isScopedToRecycleBin = false
         case .group(let id):
-            candidates = vault.entries(inGroup: id)
+            candidates = vault.entries(inSubtreeOf: id)
             isScopedToRecycleBin = vault.recycleBinGroupIDs.contains(id)
         }
 

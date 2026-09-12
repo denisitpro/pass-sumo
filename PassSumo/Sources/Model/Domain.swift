@@ -549,6 +549,29 @@ extension Vault {
         entries.filter { $0.groupID == groupID }
     }
 
+    /// `groupID` and every nested folder under it. Used by the sidebar count and the list
+    /// filter (issue #143) so selecting a parent is not an empty column.
+    func subtreeGroupIDs(of groupID: UUID) -> Set<UUID> {
+        var result: Set<UUID> = [groupID]
+        var queue = [groupID]
+        while let current = queue.popLast() {
+            for child in groups where child.parentID == current {
+                if result.insert(child.id).inserted {
+                    queue.append(child.id)
+                }
+            }
+        }
+        return result
+    }
+
+    func entries(inSubtreeOf groupID: UUID) -> [VaultEntry] {
+        let ids = subtreeGroupIDs(of: groupID)
+        return entries.filter { entry in
+            guard let gid = entry.groupID else { return false }
+            return ids.contains(gid)
+        }
+    }
+
     /// The group with `id`, or `nil` if it isn't (or is no longer) part of this vault.
     func group(_ id: UUID) -> VaultGroup? {
         groups.first { $0.id == id }

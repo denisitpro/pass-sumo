@@ -162,12 +162,14 @@ struct EntryEditView: View {
                         EditLineField(placeholder: "Username", text: $username, identifier: "edit.username")
                     }
                     passwordBlock
+                    totpBlock
                     labeled("URL") {
                         EditLineField(placeholder: "URL", text: $url, identifier: "edit.url")
                     }
-                    labeled("Group") { groupPicker }
+                    if !isNew {
+                        labeled("Group") { groupPicker }
+                    }
                     notesBlock
-                    totpBlock
                     customFieldsBlock
                     attachmentsBlock
                 }

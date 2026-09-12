@@ -76,7 +76,7 @@ struct WelcomeView: View {
         }
         .frame(minHeight: Metrics.authCardMinHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.canvas)
+        .background(Palette.surface)
         .task { loadRecents() }
         // `.openDatabase` is deliberately absent: since issue #84 that menu item is enabled while a
         // vault is open, i.e. while this view is unmounted, so `RootView` owns it for every state

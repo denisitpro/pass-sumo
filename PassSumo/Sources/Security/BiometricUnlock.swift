@@ -222,17 +222,23 @@ struct KeychainSecretStore: SecretStore {
 
     func hasSecret(for id: VaultKeyIdentifier) throws -> Bool {
         var query = baseQuery(for: id)
-        // Attributes only, no `kSecReturnData`: the keychain evaluates the access control when the
-        // *data* is requested, so asking only for attributes answers "does it exist" without
-        // putting a Touch ID sheet in front of a user who has not asked to unlock anything.
+        // Attributes only, no `kSecReturnData`. Do NOT also pass an `LAContext` with
+        // `interactionNotAllowed`: combining that with `kSecUseAuthenticationUIFail` is
+        // `errSecParam` on current macOS, `isEnabled` swallows the throw into `false`,
+        // and the Touch ID button vanishes while the keychain item is still there
+        // (issue #138). One flag, the one KeePassXC used for the same repeating-sheet
+        // bug: refuse UI, and treat "interaction not allowed" as "the item exists".
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
+        case errSecInteractionNotAllowed:
+            return true
         default: throw Self.mapped(status: status)
         }
     }

@@ -39,6 +39,12 @@ struct PassSumoApp: App {
         }
     }
 
+    /// Welcome/Unlock may shrink (issue #137). The three-pane browser still needs 900.
+    private var isBrowserOpen: Bool {
+        if case .unlocked = environment.store.state { return true }
+        return false
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(environment: environment)
@@ -65,7 +71,10 @@ struct PassSumoApp: App {
                 // than sitting at its bare-content floor on every ordinary launch. Shrinking this to
                 // 707 would trade "the shell's steady state" for "the shell's most cramped legal
                 // state" — a real regression this issue did not ask for. Left at 900.
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(
+                    minWidth: isBrowserOpen ? 900 : 520,
+                    minHeight: isBrowserOpen ? 560 : 420
+                )
                 .preferredColorScheme(contentColorScheme)
                 // Finishes what `AppEnvironment.uiTesting()` can only start synchronously — see that
                 // method's doc comment for why the actual `store.open` has to happen from an `async`

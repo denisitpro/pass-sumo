@@ -29,6 +29,7 @@ final class AppSettings {
         static let generatorUppercase = "settings.generator.uppercase"
         static let generatorDigits = "settings.generator.digits"
         static let generatorSymbols = "settings.generator.symbols"
+        static let defaultUsername = "settings.defaultUsername"
     }
 
     /// Mirrors `AutoLockController.idleTimeout`'s own default (300s) so a database that has never
@@ -66,6 +67,11 @@ final class AppSettings {
         didSet { persistRecipe() }
     }
 
+    /// Prefill for a brand-new entry's username (issue #140). Empty means leave it blank.
+    var defaultUsername: String {
+        didSet { defaults.set(defaultUsername, forKey: Key.defaultUsername) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -80,6 +86,7 @@ final class AppSettings {
         if let value = defaults.object(forKey: Key.generatorUppercase) as? Bool { recipe.uppercase = value }
         if let value = defaults.object(forKey: Key.generatorDigits) as? Bool { recipe.digits = value }
         if let value = defaults.object(forKey: Key.generatorSymbols) as? Bool { recipe.symbols = value }
+        defaultUsername = defaults.string(forKey: Key.defaultUsername) ?? ""
         generatorRecipe = recipe
         // Note on `didSet` during `init`: assigning the stored properties above does run their
         // `didSet` (Swift only skips observers for a property's own *declaration-time* default, not
@@ -166,6 +173,8 @@ struct SettingsView: View {
     /// `BiometricUnlock`/the keychain are for) nor observed by anything outside this view.
     @State private var isTouchIDBusy = false
     @State private var touchIDError: String?
+    /// Cached so the toggle's `get` does not hit the keychain on every `body` pass (issue #138).
+    @State private var isTouchIDEnabled = false
 
     /// Whether the About row's label is currently showing "Copied to clipboard" instead of the
     /// version string — local, transient UI state, reset by `copyVersionInfo`'s own timer.
@@ -197,6 +206,11 @@ struct SettingsView: View {
                     step: 5
                 )
                 .accessibilityIdentifier("settings.clipboardClearTimeout")
+            }
+
+            Section("New Entries") {
+                TextField("Default username", text: $environment.settings.defaultUsername)
+                    .accessibilityIdentifier("settings.defaultUsername")
             }
 
             Section("Password Generator") {
@@ -237,7 +251,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .font(Typography.body)
         .foregroundStyle(Palette.text)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 480)
         .background(Palette.canvas)
         .accessibilityIdentifier("root.settings")
         // Push edits into the already-running services immediately — a timeout change should take
@@ -246,6 +260,7 @@ struct SettingsView: View {
         .onChange(of: environment.settings.autoLockTimeout) { _, newValue in
             environment.autoLock.idleTimeout = newValue
         }
+        .onAppear { refreshTouchIDEnabled() }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in
             environment.clipboard.clearInterval = newValue
         }
@@ -286,25 +301,32 @@ struct SettingsView: View {
         }
     }
 
-    /// `get` never prompts (`isEnabled` is `hasSecret`, not `retrieve` — see `BiometricUnlock`'s own
-    /// doc comment), so reading this on every `body` re-evaluation is cheap and safe. `set` kicks off
-    /// the actual enable/disable asynchronously; a `Binding` cannot itself be `async`.
+    /// `set` is async (keychain + maybe a save); a `Binding` cannot be. `get` reads the cache
+    /// filled by `refreshTouchIDEnabled`, not the keychain — a body pass must not call `isEnabled`.
     private var touchIDBinding: Binding<Bool> {
         Binding(
-            get: {
-                guard let id = environment.store.currentDatabaseID else { return false }
-                return environment.biometrics.isEnabled(for: VaultKeyIdentifier(id.uuidString))
-            },
+            get: { isTouchIDEnabled },
             set: { newValue in
                 Task { await setTouchIDEnabled(newValue) }
             }
         )
     }
 
+    private func refreshTouchIDEnabled() {
+        guard let id = environment.store.currentDatabaseID else {
+            isTouchIDEnabled = false
+            return
+        }
+        isTouchIDEnabled = environment.biometrics.isEnabled(for: VaultKeyIdentifier(id.uuidString))
+    }
+
     private func setTouchIDEnabled(_ enabled: Bool) async {
         touchIDError = nil
         isTouchIDBusy = true
-        defer { isTouchIDBusy = false }
+        defer {
+            isTouchIDBusy = false
+            refreshTouchIDEnabled()
+        }
 
         guard enabled else {
             // Turning off is a pure keychain deletion — `currentDatabaseID` is only a read here, so
