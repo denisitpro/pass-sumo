@@ -80,10 +80,14 @@ struct VaultBrowserView: View {
     @State private var pendingPermanentGroupDeletion: VaultGroup?
     @State private var isConfirmingEmptyRecycleBin = false
     @State private var groupNamePrompt: GroupNamePrompt?
-    /// The text in the group-name prompt. Seeded when the prompt opens — empty for a new folder,
-    /// the current name for a rename — rather than being derived, because a `TextField` needs
-    /// somewhere of its own to put what the user types.
+    /// The text in the rename prompt. Seeded from the folder's current name when the prompt
+    /// opens rather than being derived, because a `TextField` needs somewhere of its own to put
+    /// what the user types. Create no longer uses this — that path is `GroupEditSheet`.
     @State private var groupNameDraft = ""
+    /// Create-folder sheet (issue #129). Its own state rather than a case of `groupNamePrompt`,
+    /// because create is a real sheet with a name and an icon, and rename stays the name-only
+    /// alert. `Identifiable` so `.sheet(item:)` cannot re-present a cancelled draft.
+    @State private var newGroupRequest: NewGroupRequest?
     /// The folder whose icon picker is open (issue #89). The folder itself rather than its id, so
     /// the sheet can read the icon currently in effect without looking it up again — and
     /// `Identifiable`, so it drives `.sheet(item:)` and cannot re-present a folder that has since
@@ -131,28 +135,18 @@ struct VaultBrowserView: View {
         var id: UUID { entry.id }
     }
 
-    /// What the group-name prompt is naming: a new folder under `parentID`, or an existing one.
-    ///
-    /// One alert serves both, because they ask the same question through the same single control.
-    /// Two alerts differing only in a title string is two places for the create path and the rename
-    /// path to drift apart.
+    /// Rename's name-only alert. Create used to share this type (they asked the same question
+    /// through the same single control); issue #129 split them because create now also picks an
+    /// icon, which an `NSAlert` cannot host.
     private enum GroupNamePrompt: Equatable {
-        case create(parentID: UUID?)
         case rename(UUID)
+    }
 
-        var title: String {
-            switch self {
-            case .create: return "New Group"
-            case .rename: return "Rename Group"
-            }
-        }
-
-        var confirmTitle: String {
-            switch self {
-            case .create: return "Create"
-            case .rename: return "Rename"
-            }
-        }
+    /// One presentation of `GroupEditSheet`. `id` is minted at construction so `.sheet(item:)`
+    /// treats two consecutive creates as two items even when they share a parent.
+    private struct NewGroupRequest: Identifiable {
+        let parentID: UUID?
+        let id = UUID()
     }
 
     /// The vault to render. Empty when the store isn't `.unlocked` — this view is only ever
@@ -194,7 +188,8 @@ struct VaultBrowserView: View {
             onOpenEntry: { id in openForEdit(id) },
             onCopyUsername: { entry in clipboard.copy(entry.username) },
             onCopyPassword: { entry in clipboard.copy(entry.password) },
-            onDeleteEntry: { id in requestDelete(id) }
+            onDeleteEntry: { id in requestDelete(id) },
+            onNewEntry: startNewEntry
         )
         .inspector(isPresented: $isDetailPaneVisible) {
             Group {
@@ -382,9 +377,27 @@ struct VaultBrowserView: View {
                 searchField
             }
 
+            // Own `.primaryAction` item, not a member of the group below. A centred `.principal`
+            // search field eats the automatic-placement overflow on a normal window, which is how
+            // Lock disappeared behind the chevron (issue #129). `.primaryAction` is the trailing
+            // slot that does not overflow. No `.keyboardShortcut` here: `AppCommands` already
+            // binds ⌘L (Strongbox, issue #16).
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    // The controller, not `store.lock()` — see `AutoLockController.lockRequestedByUser()`.
+                    // This is the one thing this view does through `autoLock` besides reading its
+                    // countdown, and it is not "this view locks the vault": it reports that the
+                    // user asked, and the controller's `onLock` is still what performs it.
+                    autoLock.lockRequestedByUser()
+                } label: {
+                    Label("Lock", systemImage: "lock")
+                }
+                .accessibilityIdentifier("browser.lock")
+            }
+
             ToolbarItemGroup {
                 Button {
-                    editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
+                    startNewEntry()
                 } label: {
                     Label("New Entry", systemImage: "plus")
                 }
@@ -412,17 +425,6 @@ struct VaultBrowserView: View {
                     Label("Generator", systemImage: "wand.and.stars")
                 }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-
-                Button {
-                    // The controller, not `store.lock()` — see `AutoLockController.lockRequestedByUser()`.
-                    // This is the one thing this view does through `autoLock` besides reading its
-                    // countdown, and it is not "this view locks the vault": it reports that the
-                    // user asked, and the controller's `onLock` is still what performs it.
-                    autoLock.lockRequestedByUser()
-                } label: {
-                    Label("Lock", systemImage: "lock")
-                }
-                .accessibilityIdentifier("browser.lock")
 
                 Button {
                     Task { await store.save() }
@@ -500,18 +502,24 @@ struct VaultBrowserView: View {
                         + "Deleting it now removes it from this database for good — there is no undo."
                 )
             }
-            // No disabled state on Create/Rename. An alert's buttons are rendered by AppKit from a
-            // description, not laid out as views, so `.disabled` on one is not reliably honoured — and
-            // it is not needed: `VaultStore.addGroup`/`renameGroup` refuse a blank name themselves, so
-            // confirming an empty field closes the alert and changes nothing.
+            .sheet(item: $newGroupRequest) { request in
+                GroupEditSheet { name, iconID in
+                    commitNewGroup(named: name, iconID: iconID, parentID: request.parentID)
+                }
+            }
+            // No disabled state on Rename. An alert's buttons are rendered by AppKit from a
+            // description, not laid out as views, so `.disabled` on one is not reliably honoured —
+            // and it is not needed: `VaultStore.renameGroup` refuses a blank name itself, so
+            // confirming an empty field closes the alert and changes nothing. Create is a real
+            // sheet (`GroupEditSheet`) and disables its own button instead.
             .alert(
-                groupNamePrompt?.title ?? "",
+                "Rename Group",
                 isPresented: isShowingGroupNamePrompt,
                 presenting: groupNamePrompt
             ) { prompt in
                 TextField("Name", text: $groupNameDraft)
                     .accessibilityIdentifier("browser.groupName")
-                Button(prompt.confirmTitle) { commitGroupName(prompt) }
+                Button("Rename") { commitGroupName(prompt) }
                     .accessibilityIdentifier("browser.confirmGroupName")
                 Button("Cancel", role: .cancel) { groupNamePrompt = nil }
             }
@@ -645,7 +653,7 @@ struct VaultBrowserView: View {
         guard let request, let appEnvironment else { return }
         switch request {
         case .newEntry:
-            editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
+            startNewEntry()
         case .newGroup:
             // Same call the toolbar's "New Group" button makes (see `newGroupParentID`'s own doc
             // comment for where the folder lands).
@@ -737,8 +745,7 @@ struct VaultBrowserView: View {
     private func handle(_ command: GroupCommand) {
         switch command {
         case .create(let parentID):
-            groupNameDraft = ""
-            groupNamePrompt = .create(parentID: parentID)
+            newGroupRequest = NewGroupRequest(parentID: parentID)
         case .rename(let id):
             guard let group = vault.group(id) else { return }
             groupNameDraft = group.name
@@ -754,17 +761,20 @@ struct VaultBrowserView: View {
 
     private func commitGroupName(_ prompt: GroupNamePrompt) {
         switch prompt {
-        case .create(let parentID):
-            // Selecting the new folder is what makes "New Group" visibly do something: the row
-            // appears in the sidebar AND the list column switches to it, empty, ready for the entry
-            // the user is about to put there.
-            if let created = store.addGroup(named: groupNameDraft, parentID: parentID) {
-                selectedGroup = .group(created.id)
-            }
         case .rename(let id):
             store.renameGroup(id, to: groupNameDraft)
         }
         groupNamePrompt = nil
+    }
+
+    /// Selecting the new folder is what makes "New Group" visibly do something: the row appears in
+    /// the sidebar AND the list column switches to it, empty, ready for the entry the user is
+    /// about to put there.
+    private func commitNewGroup(named name: String, iconID: UInt32, parentID: UUID?) {
+        if let created = store.addGroup(named: name, parentID: parentID, iconID: iconID) {
+            selectedGroup = .group(created.id)
+        }
+        newGroupRequest = nil
     }
 
     /// Where a new folder created from the toolbar goes: under whatever the sidebar is pointed at —
@@ -797,6 +807,10 @@ struct VaultBrowserView: View {
         case nil:
             return
         }
+    }
+
+    private func startNewEntry() {
+        editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
     }
 
     private func openForEdit(_ id: UUID) {

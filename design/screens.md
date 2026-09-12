@@ -1,6 +1,6 @@
 # Screen patterns
 
-> Status: living · Last verified: 2026-09-10 · [AI - claude-opus-5]
+> Status: living · Last verified: 2026-09-12 · [AI - grok-4.6]
 
 How the real screens are assembled, and the empty and error states each one actually has.
 Components are in `design/components-*.md`; token values in `design/BRAND.md`.
@@ -114,7 +114,8 @@ unless the bin itself is what is selected. Order is alphabetical by title, case-
 tie-broken by id — a dense list scanned by eye needs a stable order far more than a recency one.
 
 **Empty states.** "No Entries" for an empty group, "No Results" naming the query, "No Entry Selected"
-in the inspector. All three are `ContentUnavailableView`s.
+in the inspector. All three are `ContentUnavailableView`s. The empty list's right-click menu offers
+"New Entry", wired to the same path as the toolbar plus.
 
 **Error states.** The browser itself surfaces none inline: a backup failure goes to the status bar, a
 failed attachment export to a `danger` line inside the Attachments section, and a lock that arrives
@@ -192,15 +193,29 @@ straight through `VaultStore.setGroupIcon`, the way "Move to" beside it in the s
 does; an entry's is parked in the edit form's own draft state and lands with Save, so Cancel on the
 form discards it along with everything else typed there.
 
-**Reached from** the sidebar's group context menu ("Change Icon…", beside Rename) and the edit
-sheet's Icon row. Not from the entry list's row context menu: that menu is the pointer mirror of the
-toolbar's copy/open/delete actions, and it opens the edit form anyway.
+**Reached from** the sidebar's group context menu ("Change Icon…", beside Rename), the New Group
+sheet's icon button, and the edit sheet's Icon row. Not from the entry list's row context menu: that
+menu is the pointer mirror of the toolbar's copy/open/delete actions, and it opens the edit form
+anyway.
 
 **States.** The index currently in effect is highlighted with `row-sel-bg` / `row-sel-text`. An index
 outside 0…68 — another client's, a future KeePass's — highlights nothing rather than being snapped
 to a default, because the file's value survives until the user actually picks something. Each cell's
 symbol name reaches the tooltip and VoiceOver; nothing is captioned, because 69 labels is a wall of
 text and KeePass's own names ("PaperQ", "WorldSocket") are 2003 Windows jargon.
+
+## New Group sheet
+
+**Purpose.** Name a new folder, and optionally pick its icon. Replaces the name-only `NSAlert` the
+create path used to share with Rename (issue #129).
+
+**Assembly.** Title in `headline`; a name field with `fieldChrome`; a secondary button showing the
+current glyph (default 48, folder) that opens the icon picker; Cancel / Create. Create is disabled
+while the trimmed name is empty — `addGroup` would refuse a blank name anyway, and a live button
+that silently does nothing is what the alert could not prevent.
+
+**Rename is not this sheet.** Rename stays the name-only alert. Change Icon on an existing folder
+stays the existing picker, reached from the sidebar context menu.
 
 ## Settings
 
