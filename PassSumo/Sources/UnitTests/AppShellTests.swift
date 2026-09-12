@@ -180,6 +180,16 @@ final class AppShellTests: XCTestCase {
         XCTAssertNotEqual(identifier?.rawValue, AppEnvironment.uiTestingVaultURL.path)
     }
 
+    /// After Lock, `currentDatabaseID` is gone with the decrypted origin. A Touch ID click
+    /// that finds `@State identifier` still nil must still be able to resolve (issue #138).
+    func testBiometricsIdentifierResolvesWhileTheVaultIsLocked() {
+        let environment = AppEnvironment.uiTesting()
+        let url = URL(fileURLWithPath: "/tmp/locked-touchid.kdbx")
+        XCTAssertTrue(environment.store.select(url: url))
+        XCTAssertNil(environment.store.currentDatabaseID)
+        XCTAssertNotNil(environment.biometricsIdentifier(for: url))
+    }
+
     /// Opening a database must not give it an ID as a side effect — that is a mutation, and it
     /// would reach the user's file on the next save (see `VaultStore.currentDatabaseID`).
     func testOpeningAVaultNeverAssignsADatabaseID() async {

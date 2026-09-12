@@ -220,18 +220,23 @@ struct KeychainSecretStore: SecretStore {
         }
     }
 
-    func hasSecret(for id: VaultKeyIdentifier) throws -> Bool {
+    /// Query `hasSecret` runs. Isolated so tests can assert it never asks for data and never
+    /// attaches an `LAContext` — that combination with `kSecUseAuthenticationUIFail` is
+    /// `errSecParam` and hid the Touch ID button while the item remained (issue #138).
+    func existenceQuery(for id: VaultKeyIdentifier) -> [String: Any] {
         var query = baseQuery(for: id)
         // Attributes only, no `kSecReturnData`. Do NOT also pass an `LAContext` with
-        // `interactionNotAllowed`: combining that with `kSecUseAuthenticationUIFail` is
-        // `errSecParam` on current macOS, `isEnabled` swallows the throw into `false`,
-        // and the Touch ID button vanishes while the keychain item is still there
-        // (issue #138). One flag, the one KeePassXC used for the same repeating-sheet
-        // bug: refuse UI, and treat "interaction not allowed" as "the item exists".
+        // `interactionNotAllowed`. One flag, the one KeePassXC used for the same
+        // repeating-sheet bug: refuse UI, and treat "interaction not allowed" as
+        // "the item exists".
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        return query
+    }
 
+    func hasSecret(for id: VaultKeyIdentifier) throws -> Bool {
+        let query = existenceQuery(for: id)
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {

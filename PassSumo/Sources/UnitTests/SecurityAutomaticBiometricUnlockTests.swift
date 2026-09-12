@@ -103,6 +103,22 @@ final class SecurityAutomaticBiometricUnlockTests: XCTestCase {
         XCTAssertFalse(policy.claimAutomaticAttempt(conditions(lastLockReason: .userRequested)))
     }
 
+    /// ⌘L must not auto-prompt, including after the window loses and regains key (the sheet
+    /// dismissing, or ⌘-tab). The manual fingerprint control is the retry, and it does not
+    /// go through this policy.
+    func testUserRequestedLockDoesNotPromptWhenTheWindowBecomesActiveAgain() {
+        let policy = AutomaticBiometricUnlockPolicy()
+        XCTAssertFalse(policy.claimAutomaticAttempt(conditions(
+            isWindowActive: false,
+            lastLockReason: .userRequested
+        )))
+        XCTAssertFalse(policy.claimAutomaticAttempt(conditions(
+            isWindowActive: true,
+            lastLockReason: .userRequested
+        )))
+        XCTAssertFalse(policy.hasAttemptedThisLockedSession)
+    }
+
     func testNothingEnrolledForThisDatabaseSuppressesThePrompt() {
         let policy = AutomaticBiometricUnlockPolicy()
         XCTAssertFalse(policy.claimAutomaticAttempt(conditions(isEnrolledForThisVault: false)))
