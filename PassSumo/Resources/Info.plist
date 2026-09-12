@@ -48,11 +48,18 @@
 	     target. -->
 	<key>NSFaceIDUsageDescription</key>
 	<string>PassSumo uses Touch ID to unlock your vault without typing the master password every time.</string>
-	<!-- There is no system-declared UTI for KDBX, so the app declares its own, conforming to
+	<!-- There is no system-declared UTI for KDBX, so the app declares one, conforming to
 	     public.data, and CFBundleDocumentTypes below references it by identifier. Without an
 	     app-declared UTI, Finder/Launch Services cannot associate the app with .kdbx files at
-	     all — matching on the file extension alone is not enough. -->
-	<key>UTExportedTypeDeclarations</key>
+	     all — matching on the file extension alone is not enough.
+
+	     IMPORTED, not exported (issue #131): exporting claimed we define the type, and with
+	     LSHandlerRank Owner a local unsigned build became the unidentified developer of every
+	     .kdbx — Gatekeeper then blocked Strongbox from opening a file we had just written.
+	     Alternate, not Owner: double-click stays with Strongbox/KeePassXC. Open With, Dock
+	     drop, and File ▸ Open still work. Owner comes back only once the shipping binary is
+	     notarized (issue #132). -->
+	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
@@ -80,7 +87,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
-			<string>Owner</string>
+			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>app.passsumo.kdbx</string>

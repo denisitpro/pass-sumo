@@ -95,11 +95,13 @@ targets:
         # here even though Mac's Touch ID does not itself require it, so the string is already in
         # place if this code is ever shared with an iOS target.
         NSFaceIDUsageDescription: "PassSumo uses Touch ID to unlock your vault without typing the master password every time."
-        # There is no system-declared UTI for KDBX, so the app declares its own conforming to
-        # public.data and references it below — the alternative (matching on the .kdbx extension
-        # with no UTI at all) does not let Finder/Launch Services associate the app with the file
-        # type at all.
-        UTExportedTypeDeclarations:
+        # There is no system-declared UTI for KDBX, so the app declares one conforming to
+        # public.data. It is IMPORTED, not exported (issue #131): exporting told Launch Services
+        # we define the type, and with LSHandlerRank Owner a local unsigned build became the
+        # "unidentified developer" of every .kdbx on the Mac — Gatekeeper then blocked Strongbox
+        # from opening a file we had just written. KeePass invented the format; we consume it.
+        # Owner rank is deferred until the shipping binary is notarized (issue #132).
+        UTImportedTypeDeclarations:
           - UTTypeIdentifier: app.passsumo.kdbx
             UTTypeDescription: KeePass Database
             UTTypeConformsTo:
@@ -110,7 +112,7 @@ targets:
         CFBundleDocumentTypes:
           - CFBundleTypeName: KeePass Database
             CFBundleTypeRole: Editor
-            LSHandlerRank: Owner
+            LSHandlerRank: Alternate
             LSItemContentTypes:
               - app.passsumo.kdbx
     settings:

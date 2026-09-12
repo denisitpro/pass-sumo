@@ -45,13 +45,13 @@ Verified against the code at commit `2712fea` (branch `docs/100-feature-inventor
 | Clipboard auto-clear with sensitivity markers | A copied password clears itself off the clipboard after a short interval, and is marked so third-party clipboard managers don't keep a history of it. | `Sources/Security/ClipboardService.swift` |
 | Automatic pre-save backups, with retention and a visible failure state | Every save is backed up first, so a bad save can't be the only copy of your vault — and if a backup ever fails, you're told, instead of it failing silently. | `Sources/Model/VaultBackupStore.swift`, `Sources/UI/StatusBar.swift`, `Sources/App/AppCommands.swift` ("Show Backups in Finder") (issue #26) |
 | Crash-safe save path | A save that's interrupted (crash, forced quit, kill) during encryption or writing can't corrupt the vault or silently lose the edit. | `Sources/Model/VaultStore.swift`, `Sources/Model/VaultFileAccess.swift` — proven by `Sources/DurabilityTests` (issue #22), not part of the routine test run (see `../CLAUDE.md`) |
-| Opens `.kdbx` files from Finder / double-click / `open(1)`, with a save prompt if one is already open | pass-sumo behaves like a normal Mac document-based app for `.kdbx` files. | `Sources/App/DocumentOpenReceiver.swift`, `Sources/App/VaultOpenRouter.swift` (issue #84) |
 | Keyboard-first command surface | Every action (new/open/save, copy username/password, lock, delete, search) has a menu item and a shortcut. | `Sources/App/AppCommands.swift` |
 
 ## Partial
 
 | Feature | Actual state | Source area |
 |---|---|---|
+| Default handler for `.kdbx` in Finder | File ▸ Open, Open With, and a Dock drop still work (`DocumentOpenReceiver`, issue #84). The app no longer claims `LSHandlerRank: Owner` or **exports** the KDBX UTI — a local unsigned build that owned the type made Gatekeeper treat PassSumo-created files as malware when Strongbox opened them (issue #131). Rank is `Alternate`; the UTI is imported. Restoring Owner is issue #132, after notarization. | `Resources/Info.plist`, `project.yml` (`UTImportedTypeDeclarations`, `LSHandlerRank`) |
 | Password strength meter | Shown only when setting or changing the **master password**, at database creation (`WelcomeView`). Not shown next to entry passwords or in the generator's own "Use this on an entry" flow beyond its entropy-bits line. | `Sources/UI/WelcomeView.swift` (`PasswordStrengthMeter`), `Sources/UI/GeneratorSheet.swift` (entropy line only) |
 
 ## Deliberately not doing
