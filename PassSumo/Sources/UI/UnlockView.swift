@@ -53,6 +53,8 @@ struct UnlockView: View {
     /// mints a security-scoped bookmark, which is real (if cheap) file-system work, not something a
     /// view body should redo on every observation-triggered re-render.
     @State private var identifier: VaultKeyIdentifier?
+    /// Cached so `body` does not call `isEnabled` (a keychain query) on every render.
+    @State private var isEnrolled = false
     /// The "Remember with Touch ID" checkbox on the master-password field — see `canOfferEnrollment`
     /// for why a checkbox rather than a post-unlock modal, and why it is not offered on every unlock.
     @State private var rememberWithTouchID = false
@@ -76,8 +78,8 @@ struct UnlockView: View {
         // Under `-ui-testing 1` `environment.biometrics` is backed by a store that reports nothing
         // enrolled for anything (see `AppEnvironment.uiTesting()`), so this is `false` there with no
         // extra check needed.
-        guard BiometricUnlock.isAvailable, let identifier else { return false }
-        return environment.biometrics.isEnabled(for: identifier)
+        guard BiometricUnlock.isAvailable, identifier != nil else { return false }
+        return isEnrolled
     }
 
     /// Whether to show the "Remember with Touch ID" checkbox.
@@ -96,8 +98,8 @@ struct UnlockView: View {
     /// appearing, and `SettingsView` is where the user manages it from then on. Never shown when
     /// `BiometricUnlock.availabilityError()` is non-nil, per the brief.
     private var canOfferEnrollment: Bool {
-        guard BiometricUnlock.availabilityError() == nil, let identifier else { return false }
-        return !environment.biometrics.isEnabled(for: identifier)
+        guard BiometricUnlock.availabilityError() == nil, identifier != nil else { return false }
+        return !isEnrolled
     }
 
     /// Why there is no Touch ID affordance on this screen at all, when that is worth saying.
@@ -307,6 +309,7 @@ struct UnlockView: View {
             // resolved by THIS call, not whatever a re-render might have left in the property.
             let resolved = environment.biometricsIdentifier(for: url)
             identifier = resolved
+            isEnrolled = resolved.map { environment.biometrics.isEnabled(for: $0) } ?? false
             await attemptAutomaticBiometricUnlockIfAllowed(identifier: resolved)
         }
         // The app can be launched, or brought to this screen, while it is not the active app —
@@ -331,7 +334,7 @@ struct UnlockView: View {
     private func attemptAutomaticBiometricUnlockIfAllowed(identifier: VaultKeyIdentifier?) async {
         guard let identifier else { return }
         let conditions = AutomaticBiometricUnlockPolicy.Conditions(
-            isEnrolledForThisVault: environment.biometrics.isEnabled(for: identifier),
+            isEnrolledForThisVault: isEnrolled,
             availabilityError: BiometricUnlock.availabilityError(),
             isWindowActive: appearsActive,
             lastLockReason: environment.autoLock.lastLockReason
