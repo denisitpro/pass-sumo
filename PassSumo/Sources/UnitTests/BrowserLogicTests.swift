@@ -850,4 +850,75 @@ final class BrowserLogicTests: XCTestCase {
         sheet.onRecipeChanged?(updated)
         XCTAssertEqual(settings.generatorRecipe.length, 40)
     }
+
+    /// Issue #149: the typed length field clamps on commit. Non-numeric input reverts to the
+    /// recipe the sheet was constructed with, not to the floor — wiping a 55 down to 4 because
+    /// the user typed "abc" would be the wrong correction.
+    func testGeneratorSheetLengthFieldClampsAndRevertsWithoutRendering() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 55
+        let sheet = GeneratorSheet(
+            generator: PasswordGenerator(),
+            recipe: recipe,
+            clipboard: ClipboardService(pasteboard: FakePasteboard())
+        )
+
+        XCTAssertEqual(sheet.committedLength(fromTyped: "4"), 4)
+        XCTAssertEqual(sheet.committedLength(fromTyped: "256"), 256)
+        XCTAssertEqual(sheet.committedLength(fromTyped: "3"), 4)
+        XCTAssertEqual(sheet.committedLength(fromTyped: "999"), 256)
+        XCTAssertEqual(sheet.committedLength(fromTyped: ""), 4)
+        XCTAssertEqual(sheet.committedLength(fromTyped: "abc"), 55)
+        XCTAssertEqual(sheet.committedLength(fromTyped: "12"), 12)
+    }
+
+    // MARK: - New-entry password (issue #147)
+
+    /// `makeBlankEntry` is the only new-entry path. A known recipe must produce a non-empty
+    /// password of that length; the edit form copies `entry.password` into the field, so setting
+    /// it here is enough.
+    func testMakeBlankEntryPrefillsPasswordFromTheSettingsRecipe() throws {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.length = 32
+
+        let (settings, cleanup) = makeScratchSettings()
+        defer { cleanup() }
+        settings.generatorRecipe = recipe
+
+        let browser = VaultBrowserView(
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
+            settings: settings
+        )
+
+        let entry = browser.makeBlankEntry()
+        XCTAssertFalse(entry.password.isEmpty, "a new entry must start with a generated password")
+        XCTAssertEqual(entry.password.count, 32)
+    }
+
+    /// An impossible recipe must not crash New Entry and must not invent a password. The user
+    /// can still type or hit generate-now on the form.
+    func testMakeBlankEntryLeavesPasswordEmptyWhenTheRecipeIsImpossible() {
+        var recipe = PasswordGenerator.Recipe()
+        recipe.lowercase = false
+        recipe.uppercase = false
+        recipe.digits = false
+        recipe.symbols = false
+
+        let (settings, cleanup) = makeScratchSettings()
+        defer { cleanup() }
+        settings.generatorRecipe = recipe
+
+        let browser = VaultBrowserView(
+            store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
+            settings: settings
+        )
+
+        XCTAssertEqual(browser.makeBlankEntry().password, "")
+    }
 }
