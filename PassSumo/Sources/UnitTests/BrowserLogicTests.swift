@@ -826,7 +826,7 @@ final class BrowserLogicTests: XCTestCase {
         )
     }
 
-    /// Generate-now uses the recipe handed in, not `Recipe()`'s hardcoded 20, and does not need
+    /// Generate-now uses the recipe handed in, not `Recipe()`'s hardcoded 15, and does not need
     /// SwiftUI to be rendered to do it.
     func testGeneratePasswordNowUsesTheInjectedRecipeLength() {
         var recipe = PasswordGenerator.Recipe()

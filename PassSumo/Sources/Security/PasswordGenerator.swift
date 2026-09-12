@@ -89,16 +89,14 @@ struct PasswordGenerator: Sendable {
     /// above every real website field and is cheap to generate (issue #149).
     static let maximumLength = 256
 
-    /// What the user asked for. Defaults are the ones the "generate" button starts from: 20
-    /// characters of everything, ambiguous glyphs excluded, because the overwhelmingly common case
-    /// for this app is a password the user will never read out loud but might have to re-type once
-    /// from a phone screen.
+    /// What the user asked for. Defaults are the ones the "generate" button starts from: 15
+    /// characters of letters and digits, no symbols, ambiguous glyphs excluded (issue #163).
     struct Recipe: Sendable, Equatable {
-        var length: Int = 20
+        var length: Int = 15
         var lowercase: Bool = true
         var uppercase: Bool = true
         var digits: Bool = true
-        var symbols: Bool = true
+        var symbols: Bool = false
         /// Drops `0 O 1 l I` — the five glyphs that are genuinely indistinguishable in most UI
         /// fonts. Deliberately not a longer "looks confusing" list: every extra exclusion is real
         /// entropy given away, and the rest (`5`/`S`, `2`/`Z`) are separable in the fonts macOS
