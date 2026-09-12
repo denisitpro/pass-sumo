@@ -16,9 +16,10 @@ import SwiftUI
 /// two-control pattern). That supersedes issue #106's one-off choice: opening the sheet is no
 /// longer a throwaway generation, it is also the settings UI. This view still never writes
 /// `UserDefaults` itself — the callback is the only persist path, and `AppSettings.generatorRecipe`
-/// already writes on `didSet`. `PasswordGenerator.Recipe()`'s own hardcoded defaults (20 chars,
-/// every class on, ambiguous glyphs excluded — see that type's doc comment) are used only where no
-/// caller-supplied recipe exists at all, e.g. `#Preview`s and pre-#106 test fixtures.
+/// already writes on `didSet`. `PasswordGenerator.Recipe()`'s own hardcoded defaults (15 chars,
+/// letters and digits, no symbols, ambiguous glyphs excluded — see that type's doc comment) are
+/// used only where no caller-supplied recipe exists at all, e.g. `#Preview`s and pre-#106 test
+/// fixtures.
 struct GeneratorSheet: View {
     let generator: PasswordGenerator
     let clipboard: ClipboardService
