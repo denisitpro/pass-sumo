@@ -384,8 +384,18 @@ final class VaultStore {
     /// identical payload is a no-op by construction rather than a second copy. Nothing is ever
     /// removed from `vault.blobs`, which is what keeps a snapshot's attachment resolvable after
     /// the live entry drops it.
-    func upsert(_ entry: VaultEntry, addingBlobs blobs: [VaultBlob] = []) {
-        guard case .unlocked(var vault) = state else { return }
+    ///
+    /// **Titles of live entries must be unique (issue #148).** Compared case-insensitively after
+    /// trim; Recycle Bin namesakes are allowed; an empty title is refused. An imported duplicate
+    /// may be re-saved if its title identity is unchanged — we never rewrite titles on unlock,
+    /// so the only way those rows can exist is another client, and blocking every subsequent
+    /// edit would strand them. Returns the refusal rather than crashing or renaming.
+    @discardableResult
+    func upsert(_ entry: VaultEntry, addingBlobs blobs: [VaultBlob] = []) -> EntryUpsertError? {
+        guard case .unlocked(var vault) = state else { return nil }
+        if let refusal = Self.titleRefusal(for: entry, in: vault) {
+            return refusal
+        }
         let now = Date()
         var stamped = entry
         stamped.modified = now
@@ -416,6 +426,34 @@ final class VaultStore {
         decodedOrigin?.vault = vault
         state = .unlocked(vault)
         markEdited()
+        return nil
+    }
+
+    /// Issue #148. `nil` means the title is acceptable to save.
+    ///
+    /// Uniqueness is a live-entry rule: a namesake in the Recycle Bin does not block a save, and
+    /// a binned entry is not itself required to be unique. Identity is trim-then-case-insensitive,
+    /// so `Bank` / `bank` / ` Bank ` are one title. An entry whose identity is already that title
+    /// may keep it even when another live row shares it (imported duplicates).
+    private static func titleRefusal(for entry: VaultEntry, in vault: Vault) -> EntryUpsertError? {
+        let trimmed = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .emptyTitle }
+
+        if let previous = vault.entries.first(where: { $0.id == entry.id }),
+           titlesCollide(previous.title, entry.title) {
+            return nil
+        }
+        guard !vault.isInRecycleBin(entry) else { return nil }
+        let taken = vault.liveEntries.contains {
+            $0.id != entry.id && titlesCollide($0.title, entry.title)
+        }
+        return taken ? .duplicateTitle : nil
+    }
+
+    private static func titlesCollide(_ a: String, _ b: String) -> Bool {
+        let left = a.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = b.trimmingCharacters(in: .whitespacesAndNewlines)
+        return left.compare(right, options: .caseInsensitive) == .orderedSame
     }
 
     // MARK: - Groups
