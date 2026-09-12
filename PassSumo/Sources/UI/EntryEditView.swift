@@ -97,6 +97,13 @@ struct EntryEditView: View {
     /// `.sheet` hung off a button in a `ScrollView` is a different, less-travelled path.
     @State private var showingIconPicker = false
     @State private var wasLockedWhileEditing = false
+    /// Set when `VaultStore.upsert` refuses the title (empty or a live duplicate, issue #148)
+    /// and shown under the title field. Cleared on the next keystroke and on a successful save.
+    @State private var titleError: String?
+    /// Parent-owned so opening the sheet puts the caret in Title rather than on the icon-picker
+    /// button that happens to be first in `headerRow` (issue #151). `EditLineField`'s own
+    /// `@FocusState` cannot be driven from here — same split as `MasterPasswordField`.
+    @FocusState private var isTitleFocused: Bool
     @FocusState private var isPasswordFocused: Bool
 
     init(
@@ -166,9 +173,6 @@ struct EntryEditView: View {
                     labeled("URL") {
                         EditLineField(placeholder: "URL", text: $url, identifier: "edit.url")
                     }
-                    if !isNew {
-                        labeled("Group") { groupPicker }
-                    }
                     notesBlock
                     customFieldsBlock
                     attachmentsBlock
@@ -185,6 +189,8 @@ struct EntryEditView: View {
         }
         .frame(minWidth: 420, minHeight: 480)
         .background(Palette.surface)
+        .defaultFocus($isTitleFocused, true)
+        .onAppear { isTitleFocused = true }
         .onChange(of: store.state) { _, newState in
             guard case .unlocked = newState else {
                 wasLockedWhileEditing = true
@@ -207,23 +213,37 @@ struct EntryEditView: View {
     /// "Change…" next to a separate Icon label, which is what made this look like a grouped Form
     /// row (issue #129). No favourite star: there is no favourite model.
     private var headerRow: some View {
-        HStack(alignment: .center, spacing: Spacing.s4) {
-            Button {
-                showingIconPicker = true
-            } label: {
-                Image(
-                    systemName: StandardIconCatalog.symbolName(
-                        for: iconID,
-                        fallingBackTo: VaultEntry.defaultIconID
+        VStack(alignment: .leading, spacing: Spacing.s2) {
+            HStack(alignment: .center, spacing: Spacing.s4) {
+                Button {
+                    showingIconPicker = true
+                } label: {
+                    Image(
+                        systemName: StandardIconCatalog.symbolName(
+                            for: iconID,
+                            fallingBackTo: VaultEntry.defaultIconID
+                        )
                     )
-                )
-            }
-            .buttonStyle(.tokenSecondary)
-            .help("Change icon")
-            .accessibilityLabel("Change icon")
-            .accessibilityIdentifier("edit.icon")
+                }
+                .buttonStyle(.tokenSecondary)
+                .help("Change icon")
+                .accessibilityLabel("Change icon")
+                .accessibilityIdentifier("edit.icon")
 
-            EditLineField(placeholder: "Title", text: $title, identifier: "edit.title")
+                EditLineField(
+                    placeholder: "Title",
+                    text: $title,
+                    identifier: "edit.title",
+                    focused: $isTitleFocused
+                )
+                .onChange(of: title) { _, _ in titleError = nil }
+            }
+            if let titleError {
+                Text(titleError)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+                    .accessibilityIdentifier("edit.titleError")
+            }
         }
     }
 
@@ -283,50 +303,12 @@ struct EntryEditView: View {
 
             Spacer()
 
-            Button("Save", action: save)
+            Button("Save") { _ = save() }
                 .buttonStyle(.tokenPrimary)
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(wasLockedWhileEditing)
                 .accessibilityIdentifier("edit.save")
         }
-    }
-
-    /// The folders this entry can be filed in, in the sidebar's own order and each labelled with
-    /// its full path — `GroupTreeBuilder.paths(from:)` does both, so this picker and the sidebar
-    /// can never disagree about the shape of the tree.
-    ///
-    /// **The recycle bin and its contents ARE listed here**, unlike in the sidebar's "Move to"
-    /// menu, which filters them out. That menu relocates a folder the user chose to move; this
-    /// picker also has to be able to show where the entry already is, and an entry sitting in the
-    /// bin whose own group was missing from the list would render as a picker with nothing
-    /// selected — and no way to read, let alone change, where it is.
-    ///
-    /// Read from the store on each body pass rather than snapshotted at init. The sheet is modal,
-    /// so the only thing that can reshape the tree underneath it is a lock — and a lock already
-    /// disables Save and raises the banner, so whatever the picker does from that point on cannot
-    /// reach the vault.
-    private var groupOptions: [GroupPathItem] {
-        guard case .unlocked(let vault) = store.state else { return [] }
-        return GroupTreeBuilder.paths(from: vault.groups)
-    }
-
-    private var groupPicker: some View {
-        // Until this existed an entry could never change folder (issue #88): `groupID` was
-        // seeded from the entry, passed back to `save()` unchanged, and nothing between the
-        // two ever wrote to it.
-        Picker("Group", selection: $groupID) {
-            // `VaultEntry.groupID`'s own "nil == the vault's top level", spelled for a user
-            // rather than left as an absent row — without it there is no way back OUT of a
-            // folder once an entry is in one.
-            Text("No Group").tag(UUID?.none)
-            ForEach(groupOptions) { option in
-                Text(option.path).tag(UUID?.some(option.group.id))
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityIdentifier("edit.group")
     }
 
     private var notesBlock: some View {
@@ -646,8 +628,13 @@ struct EntryEditView: View {
     /// yet. `VaultStore.upsert` still owns `modified` / `historyAdditions` / `passwordLastChanged`
     /// on the way into the store; what this returns to `onSave` is the copy after the form's
     /// assignments, so a test can see exactly what the form produced.
-    func save() {
-        guard !wasLockedWhileEditing else { return }
+    ///
+    /// A refused title (issue #148) stays on this sheet: the inline error is set, `onSave` /
+    /// `onDismiss` are not called, and the vault is untouched. The return is the store's own
+    /// refusal so a unit test can assert without rendering.
+    @discardableResult
+    func save() -> EntryUpsertError? {
+        guard !wasLockedWhileEditing else { return nil }
 
         var fields: [String: VaultFieldValue] = [:]
         // Last-write-wins on a duplicate name rather than crashing: two drafts can legitimately
@@ -670,9 +657,23 @@ struct EntryEditView: View {
         entry.attachments = attachments.map(\.attachment)
         // Only the payloads picked in this session travel with the entry: everything else is
         // already in the vault's pool, and `upsert` ignores a blob it already holds anyway.
-        store.upsert(entry, addingBlobs: attachments.compactMap(\.addedBlob))
+        if let refusal = store.upsert(entry, addingBlobs: attachments.compactMap(\.addedBlob)) {
+            titleError = Self.message(for: refusal)
+            return refusal
+        }
+        titleError = nil
         onSave(entry)
         onDismiss()
+        return nil
+    }
+
+    private static func message(for error: EntryUpsertError) -> String {
+        switch error {
+        case .emptyTitle:
+            return "Title cannot be empty."
+        case .duplicateTitle:
+            return "Another entry already uses this title."
+        }
     }
 
     /// Fills `password` from the current recipe without opening the sheet (issue #129).
@@ -754,7 +755,14 @@ private struct EditLineField: View {
     @Binding var text: String
     var identifier: String
     var monospaced = false
-    @FocusState private var isFocused: Bool
+    /// Parent-owned focus, so the edit sheet can put the caret in Title on open (issue #151).
+    /// When nil, the field keeps its own `@FocusState` — same split as `MasterPasswordField`.
+    var focused: FocusState<Bool>.Binding? = nil
+    @FocusState private var internallyFocused: Bool
+
+    private var activeFocus: FocusState<Bool>.Binding {
+        focused ?? $internallyFocused
+    }
 
     var body: some View {
         TextField(placeholder, text: $text)
@@ -763,8 +771,8 @@ private struct EditLineField: View {
             .foregroundStyle(Palette.text)
             .padding(.horizontal, Spacing.s4)
             .frame(height: Metrics.fieldHeight)
-            .fieldChrome(isFocused: isFocused)
-            .focused($isFocused)
+            .fieldChrome(isFocused: activeFocus.wrappedValue)
+            .focused(activeFocus)
             .accessibilityIdentifier(identifier)
     }
 }

@@ -32,11 +32,13 @@ final class EntryEditSaveTests: XCTestCase {
     private func makeEditor(
         for entry: VaultEntry,
         in store: VaultStore,
-        onSave: @escaping (VaultEntry) -> Void
+        isNew: Bool = false,
+        onSave: @escaping (VaultEntry) -> Void,
+        onDismiss: @escaping () -> Void = {}
     ) -> EntryEditView {
         EntryEditView(
             entry: entry,
-            isNew: false,
+            isNew: isNew,
             store: store,
             // A fake pasteboard (from `SecuritySupportTests`) even though `save()` never copies
             // anything: the form takes a real `ClipboardService`, and a unit test must not be able
@@ -45,7 +47,7 @@ final class EntryEditSaveTests: XCTestCase {
             generator: PasswordGenerator(),
             generatorRecipe: PasswordGenerator.Recipe(),
             onSave: onSave,
-            onDismiss: {}
+            onDismiss: onDismiss
         )
     }
 
@@ -135,5 +137,60 @@ final class EntryEditSaveTests: XCTestCase {
         XCTAssertEqual(handedBack?.created, original.created)
         XCTAssertEqual(handedBack?.iconID, 3)
         XCTAssertEqual(handedBack?.title, "Router")
+    }
+
+    /// Issue #148: a colliding title stays on the sheet. `upsert` owns the rule; this is the
+    /// form's half — no `onSave`, no dismiss, vault unchanged.
+    func testSaveRefusesADuplicateTitleAndDoesNotDismiss() async throws {
+        let existing = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: existing)
+
+        var colliding = existing
+        colliding.id = UUID()
+
+        var saved = false
+        var dismissed = false
+        let editor = makeEditor(
+            for: colliding,
+            in: store,
+            isNew: true,
+            onSave: { _ in saved = true },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertEqual(editor.save(), .duplicateTitle)
+        XCTAssertFalse(saved)
+        XCTAssertFalse(dismissed)
+        guard case .unlocked(let vault) = store.state else {
+            return XCTFail("store is not unlocked: \(store.state)")
+        }
+        XCTAssertEqual(vault.entries.map(\.id), [existing.id])
+    }
+
+    func testSaveRefusesAnEmptyTitleAndDoesNotDismiss() async throws {
+        let existing = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: existing)
+
+        var blank = existing
+        blank.id = UUID()
+        blank.title = ""
+
+        var saved = false
+        var dismissed = false
+        let editor = makeEditor(
+            for: blank,
+            in: store,
+            isNew: true,
+            onSave: { _ in saved = true },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertEqual(editor.save(), .emptyTitle)
+        XCTAssertFalse(saved)
+        XCTAssertFalse(dismissed)
+        guard case .unlocked(let vault) = store.state else {
+            return XCTFail("store is not unlocked: \(store.state)")
+        }
+        XCTAssertEqual(vault.entries.count, 1)
     }
 }

@@ -539,6 +539,18 @@ enum VaultError: Error, Equatable {
     case io(String)
 }
 
+/// Why `VaultStore.upsert` refused an entry (issue #148).
+///
+/// KeePass does not require unique titles, so a file we open may already contain collisions.
+/// We still refuse to SAVE a colliding title of our own. Opening never rewrites titles.
+enum EntryUpsertError: Error, Equatable {
+    /// Title is empty or whitespace-only. That is how two live `Untitled` rows happened.
+    case emptyTitle
+    /// Another live entry (not Recycle Bin) already uses this title, compared
+    /// case-insensitively after trim.
+    case duplicateTitle
+}
+
 // MARK: - Vault convenience lookups
 
 extension Vault {
