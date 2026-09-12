@@ -80,27 +80,32 @@ extension XCUIApplication {
             .firstMatch
     }
 
-    /// Clicks the List CELL that contains `identifier`, not the identifier-bearing leaf.
+    /// Clicks the list **row**, not an ancestor that merely contains it.
     ///
-    /// SwiftUI propagates `.accessibilityIdentifier` onto every `Text`/`Image` inside a row (see
-    /// `byID`), and clicking a leaf often fails to drive `List(selection:)` — the cell is what
-    /// the table's selection machinery actually listens to. Used for `list.entry.*` and
-    /// `sidebar.group.*` / `sidebar.allEntries`. Falls back to `byID` if no cell wraps the
-    /// identifier (some OutlineGroup rows surface as a different AX type depending on macOS).
+    /// SwiftUI copies `.accessibilityIdentifier` onto every `Text`/`Image` inside a row (see
+    /// `byID`). A parent cell wrapping the whole entry list therefore also "contains"
+    /// `list.entry.<uuid>`, and `.containing(identifier).firstMatch` is that ancestor — clicking
+    /// it hits the middle of the column, not the row (issue #134). Used for `list.entry.*` and
+    /// `sidebar.group.*` / `sidebar.allEntries`. Prefers a cell that itself carries the
+    /// identifier; otherwise the leaf. The row's own `.onTapGesture` is what actually writes
+    /// selection on a custom-drawn row (same as the sidebar, issue #129), so a leaf click is
+    /// enough once that gesture is in place. Do not walk `allElementsBoundByIndex` to pick the
+    /// smallest containing cell — that query is how XCUITest hangs this suite.
     func selectRow(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) {
-        let cell = descendants(matching: .cell)
-            .containing(NSPredicate(format: "identifier == %@", identifier))
-            .firstMatch
-        if cell.waitForExistence(timeout: 5) {
-            cell.click()
-            return
-        }
+        let idPredicate = NSPredicate(format: "identifier == %@", identifier)
         let leaf = byID(identifier)
         XCTAssertTrue(
             leaf.waitForExistence(timeout: 5),
             "no row identified by \(identifier)",
             file: file, line: line
         )
+
+        let identifiedCell = descendants(matching: .cell).matching(idPredicate).firstMatch
+        if identifiedCell.exists {
+            identifiedCell.click()
+            return
+        }
+
         leaf.click()
     }
 

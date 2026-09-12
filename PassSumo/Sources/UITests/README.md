@@ -65,10 +65,13 @@ single test.
   (`XCUIApplication.byID`/`.waitForLabel`/`.fieldRowValue` in `UITestSupport.swift`) — never by
   screen position, and never by matching a localized string that isn't also the identifier.
   **Selecting a list or sidebar row uses `selectRow(identifiedBy:)`, not `byID(_:).click()`.**
-  `byID` resolves to a leaf `Text`/`Image` inside the row, and clicking that leaf does not drive
-  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead. **Right-clicking
-  a sidebar row uses the containing cell's `rightClick()` for the same reason** — a leaf's
-  frame can miss the view that owns `.contextMenu`.
+  `byID` resolves to a leaf `Text`/`Image` inside the row. `selectRow` clicks a cell that
+  itself carries the identifier, otherwise that leaf — never
+  `.containing(identifier).firstMatch`, which is a parent cell wrapping the whole list
+  (issue #134). The row's own `.onTapGesture` is what writes `List(selection:)` on a
+  custom-drawn row, matching the sidebar (issue #129). **Right-clicking a sidebar row uses
+  the containing cell's `rightClick()`** — a leaf's frame can miss the view that owns
+  `.contextMenu`.
 - **A plain SwiftUI `Text` puts its string in the accessibility VALUE, not the LABEL, on macOS.**
   Confirmed against the real AX tree captured from this suite's first run on actual hardware
   (issue #6) — every `StaticText` in the dump had an empty `label` and the string in `value`.

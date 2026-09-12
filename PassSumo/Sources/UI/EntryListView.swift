@@ -202,6 +202,12 @@ struct EntryListView: View {
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
+                            // Same reason as `GroupSidebar` (issue #129): a macOS `List` with a
+                            // custom-drawn row does not write `selection` on a pointer click.
+                            // Keyboard and the `Optional` tag still work; the pointer path has to
+                            // set the binding itself. `.onTapGesture` is left-click only, so it
+                            // does not steal the context menu. Issue #134.
+                            .onTapGesture { selectedEntryID = entry.id }
                     }
                 }
                 .listStyle(.plain)
@@ -279,12 +285,11 @@ struct EntryListView: View {
         }
         .entryRowSurface(isSelected: isSelected, showsSeparator: !isLast)
         // The whole row must be hit-testable, not just its text/icon content (an `HStack`'s
-        // `Spacer()` is otherwise a hole in the gesture's hit area), and this must be a
-        // `.simultaneousGesture` rather than a plain `.onTapGesture`/`.gesture`: `List(selection:)`
-        // on macOS already owns a click gesture for row selection, and an exclusive gesture here
-        // would compete with — and can lose to — that built-in one, silently swallowing the double
-        // click instead of ever calling `onOpenEntry`. Verified empirically: a plain
-        // `.onTapGesture(count: 2)` never fired against a real double-click in this List; this does.
+        // `Spacer()` is otherwise a hole in the gesture's hit area). Single-click selection is
+        // owned by the `ForEach` row's `.onTapGesture` (issue #134), matching the sidebar; this
+        // double-tap stays `.simultaneousGesture` so it does not wait on, or replace, that
+        // single tap. A plain `.onTapGesture(count: 2)` never fired against a real double-click
+        // in this List — verified when issue #48 landed.
         .contentShape(Rectangle())
         .simultaneousGesture(
             TapGesture(count: 2).onEnded { onOpenEntry(entry.id) }
