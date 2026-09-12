@@ -45,7 +45,11 @@ private struct CustomFieldDraft: Identifiable {
 /// architecture contract's "never write a plaintext secret" rule, so it would need its own
 /// encrypted holding area), which is a real feature, not a UI tweak.
 struct EntryEditView: View {
-    let originalID: UUID
+    /// The entry this form was opened on. `save()` copies this and assigns only the fields the
+    /// form owns (issue #95), so a modelled field the form does not name cannot be silently
+    /// reset to its default — which is what rebuilding via `VaultEntry(...)` did to `iconID`
+    /// the week it landed (#89).
+    let original: VaultEntry
     let isNew: Bool
     let store: VaultStore
     let clipboard: ClipboardService
@@ -78,11 +82,9 @@ struct EntryEditView: View {
     ///
     /// `@State`, not the `let` it was while the picker did not exist: the form now owns it, so an
     /// icon chosen here is part of the same uncommitted draft as the title beside it, and Cancel
-    /// discards both together. It is seeded from the entry and — like every other field on this
-    /// form — has to be named explicitly in `save()`, which builds a whole new `VaultEntry` and
-    /// silently defaults any field it forgets. See `save()`'s own doc comment.
+    /// discards both together. Seeded from `original` and written back in `save()`; everything
+    /// else on the entry rides through the copy untouched (issue #95).
     @State private var iconID: UInt32
-    @State private var created: Date
 
     @State private var isPasswordVisible = false
     @State private var showingGenerator = false
@@ -104,7 +106,7 @@ struct EntryEditView: View {
         onSave: @escaping (VaultEntry) -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        self.originalID = entry.id
+        self.original = entry
         self.isNew = isNew
         self.store = store
         self.clipboard = clipboard
@@ -126,7 +128,6 @@ struct EntryEditView: View {
         _attachments = State(initialValue: entry.attachments.map { AttachmentDraft(attachment: $0) })
         _groupID = State(initialValue: entry.groupID)
         _iconID = State(initialValue: entry.iconID)
-        _created = State(initialValue: entry.created)
     }
 
     var body: some View {
@@ -538,13 +539,13 @@ struct EntryEditView: View {
 
     /// Not `private`, so `EntryEditSaveTests` can drive the real thing.
     ///
-    /// This method's failure mode is silence: it builds a whole new `VaultEntry` from the fields
-    /// the form owns, so a modelled field it does not name is written back as that field's
-    /// default — no compiler error, no warning, just the user's data quietly replaced on their
-    /// next edit. `iconID` did exactly that between its landing in the model and this line
-    /// (issue #89). The one assertion that catches it has to go through `save()` itself; the
-    /// alternatives (checking the captured property, or an XCUITest) either miss the bug or are
-    /// the focus-stealing suite this project does not run on every change.
+    /// Starts from `original` and assigns only the fields the form owns (issue #95). The previous
+    /// shape — `VaultEntry(...)` with the fields this method happened to name — silently wrote
+    /// every unmentioned modelled field back as its default; `iconID` was the first casualty
+    /// (#89). Copy-then-assign makes that class of bug impossible for fields nobody has added
+    /// yet. `VaultStore.upsert` still owns `modified` / `historyAdditions` / `passwordLastChanged`
+    /// on the way into the store; what this returns to `onSave` is the copy after the form's
+    /// assignments, so a test can see exactly what the form produced.
     func save() {
         guard !wasLockedWhileEditing else { return }
 
@@ -556,25 +557,17 @@ struct EntryEditView: View {
             fields[field.name] = VaultFieldValue(value: field.value, isProtected: field.isProtected)
         }
 
-        let entry = VaultEntry(
-            id: originalID,
-            groupID: groupID,
-            title: title,
-            username: username,
-            password: password,
-            url: url,
-            notes: notes,
-            otpAuthURL: otpAuthURLText.isEmpty ? nil : otpAuthURLText,
-            customFields: fields,
-            // Named, not defaulted — see the `iconID` property. A new entry's starts at the
-            // default, because that is what the blank entry this form was opened on carries.
-            iconID: iconID,
-            attachments: attachments.map(\.attachment),
-            created: created,
-            // `VaultStore.upsert` stamps its own `modified` to `Date()` regardless of what's
-            // passed here — this value only needs to be a valid placeholder, never the real one.
-            modified: created
-        )
+        var entry = original
+        entry.groupID = groupID
+        entry.title = title
+        entry.username = username
+        entry.password = password
+        entry.url = url
+        entry.notes = notes
+        entry.otpAuthURL = otpAuthURLText.isEmpty ? nil : otpAuthURLText
+        entry.customFields = fields
+        entry.iconID = iconID
+        entry.attachments = attachments.map(\.attachment)
         // Only the payloads picked in this session travel with the entry: everything else is
         // already in the vault's pool, and `upsert` ignores a blob it already holds anyway.
         store.upsert(entry, addingBlobs: attachments.compactMap(\.addedBlob))

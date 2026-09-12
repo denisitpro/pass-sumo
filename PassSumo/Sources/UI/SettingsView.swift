@@ -14,7 +14,8 @@ import SwiftUI
 ///
 /// `defaults` is injected (default `.standard`) so `AppShellTests` can round-trip this type through
 /// a scratch `UserDefaults(suiteName:)` instead of ever touching the app's real preferences —
-/// `AppEnvironment.live()`/`uiTesting()` both pass `.standard` for the real thing.
+/// `AppEnvironment.live()` passes `.standard`; `uiTesting()` uses its own throwaway suite so an
+/// e2e run cannot inherit a hidden inspector or a leftover generator recipe from `make local`.
 @MainActor
 @Observable
 final class AppSettings {

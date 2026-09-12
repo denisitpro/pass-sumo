@@ -80,6 +80,30 @@ extension XCUIApplication {
             .firstMatch
     }
 
+    /// Clicks the List CELL that contains `identifier`, not the identifier-bearing leaf.
+    ///
+    /// SwiftUI propagates `.accessibilityIdentifier` onto every `Text`/`Image` inside a row (see
+    /// `byID`), and clicking a leaf often fails to drive `List(selection:)` — the cell is what
+    /// the table's selection machinery actually listens to. Used for `list.entry.*` and
+    /// `sidebar.group.*` / `sidebar.allEntries`. Falls back to `byID` if no cell wraps the
+    /// identifier (some OutlineGroup rows surface as a different AX type depending on macOS).
+    func selectRow(identifiedBy identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+        let cell = descendants(matching: .cell)
+            .containing(NSPredicate(format: "identifier == %@", identifier))
+            .firstMatch
+        if cell.waitForExistence(timeout: 5) {
+            cell.click()
+            return
+        }
+        let leaf = byID(identifier)
+        XCTAssertTrue(
+            leaf.waitForExistence(timeout: 5),
+            "no row identified by \(identifier)",
+            file: file, line: line
+        )
+        leaf.click()
+    }
+
     /// True once some element with accessibility LABEL *or* VALUE `text` exists anywhere in the
     /// app — the generic way to check for a plain `Text`/`Label` that has no identifier of its own
     /// (`ContentUnavailableView`'s title, an inline error message, …).
@@ -156,16 +180,29 @@ extension XCUIElement {
         (value as? String) ?? ""
     }
 
-    /// Clicks into the field, selects everything already there and deletes it, then types `text`
-    /// — the reliable way to REPLACE a text/search field's contents rather than append to
-    /// whatever a previous interaction in the same launch left in it.
+    /// Clicks into the field, selects everything already there, then types `text` — the reliable
+    /// way to REPLACE a text/search field's contents rather than append to whatever a previous
+    /// interaction in the same launch left in it.
+    ///
+    /// Waits until the field is hittable first: `waitForExistence` is true for an overflowed
+    /// toolbar item, and synthesizing a click against one times out (issue #6).
+    ///
+    /// Clearing uses `.forwardDelete` after Select All, never bare Backspace: AppKit consults
+    /// menu key equivalents before the responder chain, and Delete Entry is bound to bare ⌫
+    /// (issue #9), so a Backspace here can destroy the selected entry instead of a character.
     func replaceText(_ text: String) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: self
+        )
+        _ = XCTWaiter().wait(for: [hittable], timeout: 5)
         click()
-        if let current = value as? String, !current.isEmpty {
-            typeKey("a", modifierFlags: .command)
-            typeKey(.delete, modifierFlags: [])
+        typeKey("a", modifierFlags: .command)
+        if text.isEmpty {
+            typeKey(.forwardDelete, modifierFlags: [])
+        } else {
+            typeText(text)
         }
-        typeText(text)
     }
 }
 
@@ -185,6 +222,10 @@ func launchUITestingApp(
 ) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments += ["-ui-testing", "1"]
+    // Don't restore a previous window frame: a too-narrow restore hides the inspector
+    // (min 400pt) and overflows the search field into the toolbar menu, which is how
+    // `typeText` timed out synthesizing a click on issue #6's first real run.
+    app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
     app.launch()
     testCase.addTeardownBlock { app.terminate() }
 

@@ -6,7 +6,7 @@ final class EntryEditTests: XCTestCase {
         let app = launchUITestingApp(self)
         let newTitle = "iCloud (Renamed for e2e)"
 
-        app.byID("list.entry.\(SampleVault.iCloudID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.iCloudID)")
         app.byID("detail.edit").click()
 
         let titleField = app.byID("edit.title")
@@ -48,7 +48,7 @@ final class EntryEditTests: XCTestCase {
         let app = launchUITestingApp(self)
         let attemptedTitle = "This Edit Should Never Stick"
 
-        app.byID("list.entry.\(SampleVault.outlookID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.outlookID)")
         app.byID("detail.edit").click()
 
         let titleField = app.byID("edit.title")
@@ -63,7 +63,7 @@ final class EntryEditTests: XCTestCase {
     func testDeletingAnEntryRemovesItFromTheList() {
         let app = launchUITestingApp(self)
 
-        app.byID("list.entry.\(SampleVault.yahooMailID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.yahooMailID)")
         app.byID("browser.deleteEntry").click()
 
         XCTAssertFalse(app.byID("list.entry.\(SampleVault.yahooMailID)").waitForExistence(timeout: 3))
@@ -77,7 +77,7 @@ final class EntryEditTests: XCTestCase {
     func testReturnKeyOnASelectedEntryOpensTheEditSheet() {
         let app = launchUITestingApp(self)
 
-        app.byID("list.entry.\(SampleVault.gmailPersonalID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
         app.typeText("\r")
 
         XCTAssertTrue(app.byID("edit.save").waitForExistence(timeout: 5))
