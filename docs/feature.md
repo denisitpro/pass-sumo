@@ -1,6 +1,6 @@
 # Feature inventory
 
-> Status: living · Last verified: 2026-09-10 · [AI - claude-sonnet-5]
+> Status: living · Last verified: 2026-09-12 · [AI - grok-4.6]
 
 This is the single inventory of what pass-sumo actually does, kept in one place so it serves two
 different readers without being written twice:
@@ -36,8 +36,8 @@ Verified against the code at commit `2712fea` (branch `docs/100-feature-inventor
 | Recycle Bin (soft delete, permanent delete, empty) | Deleting an entry doesn't lose it outright — it goes to a bin you can still recover from, until you empty it. | `Sources/Model/VaultStore.swift`, `Sources/Model/Domain.swift` (`Vault.moveToRecycleBin`) |
 | File attachments (add, view, export, remove) | Attach a file to an entry — a recovery-code PDF, a certificate — and get it back out later. | `Sources/KDBX/KDBXAttachments.swift`, `Sources/UI/EntryDetailView.swift`, `Sources/UI/EntryEditView.swift` |
 | Custom fields, with per-field protection | Add your own fields to an entry (a PIN, a security answer), and choose per field whether it's masked/encrypted like a password. | `Sources/KDBX/KDBXFieldKeys.swift`, `Sources/UI/EntryEditView.swift` |
-| Password generator with live entropy display | Generate a strong password with the character classes you want, and see its strength in bits before you use it. | `Sources/Security/PasswordGenerator.swift`, `Sources/UI/GeneratorSheet.swift` |
-| TOTP (one-time codes) for entries with an `otpauth://` secret | See an entry's current two-factor code next to its password, refreshed every second, no separate authenticator app. | `Sources/Security/TOTPGenerator.swift`, `Sources/KDBX/KDBXTOTP.swift`, `Sources/UI/TOTPView.swift` |
+| Password generator with a saved default recipe | Generate a strong password from the recipe in Settings — generate-now uses it immediately, the gear opens the same controls to change it, and a tweak there is saved for next time. | `Sources/Security/PasswordGenerator.swift`, `Sources/UI/GeneratorSheet.swift`, `Sources/UI/EntryEditView.swift`, `AppSettings.generatorRecipe` in `Sources/UI/SettingsView.swift` |
+| TOTP (one-time codes) | See an entry's current two-factor code next to its password, refreshed every second, no separate authenticator app. Stored as KeePassXC's `otp` field holding an `otpauth://totp/...` URI (or a bare base32 secret the parser also accepts), so other clients round-trip — that storage fact is for the feature page / FAQ; the edit field itself asks for an authenticator secret, not the jargon. | `Sources/Security/TOTPGenerator.swift`, `Sources/KDBX/KDBXTOTP.swift`, `Sources/UI/TOTPView.swift`, `Sources/UI/EntryEditView.swift` |
 | "Password last changed" derived from entry history | See at a glance how old a saved password actually is, not just when the entry was last touched. | `Sources/KDBX/KDBXPasswordHistory.swift` (issue #33) |
 | Built-in KDBX icon set rendered as SF Symbols | Entries and folders show a recognizable icon, matching what the file's icon index means in any other KeePass client. | `Sources/Icons/StandardIconCatalog.swift`, `Sources/UI/IconPickerSheet.swift` (issue #89) |
 | Touch ID unlock, opt-in | Unlock with your fingerprint instead of typing the master password every time, once you turn it on. | `Sources/Security/BiometricUnlock.swift`, `Sources/Security/AutomaticBiometricUnlockPolicy.swift`, `Sources/UI/UnlockView.swift`, `Sources/UI/SettingsView.swift` |
@@ -52,7 +52,6 @@ Verified against the code at commit `2712fea` (branch `docs/100-feature-inventor
 
 | Feature | Actual state | Source area |
 |---|---|---|
-| Password generator default recipe (Settings) | Settings has a working "Password Generator" section — length and character classes — that persists to `UserDefaults` and round-trips correctly through `AppSettings.generatorRecipe`. But neither place that opens the generator sheet (`EntryEditView`'s "Generate" button, `VaultBrowserView`'s toolbar) passes that recipe in — both construct `GeneratorSheet` with no `recipe:` argument, so every generated password starts from `PasswordGenerator.Recipe`'s hardcoded default (20 characters, every class on) regardless of what's saved in Settings. The setting is fully built and stored; it just isn't read by the one thing it's meant to configure. | `Sources/UI/SettingsView.swift` (`generatorRecipe`), `Sources/UI/GeneratorSheet.swift`, call sites in `Sources/UI/EntryEditView.swift:242` and `Sources/UI/VaultBrowserView.swift:491` |
 | Password strength meter | Shown only when setting or changing the **master password**, at database creation (`WelcomeView`). Not shown next to entry passwords or in the generator's own "Use this on an entry" flow beyond its entropy-bits line. | `Sources/UI/WelcomeView.swift` (`PasswordStrengthMeter`), `Sources/UI/GeneratorSheet.swift` (entropy line only) |
 
 ## Deliberately not doing

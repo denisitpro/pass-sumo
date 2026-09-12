@@ -42,8 +42,8 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
 - `SecretHandlingTests.swift` — password concealment/reveal, Copy Password → pasteboard, locking.
   The suite's most important file: a regression here is a real secret showing up somewhere it
   shouldn't, not just a broken UI flow.
-- `GeneratorTests.swift` — the password generator sheet: length/entropy, "Use" fills the edit
-  form's password field.
+- `GeneratorTests.swift` — generate-now fills the edit form's password field; the generator
+  sheet (opened from `edit.generatorSettings`) covers length/entropy and "Use".
 - `UITestSupport.swift` — shared launch helper, element lookup helpers, and `SampleVault` (hand-
   copied `Vault.sample` values these tests assert against — see its own doc comment on why this
   can't just `@testable import PassSumo` and reuse the real fixture).
@@ -91,7 +91,8 @@ work around by adding identifiers itself:
 
 - `VaultBrowserView`'s standalone toolbar "Generator" button — only reachable by its ⌘⇧G keyboard
   shortcut in a test, not by id. `GeneratorTests` sidesteps this by opening the (identical)
-  generator sheet through `EntryEditView`'s "Generate…" button (`edit.generate`) instead.
+  generator sheet through `EntryEditView`'s settings gear (`edit.generatorSettings`) instead.
+  `edit.generate` is generate-now: it fills the password field and does not present the sheet.
 
 **Closed since this list was written:**
 
@@ -99,7 +100,7 @@ work around by adding identifiers itself:
   mirroring `detail.revealPassword` in `EntryDetailView`. Closed by issue #6: `edit.password`'s
   accessibility value is a run of bullet characters while concealed (a `SecureField`), so reading
   the REAL generated value back — what
-  `GeneratorTests.testUsePutsTheGeneratedValueIntoTheEditFormsPasswordField` needs — requires
+  `GeneratorTests.testGenerateNowFillsThePasswordFieldFromTheCurrentRecipe` needs — requires
   revealing it first, and there was previously no id to click to do that.
 - The search field. It used to be `.searchable`'s, whose toolbar item did not inherit the
   `"browser.search"` identifier set on the content column, so tests reached it through
