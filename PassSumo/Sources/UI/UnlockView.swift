@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// What to do after a Touch ID unlock attempt fails. Pulled out of the view body as a pure,
-/// `@testable`-reachable function rather than left inline, specifically so the one case that must
-/// self-heal is unit-testable without XCTest driving real SwiftUI (see
-/// `SecurityBiometricUnlockTests`).
+/// Decisions the unlock screen makes after a Touch ID attempt fails. Pulled out of the view body
+/// as pure, `@testable`-reachable functions rather than left inline, specifically so they are
+/// unit-testable without XCTest driving real SwiftUI (see `SecurityBiometricUnlockTests`). This
+/// Mac has no Touch ID sensor; a rule buried in the view is a rule nothing here can check.
 enum BiometricUnlockRecovery {
     /// `.invalidatedByBiometryChange` is the one case that must actively clean up. The stored
     /// keychain item is unusable and will STAY unusable — `.biometryCurrentSet` invalidates an
@@ -15,6 +15,13 @@ enum BiometricUnlockRecovery {
     /// else clears anything.
     static func shouldClearEnrollment(after error: BiometricUnlockError) -> Bool {
         error == .invalidatedByBiometryChange
+    }
+
+    /// Cancelling is not a failure — the user is asking to type the master password instead — so
+    /// `.userCancelled` produces no red line. Every other case keeps the sentence
+    /// `BiometricUnlockError.userMessage` already owns.
+    static func visibleMessage(after error: BiometricUnlockError) -> String? {
+        error == .userCancelled ? nil : error.userMessage
     }
 }
 
@@ -49,6 +56,9 @@ struct UnlockView: View {
     /// The "Remember with Touch ID" checkbox on the master-password field — see `canOfferEnrollment`
     /// for why a checkbox rather than a post-unlock modal, and why it is not offered on every unlock.
     @State private var rememberWithTouchID = false
+    /// Parent-owned so a cancelled (or otherwise failed) Touch ID sheet can put the caret back in
+    /// the master-password field. The field's own `@FocusState` cannot be driven from here.
+    @FocusState private var passwordFieldFocused: Bool
 
     /// Read once per screen, the same way `SettingsView` reads it (issue #51's `AppVersionInfo` is
     /// the one accessor onto `Bundle.main`'s git-stamped keys) — never a second, hardcoded literal.
@@ -192,7 +202,8 @@ struct UnlockView: View {
                     text: $password,
                     isDisabled: isUnlocking,
                     fieldIdentifier: "unlock.password",
-                    revealIdentifier: "unlock.password.reveal"
+                    revealIdentifier: "unlock.password.reveal",
+                    focused: $passwordFieldFocused
                 )
 
                 // The one accent-filled action on this screen — everything else here is quiet by
@@ -384,13 +395,13 @@ struct UnlockView: View {
         biometricFailure = nil
         do {
             let secret = try environment.biometrics.unlock(identifier, reason: "Unlock \(url.lastPathComponent)")
-            guard let revealed = secret.revealedString() else {
+            if let revealed = secret.revealedString() {
+                await environment.store.open(url: url, credentials: VaultCredentials(password: revealed, keyFile: nil))
+            } else {
                 biometricFailure = "The stored password isn't valid text. Enter it manually instead."
-                return
             }
-            await environment.store.open(url: url, credentials: VaultCredentials(password: revealed, keyFile: nil))
         } catch let error as BiometricUnlockError {
-            biometricFailure = error.userMessage
+            biometricFailure = BiometricUnlockRecovery.visibleMessage(after: error)
             // `.invalidatedByBiometryChange` is *expected* (the Mac's enrolled fingerprints
             // changed) and must lead back to the master password field with enrollment re-offered,
             // not read like a bug — see `BiometricUnlockRecovery`'s doc comment. The stale item is
@@ -405,6 +416,11 @@ struct UnlockView: View {
         } catch {
             biometricFailure = error.localizedDescription
         }
+        // The system sheet stole key-window status. If the vault is still locked, put the caret
+        // back in the master-password field so cancel (and any other failure) lands on typing
+        // rather than a dead screen.
+        if case .unlocked = environment.store.state { return }
+        passwordFieldFocused = true
     }
 }
 

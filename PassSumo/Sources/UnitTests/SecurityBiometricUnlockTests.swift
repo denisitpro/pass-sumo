@@ -141,6 +141,38 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
     }
 
+    /// Cancelling the system sheet is a request to type, not a failure. A red
+    /// "Touch ID was cancelled." line reads as the opposite.
+    func testCancellingTouchIDShowsNoVisibleError() {
+        XCTAssertNil(BiometricUnlockRecovery.visibleMessage(after: .userCancelled))
+        XCTAssertFalse(BiometricUnlockRecovery.shouldClearEnrollment(after: .userCancelled))
+    }
+
+    func testAuthenticationFailureKeepsItsUserMessage() {
+        XCTAssertEqual(
+            BiometricUnlockRecovery.visibleMessage(after: .authenticationFailed),
+            BiometricUnlockError.authenticationFailed.userMessage
+        )
+    }
+
+    /// Every non-cancel error still surfaces its existing sentence — silence is only for
+    /// `.userCancelled`. Enrollment-clearing stays independent of that visibility decision.
+    func testEveryNonCancelErrorRemainsVisible() {
+        let others: [BiometricUnlockError] = [
+            .biometricsUnavailable, .biometricsNotEnrolled, .biometricsLockedOut,
+            .authenticationFailed, .notEnrolledForThisVault, .invalidatedByBiometryChange,
+            .keychain(errSecItemNotFound)
+        ]
+        for error in others {
+            XCTAssertEqual(
+                BiometricUnlockRecovery.visibleMessage(after: error),
+                error.userMessage,
+                "\(error) must still show its userMessage"
+            )
+        }
+        XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
+    }
+
     func testUnlockPropagatesStoreErrors() throws {
         let store = FakeSecretStore()
         let unlock = BiometricUnlock(store: store)
