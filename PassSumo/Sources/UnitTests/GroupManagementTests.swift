@@ -339,6 +339,107 @@ final class GroupManagementTests: XCTestCase {
         XCTAssertTrue(store.isDirty)
     }
 
+    // MARK: - Entry moves (issue #142)
+
+    func testMoveEntryFilesTheEntryUnderTheDestinationGroup() {
+        var tree = makeTree()
+        let archive = VaultGroup(id: UUID(), parentID: nil, name: "Archive")
+        tree.vault.groups.append(archive)
+
+        XCTAssertTrue(tree.vault.moveEntry(tree.buried, toGroup: archive.id))
+        XCTAssertEqual(tree.vault.entries.first { $0.id == tree.buried }?.groupID, archive.id)
+        XCTAssertEqual(tree.vault.entries(inSubtreeOf: tree.work).count, 0)
+        XCTAssertEqual(tree.vault.entries(inSubtreeOf: archive.id).map(\.id), [tree.buried])
+    }
+
+    func testMoveEntryToNilFilesAtTheVaultTopLevel() {
+        var tree = makeTree()
+
+        XCTAssertTrue(tree.vault.moveEntry(tree.buried, toGroup: nil))
+        XCTAssertNil(tree.vault.entries.first { $0.id == tree.buried }?.groupID)
+        XCTAssertEqual(tree.vault.entries(inGroup: nil).map(\.id), [tree.buried])
+        XCTAssertEqual(tree.vault.entries(inSubtreeOf: tree.acme).count, 0)
+    }
+
+    func testMoveEntryOntoTheRecycleBinRecyclesRatherThanReparenting() throws {
+        var tree = makeTree()
+        let decoy = makeEntry(title: "Decoy")
+        tree.vault.entries.append(decoy)
+        XCTAssertTrue(tree.vault.moveToRecycleBin(entryID: decoy.id))
+        let binID = try XCTUnwrap(tree.vault.recycleBin.groupID)
+
+        XCTAssertTrue(tree.vault.moveEntry(tree.buried, toGroup: binID))
+        let moved = try XCTUnwrap(tree.vault.entries.first { $0.id == tree.buried })
+        XCTAssertEqual(moved.groupID, binID)
+        XCTAssertTrue(tree.vault.isInRecycleBin(moved))
+        XCTAssertEqual(tree.vault.entries(inSubtreeOf: tree.work).count, 0)
+    }
+
+    func testMoveEntryOntoAFolderInsideTheBinAlsoRecycles() throws {
+        var tree = makeTree()
+        let live = makeEntry(title: "Live", groupID: tree.work)
+        tree.vault.entries.append(live)
+        XCTAssertTrue(tree.vault.moveToRecycleBin(groupID: tree.acme))
+
+        XCTAssertTrue(tree.vault.moveEntry(live.id, toGroup: tree.acme))
+        let moved = try XCTUnwrap(tree.vault.entries.first { $0.id == live.id })
+        XCTAssertEqual(
+            moved.groupID,
+            tree.vault.recycleBin.groupID,
+            "drop on a folder in the bin is a recycle into the bin itself, not a silent re-parent"
+        )
+        XCTAssertTrue(tree.vault.isInRecycleBin(moved))
+    }
+
+    func testMoveEntryRefusesAnUnknownEntryOrUnknownGroup() {
+        var tree = makeTree()
+
+        XCTAssertFalse(tree.vault.moveEntry(UUID(), toGroup: tree.work))
+        XCTAssertFalse(tree.vault.moveEntry(tree.buried, toGroup: UUID()))
+        XCTAssertEqual(tree.vault.entries.first { $0.id == tree.buried }?.groupID, tree.acme)
+    }
+
+    func testMoveEntryToWhereItAlreadyIsChangesNothing() {
+        var tree = makeTree()
+
+        XCTAssertFalse(tree.vault.moveEntry(tree.buried, toGroup: tree.acme))
+        XCTAssertEqual(tree.vault.entries.first { $0.id == tree.buried }?.groupID, tree.acme)
+    }
+
+    func testStoreMoveEntryGoesThroughTheStoreAndMarksDirty() async throws {
+        let tree = makeTree()
+        let archive = VaultGroup(id: UUID(), parentID: nil, name: "Archive")
+        var vault = tree.vault
+        vault.groups.append(archive)
+        let store = await makeStore(vault)
+
+        XCTAssertTrue(store.moveEntry(tree.buried, toGroup: archive.id))
+        XCTAssertEqual(
+            try unlockedVault(of: store).entries.first { $0.id == tree.buried }?.groupID,
+            archive.id
+        )
+        XCTAssertTrue(store.isDirty)
+
+        await store.save()
+        XCTAssertFalse(store.moveEntry(tree.buried, toGroup: archive.id), "already there is not an edit")
+        XCTAssertFalse(store.isDirty)
+    }
+
+    func testStoreMoveEntryOntoTheBinRecycles() async throws {
+        let tree = makeTree()
+        let store = await makeStore(tree.vault)
+        store.delete(entryID: tree.buried)
+        let binID = try XCTUnwrap(try unlockedVault(of: store).recycleBin.groupID)
+
+        let live = makeEntry(title: "Still Live", groupID: tree.work)
+        // Re-open path: upsert through the store so the vault it holds is the one we drop onto.
+        store.upsert(live)
+        XCTAssertTrue(store.moveEntry(live.id, toGroup: binID))
+        let moved = try XCTUnwrap(try unlockedVault(of: store).entries.first { $0.id == live.id })
+        XCTAssertEqual(moved.groupID, binID)
+        XCTAssertTrue(try unlockedVault(of: store).isInRecycleBin(moved))
+    }
+
     // MARK: - VaultStore: the deletion policy
 
     func testStorePlansAFirstFolderDeleteAsRecycledAndASecondAsPermanent() async throws {

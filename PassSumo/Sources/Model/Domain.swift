@@ -561,23 +561,21 @@ extension Vault {
         entries.filter { $0.groupID == groupID }
     }
 
-    /// `groupID` and every nested folder under it. Used by the sidebar count and the list
-    /// filter (issue #143) so selecting a parent is not an empty column.
+    /// `groupID` and every nested folder under it. Delegates to `groupSubtreeIDs` so the sidebar
+    /// count, the list filter, and the recycle-bin walk share one cycle-safe expansion (issue #143).
     func subtreeGroupIDs(of groupID: UUID) -> Set<UUID> {
-        var result: Set<UUID> = [groupID]
-        var queue = [groupID]
-        while let current = queue.popLast() {
-            for child in groups where child.parentID == current {
-                if result.insert(child.id).inserted {
-                    queue.append(child.id)
-                }
-            }
-        }
-        return result
+        groupSubtreeIDs(of: groupID)
     }
 
+    /// Live entries filed in `groupID` or any nested folder. Recycle-bin groups are excluded
+    /// unless `groupID` itself is inside the bin — the same rule `EntryListFilter` applies, so the
+    /// sidebar count equals the list that selecting this folder actually reveals.
     func entries(inSubtreeOf groupID: UUID) -> [VaultEntry] {
-        let ids = subtreeGroupIDs(of: groupID)
+        var ids = groupSubtreeIDs(of: groupID)
+        let binIDs = recycleBinGroupIDs
+        if !binIDs.contains(groupID) {
+            ids.subtract(binIDs)
+        }
         return entries.filter { entry in
             guard let gid = entry.groupID else { return false }
             return ids.contains(gid)
@@ -666,6 +664,32 @@ extension Vault {
               groups[index].parentID != newParentID
         else { return false }
         groups[index].parentID = newParentID
+        return true
+    }
+
+    /// Files `entryID` under `groupID` (`nil` = the vault's top level). Dropping onto the recycle
+    /// bin — or any folder already in it — is a recycle (`moveToRecycleBin`), not a silent
+    /// re-parent: the same path ⌫ uses, so a drop into the bin is undoable the same way a delete
+    /// is (issue #142).
+    ///
+    /// Returns `false` when nothing moved: no such entry, `groupID` names a folder this vault
+    /// does not have, the entry is already in that folder, or a recycle was refused (bin off, or
+    /// the entry is already in the bin).
+    @discardableResult
+    mutating func moveEntry(_ entryID: UUID, toGroup groupID: UUID?) -> Bool {
+        guard entries.contains(where: { $0.id == entryID }) else { return false }
+
+        if let groupID {
+            guard groups.contains(where: { $0.id == groupID }) else { return false }
+            if recycleBinGroupIDs.contains(groupID) {
+                return moveToRecycleBin(entryID: entryID)
+            }
+        }
+
+        guard let index = entries.firstIndex(where: { $0.id == entryID }),
+              entries[index].groupID != groupID
+        else { return false }
+        entries[index].groupID = groupID
         return true
     }
 }
