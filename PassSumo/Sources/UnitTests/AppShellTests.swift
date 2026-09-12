@@ -298,4 +298,30 @@ final class AppShellTests: XCTestCase {
 
         XCTAssertNil(AppCommands(environment: environment).selectedEntryTOTPGenerator)
     }
+
+    // MARK: - Document type (issue #131)
+
+    /// Gatekeeper treated PassSumo-created `.kdbx` files as malware when Strongbox opened them,
+    /// because this bundle *exported* the UTI (claiming to define the type) and ranked itself
+    /// Owner. The regression is exactly those two keys.
+    func testKDBXTypeIsImportedAtAlternateRank() {
+        let info = Bundle.main.infoDictionary
+        XCTAssertNil(
+            info?["UTExportedTypeDeclarations"],
+            "exporting the UTI claims we invented KDBX; that is what made Gatekeeper block Strongbox"
+        )
+
+        let imported = info?["UTImportedTypeDeclarations"] as? [[String: Any]]
+        XCTAssertEqual(
+            imported?.first?["UTTypeIdentifier"] as? String,
+            "app.passsumo.kdbx"
+        )
+
+        let types = info?["CFBundleDocumentTypes"] as? [[String: Any]]
+        XCTAssertEqual(
+            types?.first?["LSHandlerRank"] as? String,
+            "Alternate",
+            "Owner is deferred to issue #132, after the shipping binary is notarized"
+        )
+    }
 }

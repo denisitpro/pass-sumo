@@ -4,8 +4,9 @@ import SwiftUI
 @main
 struct PassSumoApp: App {
     /// Installs `DocumentOpenReceiver` as the app delegate, which is what finally gives the app
-    /// somewhere to receive the Launch Services open requests it has been advertising for
-    /// (`LSHandlerRank: Owner` on `app.passsumo.kdbx`) and dropping on the floor — issue #84.
+    /// somewhere to receive the Launch Services open requests it advertises
+    /// (`LSHandlerRank: Alternate` on imported `app.passsumo.kdbx` — issue #131; Owner is
+    /// deferred to #132) and used to drop on the floor — issue #84.
     @NSApplicationDelegateAdaptor(DocumentOpenReceiver.self) private var openReceiver
 
     // Launch argument contract with Sources/UITests: `-ui-testing 1` sets the `ui-testing` default,

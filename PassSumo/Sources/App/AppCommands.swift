@@ -193,11 +193,12 @@ struct AppCommands: Commands {
     /// "Open Database…" is no longer scoped to "nothing open yet" (issue #84).
     ///
     /// It used to be, on the grounds that `VaultStore` holds one vault and had no "replace the open
-    /// one" flow — but the app also declares itself the Launch Services owner of `.kdbx`, so the
-    /// system hands it that exact request whether or not a menu item was enabled for it. There is
-    /// now a replace-the-open-one flow (`VaultOpenRouter`, including the Save/Discard/Cancel prompt
-    /// the old comment said this shell did not implement), and the menu goes through the same one,
-    /// so greying the item out would only hide a capability the app already has.
+    /// one" flow — but Launch Services can still hand us a `.kdbx` (Open With, a Dock drop; we are
+    /// `Alternate`, not Owner — issue #131), so the system can make that request whether or not a
+    /// menu item was enabled for it. There is now a replace-the-open-one flow (`VaultOpenRouter`,
+    /// including the Save/Discard/Cancel prompt the old comment said this shell did not implement),
+    /// and the menu goes through the same one, so greying the item out would only hide a capability
+    /// the app already has.
     ///
     /// Still disabled mid-unlock: `VaultOpenRouter` drops a request that arrives while Argon2 is
     /// running (see `Decision.ignore`), and a menu item that is enabled but provably does nothing
