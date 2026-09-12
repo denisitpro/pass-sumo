@@ -143,7 +143,7 @@ final class AppShellTests: XCTestCase {
         // bridge), so this check had to consult that bridge separately. `VaultStore.select(url:)`
         // now lands in `.locked` immediately, which is what makes the single state check correct.
         let environment = AppEnvironment.uiTesting()
-        environment.store.select(url: URL(fileURLWithPath: "/tmp/example.kdbx"))
+        environment.openRouter.requestOpen(URL(fileURLWithPath: "/tmp/example.kdbx"))
         XCTAssertFalse(AppCommands(environment: environment).canCreateNewDatabase)
     }
 
@@ -153,7 +153,7 @@ final class AppShellTests: XCTestCase {
         // was enabled. Greying it out only hid a capability `VaultOpenRouter` now provides.
         let picked = AppEnvironment.uiTesting()
         XCTAssertTrue(AppCommands(environment: picked).canOpenDatabase)
-        picked.store.select(url: URL(fileURLWithPath: "/tmp/example.kdbx"))
+        picked.openRouter.requestOpen(URL(fileURLWithPath: "/tmp/example.kdbx"))
         XCTAssertTrue(AppCommands(environment: picked).canOpenDatabase)
 
         // A separate environment for the unlocked case: `loadUITestingFixture()` only runs from

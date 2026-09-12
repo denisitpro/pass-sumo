@@ -2,12 +2,13 @@ import Foundation
 import Observation
 
 /// The composition root: the one place that constructs every long-lived collaborator and decides
-/// which concrete types back them. No view, and no other file in `Sources/App`, ever constructs a
-/// `VaultStore`, a codec, or a `VaultFileAccess` itself — they all receive this object (or values
-/// read off it) instead. That is Dependency Inversion applied one level up from `VaultStore` itself:
-/// the store already refuses to construct its own codec/file-access (see its doc comment), and this
-/// type is what stops that decision from being re-made — differently, and inconsistently — at every
-/// call site above it.
+/// which concrete types back them. No view constructs a `VaultStore`, a codec, or a
+/// `VaultFileAccess` itself — they all receive this object (or values read off it) instead.
+/// `VaultSessionList` is the one type that mints a store per tab, from the codec and file-access
+/// this environment chose. That is Dependency Inversion applied one level up from `VaultStore`
+/// itself: the store already refuses to construct its own codec/file-access (see its doc comment),
+/// and this type is what stops that decision from being re-made — differently, and inconsistently
+/// — at every call site above it.
 ///
 /// **This is the seam the whole e2e suite depends on.** `live()` is a real launch; `uiTesting()` is
 /// what `-ui-testing 1` selects (see `PassSumoApp`): no real crypto, no real file I/O, no Touch ID
@@ -16,24 +17,31 @@ import Observation
 @MainActor
 @Observable
 final class AppEnvironment {
-    let store: VaultStore
+    /// The front tab's store, or a dormant empty store when no tabs exist. Views that already talk
+    /// to `environment.store` (`UnlockView`, `SettingsView`, `AppCommands`) keep working: they
+    /// always mean the selected session.
+    var store: VaultStore { sessionList.selected?.store ?? idleStore }
     let clipboard: ClipboardService
-    let autoLock: AutoLockController
+    var autoLock: AutoLockController { sessionList.selected?.autoLock ?? idleAutoLock }
     let generator: PasswordGenerator
     let codec: any VaultCodec
     let biometrics: BiometricUnlock
     /// Whether `UnlockView` may raise the Touch ID sheet on its own, and whether it already has.
     ///
-    /// Owned here rather than by the view because the one bit of state it holds has to survive the
-    /// `.locked → .unlocking → .locked` round-trip a wrong master password causes, which destroys
-    /// `UnlockView` and every `@State` on it — the type's own doc comment has the full account.
-    /// `let`, and not `@Observable`-observed: nothing renders from it, it is consulted from a
-    /// `.task` and re-armed from `PassSumoApp`'s state mirror.
-    let automaticBiometricUnlock: AutomaticBiometricUnlockPolicy
+    /// Owned by the selected session rather than the view because the one bit of state it holds
+    /// has to survive the `.locked → .unlocking → .locked` round-trip a wrong master password
+    /// causes, which destroys `UnlockView` and every `@State` on it — the type's own doc comment
+    /// has the full account. Per-session so tab A unlocking with Touch ID does not spend tab B's
+    /// attempt.
+    var automaticBiometricUnlock: AutomaticBiometricUnlockPolicy {
+        sessionList.selected?.automaticBiometricUnlock ?? idleAutomaticBiometricUnlock
+    }
+    /// Open databases as tabs (issue #47). The only type that adds or drops a `VaultSession`.
+    let sessionList: VaultSessionList
     /// Where every "open this `.kdbx`" request goes, whoever asked — Launch Services, the menu
     /// item, `WelcomeView`'s button. Constructed here rather than by any of them because none of
-    /// those three can see the others, and the rule they share (issue #84) must have exactly one
-    /// implementation. See `VaultOpenRouter`.
+    /// those three can see the others, and the rule they share (issue #84, retargeted by #47) must
+    /// have exactly one implementation. See `VaultOpenRouter`.
     let openRouter: VaultOpenRouter
     // `var`, not `let`: `SettingsView` reaches it as `$environment.settings.autoLockTimeout` via
     // `@Bindable`, and a keypath-derived `Binding` requires every component along the path to be
@@ -55,6 +63,11 @@ final class AppEnvironment {
     /// "mint me a Touch ID identifier", "remember this as a recent database" — are the methods
     /// below, not the type itself.
     private let fileAccess: any VaultFileAccess
+    /// Stand-ins used only while `sessionList` is empty, so `store` / `autoLock` /
+    /// `automaticBiometricUnlock` stay non-optional for every existing call site.
+    private let idleStore: VaultStore
+    private let idleAutoLock: AutoLockController
+    private let idleAutomaticBiometricUnlock: AutomaticBiometricUnlockPolicy
 
     // MARK: - Cross-cutting UI state
     //
@@ -70,8 +83,8 @@ final class AppEnvironment {
     // already load-bearing: `WelcomeView` consumes `.openDatabase`/`.newDatabase` through
     // `menuRequest` today, so adopting focused values would have meant rebuilding a working half
     // to avoid leaving two mechanisms half-wired. Second, focused *scene* values model a
-    // per-window selection, and this app has exactly one `VaultStore` holding exactly one vault
-    // (see its doc comment) — a second window would show the same vault, so a per-scene selection
+    // per-window selection, and this app has exactly one window holding a tab list of vaults
+    // (issue #47) — a second window would still share this environment, so a per-scene selection
     // is state the model cannot actually back. The concrete win is testability: `AppShellTests`
     // exercises every enablement rule below by setting these directly, with no window and no
     // focus, which a `@FocusedValue` in a `Commands` struct cannot offer.
@@ -89,28 +102,35 @@ final class AppEnvironment {
     var menuRequest: MenuRequest?
 
     private init(
-        store: VaultStore,
         clipboard: ClipboardService,
-        autoLock: AutoLockController,
         generator: PasswordGenerator,
         codec: any VaultCodec,
         biometrics: BiometricUnlock,
-        automaticBiometricUnlock: AutomaticBiometricUnlockPolicy,
         fileAccess: any VaultFileAccess,
         settings: AppSettings,
         isUITesting: Bool
     ) {
-        self.store = store
-        // Built here from `store` rather than taken as a parameter: a router pointed at a
-        // different store than the one this environment publishes would route open requests into
-        // a vault nothing on screen is showing, and there is no reason any caller would want that.
-        self.openRouter = VaultOpenRouter(store: store)
+        let idleStore = VaultStore(codec: codec, fileAccess: fileAccess)
+        self.idleStore = idleStore
+        self.idleAutoLock = AutoLockController(
+            idleTimeout: settings.autoLockTimeout,
+            onLock: { [weak idleStore] in idleStore?.lock() }
+        )
+        self.idleAutomaticBiometricUnlock = AutomaticBiometricUnlockPolicy()
+        let sessionList = VaultSessionList(
+            codec: codec,
+            fileAccess: fileAccess,
+            autoLockTimeout: settings.autoLockTimeout
+        )
+        self.sessionList = sessionList
+        // Built here from `sessionList` rather than taken as a parameter: a router pointed at a
+        // different list than the one this environment publishes would route open requests into
+        // tabs nothing on screen is showing, and there is no reason any caller would want that.
+        self.openRouter = VaultOpenRouter(sessionList: sessionList)
         self.clipboard = clipboard
-        self.autoLock = autoLock
         self.generator = generator
         self.codec = codec
         self.biometrics = biometrics
-        self.automaticBiometricUnlock = automaticBiometricUnlock
         self.fileAccess = fileAccess
         self.settings = settings
         self.isUITesting = isUITesting
@@ -126,21 +146,14 @@ final class AppEnvironment {
         // with a TODO to swap it the moment a real codec existed. `KDBXKitCodec` is stateless
         // (`struct ...: VaultCodec`, no stored state), so constructing it here costs nothing.
         let codec: any VaultCodec = KDBXKitCodec()
-
-        let store = VaultStore(codec: codec, fileAccess: fileAccess)
-        let autoLock = AutoLockController(onLock: { [weak store] in store?.lock() })
         let settings = AppSettings(defaults: .standard)
-        autoLock.idleTimeout = settings.autoLockTimeout
         let clipboard = ClipboardService(clearInterval: settings.clipboardClearTimeout)
 
         return AppEnvironment(
-            store: store,
             clipboard: clipboard,
-            autoLock: autoLock,
             generator: PasswordGenerator(),
             codec: codec,
             biometrics: BiometricUnlock(),
-            automaticBiometricUnlock: AutomaticBiometricUnlockPolicy(),
             fileAccess: fileAccess,
             settings: settings,
             isUITesting: false
@@ -151,11 +164,11 @@ final class AppEnvironment {
     /// bypassed, `Vault.sample` pre-loaded. Every `PassSumoUITests` case depends on this being wired
     /// correctly.
     ///
-    /// Returns synchronously with `store.state` still `.empty` — `VaultStore.open` is `async` (it
-    /// always round-trips through a detached `Task`, even against a fake codec with nothing slow to
-    /// do; see that method's doc comment), and a synchronous factory called from a `View`/`App`'s
+    /// Returns synchronously with no tabs yet — `VaultStore.open` is `async` (it always
+    /// round-trips through a detached `Task`, even against a fake codec with nothing slow to do;
+    /// see that method's doc comment), and a synchronous factory called from a `View`/`App`'s
     /// `@State` initial value cannot `await` anything. Call `loadUITestingFixture()` once, from an
-    /// `async` context, to actually reach `.unlocked` — `RootView` does this via `.task`;
+    /// `async` context, to actually reach `.unlocked` — `PassSumoApp` does this via `.task`;
     /// `AppShellTests` awaits it directly so the assertion has no race to lose.
     static func uiTesting() -> AppEnvironment {
         let fileAccess: any VaultFileAccess = InMemoryVaultFileAccess()
@@ -169,8 +182,6 @@ final class AppEnvironment {
             _ = try? fileAccess.write(bytes, to: uiTestingVaultURL)
         }
 
-        let store = VaultStore(codec: codec, fileAccess: fileAccess)
-        let autoLock = AutoLockController(onLock: { [weak store] in store?.lock() })
         // A throwaway suite, not `.standard`. `-ui-testing 1` is the same bundle ID as a
         // `make local` install, so sharing the real preferences domain meant a user who hid the
         // detail inspector (or changed the generator recipe) made every subsequent e2e run start
@@ -183,7 +194,6 @@ final class AppEnvironment {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettings(defaults: defaults)
-        autoLock.idleTimeout = settings.autoLockTimeout
         let clipboard = ClipboardService(clearInterval: settings.clipboardClearTimeout)
 
         // `NoBiometricsSecretStore` (below) rather than the real `KeychainSecretStore`: a hosted
@@ -193,17 +203,10 @@ final class AppEnvironment {
         let biometrics = BiometricUnlock(store: NoBiometricsSecretStore())
 
         return AppEnvironment(
-            store: store,
             clipboard: clipboard,
-            autoLock: autoLock,
             generator: PasswordGenerator(),
             codec: codec,
             biometrics: biometrics,
-            // A real policy object even here. It costs nothing, and under `-ui-testing 1` the
-            // `NoBiometricsSecretStore` above reports nothing enrolled for anything, so
-            // `claimAutomaticAttempt` refuses on `isEnrolledForThisVault` and no e2e run can ever
-            // reach a Touch ID sheet through it.
-            automaticBiometricUnlock: AutomaticBiometricUnlockPolicy(),
             fileAccess: fileAccess,
             settings: settings,
             isUITesting: true
@@ -217,11 +220,28 @@ final class AppEnvironment {
     static let uiTestingCredentials = VaultCredentials(password: "ui-testing-fixture", keyFile: nil)
 
     /// Actually unlocks the fixture `uiTesting()` seeded. No-op when not in UI-testing mode or when
-    /// something has already moved `store.state` past `.empty` (calling it twice must not re-run a
-    /// second, redundant `open`).
+    /// a session is already open (calling it twice must not re-run a second, redundant `open`).
     func loadUITestingFixture() async {
-        guard isUITesting, case .empty = store.state else { return }
-        await store.open(url: Self.uiTestingVaultURL, credentials: Self.uiTestingCredentials)
+        guard isUITesting, sessionList.sessions.isEmpty else { return }
+        let session = sessionList.open(Self.uiTestingVaultURL)
+        await session.store.open(url: Self.uiTestingVaultURL, credentials: Self.uiTestingCredentials)
+    }
+
+    /// True when any tab is showing the three-pane browser. Drives the window's minimum size
+    /// (issue #137): Welcome/Unlock-only may shrink to 520×420; one unlocked tab pins 900×560.
+    var hasUnlockedSession: Bool {
+        sessionList.sessions.contains { $0.isUnlocked }
+    }
+
+    /// Pushes a Settings change into every session's idle clock, including ones in the background.
+    func applyAutoLockTimeout(_ timeout: TimeInterval) {
+        idleAutoLock.idleTimeout = timeout
+        sessionList.applyAutoLockTimeout(timeout)
+    }
+
+    /// Welcome's "Create New Database" path: a new tab, unlocked, on success.
+    func createDatabase(at url: URL, credentials: VaultCredentials) async -> VaultStore {
+        await sessionList.createDatabase(at: url, credentials: credentials)
     }
 
     // MARK: - Narrow file-access capabilities for the UI layer

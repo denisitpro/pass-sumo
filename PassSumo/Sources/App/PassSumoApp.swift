@@ -39,10 +39,9 @@ struct PassSumoApp: App {
         }
     }
 
-    /// Welcome/Unlock may shrink (issue #137). The three-pane browser still needs 900.
+    /// Welcome/Unlock-only (no unlocked tab) may shrink (issue #137). Any unlocked tab pins 900.
     private var isBrowserOpen: Bool {
-        if case .unlocked = environment.store.state { return true }
-        return false
+        environment.hasUnlockedSession
     }
 
     var body: some Scene {
@@ -79,51 +78,13 @@ struct PassSumoApp: App {
                 // Finishes what `AppEnvironment.uiTesting()` can only start synchronously — see that
                 // method's doc comment for why the actual `store.open` has to happen from an `async`
                 // context. A no-op under a real launch and a no-op on every render after the first
-                // (`loadUITestingFixture()` guards on `store.state` still being `.empty`).
+                // (`loadUITestingFixture()` guards on the session list still being empty).
                 .task { await environment.loadUITestingFixture() }
                 // Wired here rather than at `DocumentOpenReceiver`'s construction because the
                 // adaptor builds it before this scene's `environment` exists. The receiver buffers
                 // a URL that arrives before this runs (a cold launch by double-click does exactly
                 // that), so nothing is lost in the gap — see its doc comment.
                 .task { openReceiver.onOpen { requestOpen($0) } }
-                // Keeps `AutoLockController` honest about the vault's real state regardless of which
-                // path changed it — `UnlockView` unlocking, `-ui-testing`'s fixture load, "Lock
-                // Database", the idle timer itself. The controller's own `lock(reason:)` already
-                // stops its timer when *it* is the one that triggered the lock; the `.locked`/
-                // `.empty` branch here is what covers a lock that happened some other way (e.g. the
-                // "Lock Database" command calling `store.lock()` directly), which the controller has
-                // no way to notice on its own.
-                .onChange(of: environment.store.state) { oldState, newState in
-                    switch newState {
-                    case .unlocked:
-                        environment.autoLock.vaultDidUnlock()
-                        // The next lock gets a fresh automatic Touch ID attempt. Re-armed HERE,
-                        // on a genuine unlock, and deliberately not when `UnlockView` appears:
-                        // that view is rebuilt every time a wrong password bounces the state
-                        // through `.unlocking`, and re-arming there would put the sheet back up
-                        // on every typo (see `AutomaticBiometricUnlockPolicy`).
-                        environment.automaticBiometricUnlock.rearm()
-                        if let url = environment.store.currentURL {
-                            environment.rememberRecentDatabase(url)
-                        }
-                    case .locked(let url):
-                        environment.autoLock.stop()
-                        // `VaultOpenRouter`'s `.replace` (issue #84) moves the store straight from
-                        // one locked database to another — `.locked(A)` → `.locked(B)` — with no
-                        // `.unlocked` in between, so nothing else notices that B was never touched
-                        // this session. Left alone, `UnlockView` would show B the reason A locked
-                        // for. This is the one place that sees both URLs, so it is the one place
-                        // that can tell a genuine re-lock of the SAME database (reason still valid)
-                        // apart from a switch to a different one (reason stale) — see issue #62.
-                        if case .locked(let previousURL) = oldState, previousURL != url {
-                            environment.autoLock.forgetLockReason()
-                        }
-                    case .empty:
-                        environment.autoLock.stop()
-                    case .unlocking:
-                        break
-                    }
-                }
         }
         .windowToolbarStyle(.unified)
         .commands {
