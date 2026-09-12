@@ -158,6 +158,13 @@ struct AppVersionInfo {
     var summary: String {
         "PassSumo \(shortVersion) (build \(build)) · \(gitRevision) · macOS \(osVersion)"
     }
+
+    /// Compact stamp for the window corner / status bar so a leftover build is obvious at a
+    /// glance (issue #153). Not `summary` — that is the copyable bug-report line and includes
+    /// macOS, which this readout does not need.
+    var shortLabel: String {
+        "\(shortVersion) (\(build)) · \(gitRevision)"
+    }
 }
 
 // MARK: - View

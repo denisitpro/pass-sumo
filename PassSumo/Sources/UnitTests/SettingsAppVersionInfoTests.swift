@@ -23,6 +23,7 @@ final class SettingsAppVersionInfoTests: XCTestCase {
         XCTAssertEqual(info.gitRevision, "abc1234")
         XCTAssertEqual(info.osVersion, "15.1.2")
         XCTAssertEqual(info.summary, "PassSumo 1.2.3 (build 42) · abc1234 · macOS 15.1.2")
+        XCTAssertEqual(info.shortLabel, "1.2.3 (42) · abc1234")
     }
 
     /// The repo currently has no git tags at all, so `git describe --tags --abbrev=0` in
@@ -35,6 +36,7 @@ final class SettingsAppVersionInfoTests: XCTestCase {
         XCTAssertEqual(info.build, AppVersionInfo.unknownBuild)
         XCTAssertEqual(info.gitRevision, AppVersionInfo.unknownGitRevision)
         XCTAssertEqual(info.summary, "PassSumo 0.0.0 (build 1) · dev · macOS 15.1.2")
+        XCTAssertEqual(info.shortLabel, "0.0.0 (1) · dev")
     }
 
     /// A plist present but missing just the `GitRevision` key — e.g. a stamping phase that ran but

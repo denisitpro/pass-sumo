@@ -32,6 +32,10 @@ struct StatusBar: View {
     /// dismissable alert would be acknowledged once and the app would go on saving unprotected in
     /// silence — the "swallowed failure" half of issue #26's policy, arrived at from the other side.
     let backupWarning: String?
+    /// Compact running-build stamp (`AppVersionInfo.shortLabel`). Defaulted so previews and the
+    /// one production call site stay short; tests pass an explicit string rather than reading
+    /// `Bundle.main`.
+    var buildLabel: String = AppVersionInfo.current().shortLabel
 
     var body: some View {
         HStack(spacing: Spacing.s5) {
@@ -84,6 +88,15 @@ struct StatusBar: View {
                 }
                 .accessibilityIdentifier("statusbar.clipboardCountdown")
             }
+
+            // Trailing on purpose: the empty bottom-right corner of ShotSumo_2026-09-12_18-12-38,
+            // so a leftover 143 vs a current 163 is readable without opening Settings (issue #153).
+            // Same colour as the rest of this band (`textSecondary`) — `textTertiary` fails AA on
+            // `sidebar` ground (design/BRAND.md).
+            Text(buildLabel)
+                .font(Typography.monoCaption2)
+                .lineLimit(1)
+                .accessibilityIdentifier("statusbar.build")
         }
         .font(Typography.caption)
         .foregroundStyle(Palette.textSecondary)
