@@ -40,6 +40,10 @@ struct GeneratorSheet: View {
     @State private var recipe: PasswordGenerator.Recipe
     @State private var result = ""
     @State private var error: PasswordGenerator.GeneratorError?
+    /// The typed length field's own string, distinct from `recipe.length`, so a mid-edit `"1"`
+    /// (prefix of `"12"`) is not forced up to the floor of 4 on every keystroke (issue #149).
+    @State private var lengthText: String
+    @FocusState private var isLengthFocused: Bool
 
     init(
         generator: PasswordGenerator,
@@ -53,7 +57,10 @@ struct GeneratorSheet: View {
         self.onUse = onUse
         self.onRecipeChanged = onRecipeChanged
         self.openingRecipe = recipe
-        _recipe = State(initialValue: recipe)
+        var live = recipe
+        live.length = PasswordGenerator.clampedLength(live.length)
+        _recipe = State(initialValue: live)
+        _lengthText = State(initialValue: String(live.length))
     }
 
     var body: some View {
@@ -65,18 +72,34 @@ struct GeneratorSheet: View {
             resultField
 
             VStack(alignment: .leading, spacing: Spacing.s2) {
-                Text("Length: \(recipe.length)")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-                // 4...64: `PasswordGenerator` itself has no upper bound, but a slider needs one —
-                // 64 comfortably covers every real site's field-length cap while keeping the
-                // slider usable at a small drag distance.
+                HStack(alignment: .center, spacing: Spacing.s3) {
+                    Text("Length")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
+                    Spacer()
+                    TextField("Length", text: $lengthText)
+                        .textFieldStyle(.plain)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.text)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .padding(.horizontal, Spacing.s3)
+                        .padding(.vertical, Spacing.s2)
+                        .frame(width: Spacing.s10 + Spacing.s6)
+                        .sunkenWell()
+                        .focused($isLengthFocused)
+                        .accessibilityIdentifier("generator.length.field")
+                        .onSubmit { applyTypedLength(committing: true) }
+                }
+                // Slider and field share `4...256` (issue #149). The field is the way to type a
+                // precise length; the slider stays so existing e2e (`generator.length`) still
+                // has a thumb to drag.
                 Slider(
                     value: Binding(
-                        get: { Double(recipe.length) },
+                        get: { Double(PasswordGenerator.clampedLength(recipe.length)) },
                         set: { recipe.length = Int($0.rounded()) }
                     ),
-                    in: 4...64,
+                    in: Double(PasswordGenerator.minimumLength)...Double(PasswordGenerator.maximumLength),
                     step: 1
                 )
                 .accessibilityIdentifier("generator.length")
@@ -166,6 +189,19 @@ struct GeneratorSheet: View {
             regenerate()
             onRecipeChanged?(recipe)
         }
+        .onChange(of: recipe.length) {
+            // Don't overwrite a mid-edit `"1"` just because the slider (or a live parse of a
+            // longer in-range value) wrote `recipe.length`.
+            if !isLengthFocused {
+                lengthText = String(recipe.length)
+            }
+        }
+        .onChange(of: lengthText) {
+            applyTypedLength(committing: false)
+        }
+        .onChange(of: isLengthFocused) {
+            if !isLengthFocused { applyTypedLength(committing: true) }
+        }
     }
 
     @ViewBuilder
@@ -184,6 +220,31 @@ struct GeneratorSheet: View {
                 Text(errorMessage(for: error))
                     .font(Typography.caption)
                     .foregroundStyle(Palette.danger)
+            }
+        }
+    }
+
+    /// The length the typed field would commit for `text`, including revert-to-current on
+    /// non-numeric input. Factored out of the TextField wiring so issue #149's clamp tests can
+    /// drive it without rendering — same "call the real method" seam as `makeGeneratorSheet`.
+    func committedLength(fromTyped text: String) -> Int {
+        PasswordGenerator.parsedLength(fromTyped: text, committing: true) ?? recipe.length
+    }
+
+    /// Clamp / revert for the typed length field. `parsedLength` owns the policy; this writes
+    /// the result back onto the live recipe (which then regenerates via `onChange(of: recipe)`).
+    private func applyTypedLength(committing: Bool) {
+        if committing {
+            let length = committedLength(fromTyped: lengthText)
+            if recipe.length != length {
+                recipe.length = length
+            }
+            lengthText = String(length)
+            return
+        }
+        if let length = PasswordGenerator.parsedLength(fromTyped: lengthText, committing: false) {
+            if recipe.length != length {
+                recipe.length = length
             }
         }
     }

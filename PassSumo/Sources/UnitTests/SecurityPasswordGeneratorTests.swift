@@ -35,15 +35,16 @@ final class SecurityPasswordGeneratorTests: XCTestCase {
         }
     }
 
-    /// Four classes cannot all appear in a three-character password. The minimum is reported so the
-    /// UI can say what to change rather than just refusing.
-    func testThrowsWhenLengthIsBelowTheNumberOfEnabledClasses() {
-        XCTAssertThrowsError(try generator.generate(recipe(length: 3))) {
-            XCTAssertEqual($0 as? PasswordGenerator.GeneratorError, .lengthTooShort(minimum: 4))
-        }
-        XCTAssertThrowsError(try generator.generate(recipe(length: 1, digits: false, symbols: false))) {
-            XCTAssertEqual($0 as? PasswordGenerator.GeneratorError, .lengthTooShort(minimum: 2))
-        }
+    /// Four classes cannot all appear in a three-character password — but the product floor is 4
+    /// (issue #149), so a request below the floor is clamped up rather than refused. `lengthTooShort`
+    /// still fires if more classes are on than the *clamped* length; with four classes and a floor
+    /// of four that cannot collide today.
+    func testClampsLengthBelowTheFloorUpToMinimum() throws {
+        XCTAssertEqual(try generator.generate(recipe(length: 3)).count, PasswordGenerator.minimumLength)
+        XCTAssertEqual(
+            try generator.generate(recipe(length: 1, digits: false, symbols: false)).count,
+            PasswordGenerator.minimumLength
+        )
     }
 
     /// A custom symbol set that filters down to nothing must not count as an enabled class — and
@@ -66,9 +67,57 @@ final class SecurityPasswordGeneratorTests: XCTestCase {
     // MARK: - Output shape
 
     func testProducesRequestedLength() throws {
-        for length in [4, 8, 20, 64, 128] {
+        for length in [4, 8, 20, 64, 128, 256] {
             XCTAssertEqual(try generator.generate(recipe(length: length)).count, length)
         }
+    }
+
+    // MARK: - Length clamp (issue #149)
+
+    func testClampedLengthPinsShortLongBelowMinAboveMaxAndZero() {
+        XCTAssertEqual(PasswordGenerator.clampedLength(4), 4)
+        XCTAssertEqual(PasswordGenerator.clampedLength(256), 256)
+        XCTAssertEqual(PasswordGenerator.clampedLength(3), 4)
+        XCTAssertEqual(PasswordGenerator.clampedLength(257), 256)
+        XCTAssertEqual(PasswordGenerator.clampedLength(0), 4)
+        XCTAssertEqual(PasswordGenerator.clampedLength(-1), 4)
+        XCTAssertEqual(PasswordGenerator.clampedLength(999_999), 256)
+    }
+
+    /// Empty and out-of-range commit to the floor/cap; non-numeric returns nil so the field
+    /// can revert. Live typing (`committing: false`) does not lift `"1"` to 4, or `"12"` would
+    /// be untypeable.
+    func testParsedLengthCommitsEmptyAndOutOfRangeAndIgnoresNonNumeric() {
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "4", committing: true), 4)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "256", committing: true), 256)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "3", committing: true), 4)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "999", committing: true), 256)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "", committing: true), 4)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "   ", committing: true), 4)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "0", committing: true), 4)
+        XCTAssertNil(PasswordGenerator.parsedLength(fromTyped: "abc", committing: true))
+        XCTAssertNil(PasswordGenerator.parsedLength(fromTyped: "12x", committing: true))
+
+        XCTAssertNil(PasswordGenerator.parsedLength(fromTyped: "1", committing: false))
+        XCTAssertNil(PasswordGenerator.parsedLength(fromTyped: "3", committing: false))
+        XCTAssertNil(PasswordGenerator.parsedLength(fromTyped: "", committing: false))
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "12", committing: false), 12)
+        XCTAssertEqual(PasswordGenerator.parsedLength(fromTyped: "999", committing: false), 256)
+    }
+
+    /// Defense in depth: even a recipe that never went through the field still cannot produce
+    /// an empty password or a million-character one.
+    func testGenerateClampsEmptyBelowMinAndAboveMaxAndNeverReturnsEmpty() throws {
+        XCTAssertEqual(try generator.generate(recipe(length: 4)).count, 4)
+        XCTAssertEqual(try generator.generate(recipe(length: 256)).count, 256)
+
+        let below = try generator.generate(recipe(length: 0))
+        XCTAssertFalse(below.isEmpty)
+        XCTAssertEqual(below.count, PasswordGenerator.minimumLength)
+
+        let above = try generator.generate(recipe(length: 999_999))
+        XCTAssertFalse(above.isEmpty)
+        XCTAssertEqual(above.count, PasswordGenerator.maximumLength)
     }
 
     /// The "at least one of every enabled class" guarantee. Run many times because a guarantee that
@@ -214,7 +263,22 @@ final class SecurityPasswordGeneratorTests: XCTestCase {
 
     func testStrengthBitsIsZeroForAnUnsatisfiableRecipe() {
         XCTAssertEqual(generator.strengthBits(for: recipe(lowercase: false, uppercase: false, digits: false, symbols: false)), 0)
-        XCTAssertEqual(generator.strengthBits(for: recipe(length: 0)), 0)
+    }
+
+    /// Entropy must match what `generate` would actually emit after the length clamp, not the
+    /// unclamped request — otherwise the sheet would show 0 bits for a typed empty field that
+    /// then produces a 4-character password.
+    func testStrengthBitsUsesClampedLength() {
+        XCTAssertEqual(
+            generator.strengthBits(for: recipe(length: 0)),
+            generator.strengthBits(for: recipe(length: PasswordGenerator.minimumLength)),
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            generator.strengthBits(for: recipe(length: 999_999)),
+            generator.strengthBits(for: recipe(length: PasswordGenerator.maximumLength)),
+            accuracy: 0.0001
+        )
     }
 
     /// The typed-password estimate is character-class arithmetic and nothing more — see the doc

@@ -79,6 +79,16 @@ enum CSPRNG {
 /// Stateless on purpose — a `Recipe` in, a password out — so it is trivially `Sendable` and can be
 /// called from wherever the UI happens to be.
 struct PasswordGenerator: Sendable {
+    /// Product floor, shared by the slider and the typed field. Below this, `generate` clamps
+    /// rather than emitting a shorter string — length 0 is not a password (issue #149).
+    /// `lengthTooShort` still fires if more character classes are on than the (clamped) length.
+    static let minimumLength = 4
+
+    /// Product cap, not a KDBX limit. ProtectedString is unbounded XML text, so a typed `999999`
+    /// would freeze the CSPRNG loop without producing a password any site will accept. 256 sits
+    /// above every real website field and is cheap to generate (issue #149).
+    static let maximumLength = 256
+
     /// What the user asked for. Defaults are the ones the "generate" button starts from: 20
     /// characters of everything, ambiguous glyphs excluded, because the overwhelmingly common case
     /// for this app is a password the user will never read out loud but might have to re-type once
@@ -127,6 +137,34 @@ struct PasswordGenerator: Sendable {
     private static let ambiguousCharacters: Set<Character> = ["0", "O", "1", "l", "I"]
 
     init() {}
+
+    // MARK: - Length
+
+    /// Clamps into `minimumLength...maximumLength`. Silent on purpose: `generate` must never
+    /// return `""`, and a typed `999999` must not freeze the CSPRNG loop. The typed field uses
+    /// the same function so slider, field, and generator cannot disagree on the range.
+    static func clampedLength(_ length: Int) -> Int {
+        min(max(length, minimumLength), maximumLength)
+    }
+
+    /// Interprets the generator length field (issue #149).
+    ///
+    /// `committing` is false while the user is still typing — so `"1"` is not forced up to 4,
+    /// which would make `"12"` untypeable — and true on submit / focus-loss, when empty and
+    /// out-of-range values clamp. Returns `nil` for non-numeric input (and for in-progress
+    /// below-floor digits when not committing) so the caller can leave the recipe alone, or
+    /// revert the field to the previous length.
+    static func parsedLength(fromTyped text: String, committing: Bool) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return committing ? minimumLength : nil
+        }
+        guard let value = Int(trimmed) else { return nil }
+        if committing { return clampedLength(value) }
+        if value > maximumLength { return maximumLength }
+        if value >= minimumLength { return value }
+        return nil
+    }
 
     // MARK: - Alphabets
 
@@ -178,18 +216,22 @@ struct PasswordGenerator: Sendable {
     func generate(_ recipe: Recipe) throws -> String {
         let classes = alphabets(for: recipe)
         guard !classes.isEmpty else { throw GeneratorError.noCharacterClassEnabled }
-        guard recipe.length >= classes.count else {
+        // Clamp before the class-count check so length 0 cannot fall through to an empty
+        // string, and a typed 999999 cannot run this loop for a million draws. After the
+        // clamp, `lengthTooShort` still fires if more classes are on than the floor.
+        let length = Self.clampedLength(recipe.length)
+        guard length >= classes.count else {
             throw GeneratorError.lengthTooShort(minimum: classes.count)
         }
 
         let pool = classes.flatMap { $0 }
         do {
             var characters: [Character] = []
-            characters.reserveCapacity(recipe.length)
+            characters.reserveCapacity(length)
             for alphabet in classes {
                 characters.append(alphabet[try CSPRNG.uniform(upperBound: alphabet.count)])
             }
-            for _ in classes.count..<recipe.length {
+            for _ in classes.count..<length {
                 characters.append(pool[try CSPRNG.uniform(upperBound: pool.count)])
             }
             return String(try CSPRNG.shuffled(characters))
@@ -209,8 +251,9 @@ struct PasswordGenerator: Sendable {
     /// password and it is the number the generator UI should show. `0` for an unsatisfiable recipe.
     func strengthBits(for recipe: Recipe) -> Double {
         let pool = alphabets(for: recipe).flatMap { $0 }
-        guard !pool.isEmpty, recipe.length > 0 else { return 0 }
-        return Double(recipe.length) * log2(Double(pool.count))
+        let length = Self.clampedLength(recipe.length)
+        guard !pool.isEmpty, length > 0 else { return 0 }
+        return Double(length) * log2(Double(pool.count))
     }
 
     /// A rating for a password the **user typed**, in bits.

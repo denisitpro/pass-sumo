@@ -825,6 +825,9 @@ struct VaultBrowserView: View {
         editingEntry = EditingEntry(entry: makeBlankEntry(), isNew: true)
     }
 
+    /// Copies the stored entry as-is. Must not generate a password — issue #147 pre-fills
+    /// new entries only, and overwriting one the user already has is the defect that issue
+    /// exists to avoid.
     private func openForEdit(_ id: UUID) {
         guard let entry = vault.entries.first(where: { $0.id == id }) else { return }
         editingEntry = EditingEntry(entry: entry, isNew: false)
@@ -835,14 +838,25 @@ struct VaultBrowserView: View {
     /// vault's top level regardless of context. `id`/`created`/`modified` are placeholders:
     /// `VaultStore.upsert` treats this as an insert (no existing entry with that `id`) and stamps
     /// `modified` itself.
-    private func makeBlankEntry() -> VaultEntry {
+    ///
+    /// The password is pre-filled from the saved generator recipe (issue #147). Editing an
+    /// existing entry never comes through here — `openForEdit` copies the stored entry as-is —
+    /// so this cannot overwrite a password the user already has. If generate throws (no class
+    /// enabled, CSPRNG down) the field stays empty rather than crashing; the user can still
+    /// type or regenerate from the form. Notes-only entries may clear it before Save; this
+    /// path does not force a password to exist forever.
+    ///
+    /// Internal rather than private so a unit test can construct a `VaultBrowserView` with a
+    /// known recipe, call this directly, and check the password — same seam as `makeGeneratorSheet`.
+    func makeBlankEntry() -> VaultEntry {
         let now = Date()
+        let password = (try? generator.generate(settings.generatorRecipe)) ?? ""
         return VaultEntry(
             id: UUID(),
             groupID: groupSelection.containingGroupID,
             title: "",
             username: appEnvironment?.settings.defaultUsername ?? "",
-            password: "",
+            password: password,
             url: "",
             notes: "",
             otpAuthURL: nil,
