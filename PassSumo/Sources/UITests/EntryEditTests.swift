@@ -17,9 +17,7 @@ final class EntryEditTests: XCTestCase {
         // The list row (`EntryListView` combines its whole row into one accessibility element,
         // issue #6) shows the new title…
         XCTAssertTrue(app.waitForEntryListRow(containing: newTitle))
-        // …and so does the detail column, read the same way every other detail assertion in this
-        // suite is: through `FieldRow`'s combined label+value element, not screen text.
-        XCTAssertEqual(app.fieldRowValue("Title"), newTitle)
+        XCTAssertTrue(app.waitForDetailContaining(newTitle))
     }
 
     func testCreatingNewEntryAppearsInTheList() {
@@ -56,7 +54,7 @@ final class EntryEditTests: XCTestCase {
         titleField.replaceText(attemptedTitle)
         app.byID("edit.cancel").click()
 
-        XCTAssertEqual(app.fieldRowValue("Title"), SampleVault.outlookTitle)
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.outlookTitle))
         XCTAssertFalse(app.waitForLabel(attemptedTitle, timeout: 2))
     }
 
@@ -78,7 +76,7 @@ final class EntryEditTests: XCTestCase {
         let app = launchUITestingApp(self)
 
         app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
-        app.typeText("\r")
+        app.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(app.byID("edit.save").waitForExistence(timeout: 5))
         app.byID("edit.cancel").click()

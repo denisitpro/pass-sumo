@@ -35,12 +35,14 @@ single test.
 
 ## What each file covers
 
-- `LaunchTests.swift` — the app launches, the window exists, the sample vault is loaded.
+- `LaunchTests.swift` — the app launches, the window exists, the sample vault is loaded,
+  Lock is hittable (not overflowed behind the toolbar chevron, issue #129).
 - `BrowseAndSearchTests.swift` — sidebar groups, group filtering (including returning to All
-  Entries), the group-row context menu, entry selection/detail, search (including the
+  Entries), group-row and All Entries context menus, entry selection/detail (including a
+  second-entry switch, issue #134), entry-row context menu, search (including the
   password-field search differentiator), an empty search result.
-- `GroupSidebarTests.swift` — creating a folder from the toolbar New Group sheet lands a row in
-  the sidebar.
+- `GroupSidebarTests.swift` — creating a folder from the toolbar New Group sheet lands a row
+  in the sidebar; cancel creates nothing; the sheet offers an icon picker.
 - `EntryEditTests.swift` — edit / create / cancel / delete an entry, and the list's own Return-to-
   edit keyboard wiring.
 - `SecretHandlingTests.swift` — password concealment/reveal, Copy Password → pasteboard, locking.
@@ -62,16 +64,17 @@ single test.
   or `XCTNSPredicateExpectation` for the one case that isn't (`SecretHandlingTests`' pasteboard
   check — a view-hierarchy wait can't express "wait for a value on a resource outside the window").
 - Elements are looked up by accessibility identifier or, where none exists, by accessibility label
-  (`XCUIApplication.byID`/`.waitForLabel`/`.fieldRowValue` in `UITestSupport.swift`) — never by
+  (`XCUIApplication.byID`/`.waitForLabel`/`.waitForDetailContaining` in `UITestSupport.swift`) — never by
   screen position, and never by matching a localized string that isn't also the identifier.
   **Selecting a list or sidebar row uses `selectRow(identifiedBy:)`, not `byID(_:).click()`.**
-  `byID` resolves to a leaf `Text`/`Image` inside the row. `selectRow` clicks a cell that
-  itself carries the identifier, otherwise that leaf — never
-  `.containing(identifier).firstMatch`, which is a parent cell wrapping the whole list
-  (issue #134). The row's own `.onTapGesture` is what writes `List(selection:)` on a
-  custom-drawn row, matching the sidebar (issue #129). **Right-clicking a sidebar row uses
-  the containing cell's `rightClick()`** — a leaf's frame can miss the view that owns
-  `.contextMenu`.
+  `byID` resolves to a leaf `Text`/`Image` inside the row. `selectRow` / `rightClickRow`
+  go through `rowElement`, then click ~40pt from the leading edge: the AX cell is as
+  wide as the list column and `.inspector` covers the trailing end, so a centre-click
+  lands in the inspector (issue #134). Never a parent cell wrapping the whole list.
+  The row's `.highPriorityGesture` is what writes `List(selection:)` on a custom-drawn
+  row. Right-click uses the same targeting — a leaf's frame can miss `.contextMenu`.
+  Detail assertions use `waitForDetailContaining` (`browser.detail` descendants): SwiftUI
+  does not expose `FieldRow`'s `.accessibilityValue` through `XCUIElement.value`.
 - **A plain SwiftUI `Text` puts its string in the accessibility VALUE, not the LABEL, on macOS.**
   Confirmed against the real AX tree captured from this suite's first run on actual hardware
   (issue #6) — every `StaticText` in the dump had an empty `label` and the string in `value`.

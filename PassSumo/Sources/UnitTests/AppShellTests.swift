@@ -316,12 +316,23 @@ final class AppShellTests: XCTestCase {
             imported?.first?["UTTypeIdentifier"] as? String,
             "app.passsumo.kdbx"
         )
+        XCTAssertEqual(
+            imported?.first?["UTTypeConformsTo"] as? [String],
+            ["public.data"]
+        )
+        let tags = imported?.first?["UTTypeTagSpecification"] as? [String: Any]
+        XCTAssertEqual(tags?["public.filename-extension"] as? [String], ["kdbx"])
 
         let types = info?["CFBundleDocumentTypes"] as? [[String: Any]]
         XCTAssertEqual(
             types?.first?["LSHandlerRank"] as? String,
             "Alternate",
             "Owner is deferred to issue #132, after the shipping binary is notarized"
+        )
+        XCTAssertEqual(types?.first?["CFBundleTypeRole"] as? String, "Editor")
+        XCTAssertEqual(
+            types?.first?["LSItemContentTypes"] as? [String],
+            ["app.passsumo.kdbx"]
         )
     }
 }

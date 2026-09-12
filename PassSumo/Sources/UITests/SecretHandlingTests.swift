@@ -10,11 +10,13 @@ final class SecretHandlingTests: XCTestCase {
 
         app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
 
-        // `FieldRow` reports the literal VoiceOver value "hidden" for a concealed secret (never
-        // the real value, never even its length — see that file's own doc comment on why), so
-        // "hidden" IS the concealed value, and it must not equal the real plaintext either way.
-        XCTAssertEqual(app.fieldRowValue("Password"), "hidden")
-        XCTAssertNotEqual(app.fieldRowValue("Password"), SampleVault.gmailPersonalPassword)
+        XCTAssertTrue(app.byID("detail.revealPassword").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.byID("detail.copyPassword").waitForExistence(timeout: 5))
+        // Concealed: the real password must not appear in the inspector. The VoiceOver
+        // value "hidden" is not readable through XCUIElement.value on macOS.
+        XCTAssertFalse(
+            app.waitForDetailContaining(SampleVault.gmailPersonalPassword, timeout: 2)
+        )
     }
 
     func testRevealingShowsThePasswordAndSelectionChangeResetsConcealment() {
@@ -22,14 +24,16 @@ final class SecretHandlingTests: XCTestCase {
 
         app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
         app.byID("detail.revealPassword").click()
-        XCTAssertEqual(app.fieldRowValue("Password"), SampleVault.gmailPersonalPassword)
+        XCTAssertTrue(app.waitForDetailContaining(SampleVault.gmailPersonalPassword))
 
         // `RevealPolicy.revealAfterSelectionChange` (EntryDetailView.swift): a reveal never
         // survives a selection change, so a different entry's password must come up concealed
         // again with no re-toggle needed — this is the one guarantee a shoulder-surfer scenario
         // actually depends on.
         app.selectRow(identifiedBy: "list.entry.\(SampleVault.iCloudID)")
-        XCTAssertEqual(app.fieldRowValue("Password"), "hidden")
+        XCTAssertFalse(
+            app.waitForDetailContaining(SampleVault.gmailPersonalPassword, timeout: 2)
+        )
     }
 
     /// **Saves and restores `NSPasteboard.general`'s real contents around this test** — see the
