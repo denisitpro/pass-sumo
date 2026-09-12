@@ -80,7 +80,7 @@ final class AppEnvironment {
     // **This is the app's single menu↔view mechanism; there is deliberately no second one.** The
     // idiomatic SwiftUI alternative — `.focusedSceneValue` + `@FocusedValue` in `AppCommands` —
     // was considered and rejected for two concrete reasons. First, half of this channel was
-    // already load-bearing: `WelcomeView` consumes `.openDatabase`/`.newDatabase` through
+    // already load-bearing: `RootView` consumes `.openDatabase`/`.newDatabase` through
     // `menuRequest` today, so adopting focused values would have meant rebuilding a working half
     // to avoid leaving two mechanisms half-wired. Second, focused *scene* values model a
     // per-window selection, and this app has exactly one window holding a tab list of vaults
@@ -239,7 +239,7 @@ final class AppEnvironment {
         sessionList.applyAutoLockTimeout(timeout)
     }
 
-    /// Welcome's "Create New Database" path: a new tab, unlocked, on success.
+    /// Create-database path (Welcome, File → New, tab-bar +): a new tab, unlocked, on success.
     func createDatabase(at url: URL, credentials: VaultCredentials) async -> VaultStore {
         await sessionList.createDatabase(at: url, credentials: credentials)
     }

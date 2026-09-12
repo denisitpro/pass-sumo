@@ -680,9 +680,9 @@ struct VaultBrowserView: View {
         case .focusSearch:
             isSearchFocused = true
         case .openDatabase, .newDatabase:
-            // `WelcomeView`'s cases. It is never mounted at the same time as this view (`RootView`
-            // switches on `store.state`), so returning without clearing is correct — clearing here
-            // would only ever discard a request its real owner has not seen yet.
+            // `RootView`'s cases. Clearing here would discard a request its owner has not acted
+            // on yet — this view is mounted under RootView while a vault is unlocked, which is
+            // exactly when those two items stay enabled (issue #84 / #165).
             return
         }
         appEnvironment.menuRequest = nil

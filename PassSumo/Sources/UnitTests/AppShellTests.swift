@@ -130,25 +130,27 @@ final class AppShellTests: XCTestCase {
         XCTAssertNil(AppCommands(environment: environment).selectedEntry)
     }
 
-    func testNewDatabaseDisabledOnceAVaultIsOpen() async {
+    func testNewDatabaseStaysEnabledWhileAVaultIsOpen() async {
+        // Same enablement as Open (issue #165): Create adds a tab, so it stays available with
+        // tabs the way Open has since issue #84. The create sheet lives on `RootView`.
         let environment = AppEnvironment.uiTesting()
         XCTAssertTrue(AppCommands(environment: environment).canCreateNewDatabase)
 
         await environment.loadUITestingFixture()
-        XCTAssertFalse(AppCommands(environment: environment).canCreateNewDatabase)
+        XCTAssertTrue(AppCommands(environment: environment).canCreateNewDatabase)
     }
 
-    func testNewDatabaseDisabledOnceAFileIsPicked() {
-        // Picking a file used to leave `store.state` at `.empty` (the URL lived in an app-level
-        // bridge), so this check had to consult that bridge separately. `VaultStore.select(url:)`
-        // now lands in `.locked` immediately, which is what makes the single state check correct.
+    func testNewDatabaseStaysEnabledOnceAFileIsPicked() {
+        // A locked tab used to disable Create because the sheet lived on Welcome, which is
+        // unmounted then. Picking a file lands in `.locked` immediately and must still leave
+        // the item enabled.
         let environment = AppEnvironment.uiTesting()
         environment.openRouter.requestOpen(URL(fileURLWithPath: "/tmp/example.kdbx"))
-        XCTAssertFalse(AppCommands(environment: environment).canCreateNewDatabase)
+        XCTAssertTrue(AppCommands(environment: environment).canCreateNewDatabase)
     }
 
     func testOpenDatabaseStaysEnabledWhileAVaultIsOpen() async {
-        // The inverse of the rule above, and the menu-bar half of issue #84: the app owns the
+        // The menu-bar half of issue #84: the app owns the
         // `.kdbx` type, so the system hands it "open this other database" whether or not the item
         // was enabled. Greying it out only hid a capability `VaultOpenRouter` now provides.
         let picked = AppEnvironment.uiTesting()
