@@ -8,7 +8,7 @@ final class SecretHandlingTests: XCTestCase {
     func testPasswordIsConcealedByDefault() {
         let app = launchUITestingApp(self)
 
-        app.byID("list.entry.\(SampleVault.gmailPersonalID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
 
         // `FieldRow` reports the literal VoiceOver value "hidden" for a concealed secret (never
         // the real value, never even its length — see that file's own doc comment on why), so
@@ -20,7 +20,7 @@ final class SecretHandlingTests: XCTestCase {
     func testRevealingShowsThePasswordAndSelectionChangeResetsConcealment() {
         let app = launchUITestingApp(self)
 
-        app.byID("list.entry.\(SampleVault.gmailPersonalID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
         app.byID("detail.revealPassword").click()
         XCTAssertEqual(app.fieldRowValue("Password"), SampleVault.gmailPersonalPassword)
 
@@ -28,7 +28,7 @@ final class SecretHandlingTests: XCTestCase {
         // survives a selection change, so a different entry's password must come up concealed
         // again with no re-toggle needed — this is the one guarantee a shoulder-surfer scenario
         // actually depends on.
-        app.byID("list.entry.\(SampleVault.iCloudID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.iCloudID)")
         XCTAssertEqual(app.fieldRowValue("Password"), "hidden")
     }
 
@@ -70,7 +70,7 @@ final class SecretHandlingTests: XCTestCase {
 
         let pasteboard = NSPasteboard.general
         let app = launchUITestingApp(self)
-        app.byID("list.entry.\(SampleVault.gmailPersonalID)").click()
+        app.selectRow(identifiedBy: "list.entry.\(SampleVault.gmailPersonalID)")
         // A known baseline distinguishable from the real password, so a false pass can't be
         // explained by "the pasteboard already happened to hold that string."
         pasteboard.clearContents()

@@ -171,10 +171,18 @@ final class AppEnvironment {
 
         let store = VaultStore(codec: codec, fileAccess: fileAccess)
         let autoLock = AutoLockController(onLock: { [weak store] in store?.lock() })
-        // A real `UserDefaults.standard` is fine here too: `AppShellTests` exercises `AppSettings`
-        // against its own scratch suite directly, never through this factory, so there is no
-        // pollution risk specific to `uiTesting()` reusing the app's real preferences domain.
-        let settings = AppSettings(defaults: .standard)
+        // A throwaway suite, not `.standard`. `-ui-testing 1` is the same bundle ID as a
+        // `make local` install, so sharing the real preferences domain meant a user who hid the
+        // detail inspector (or changed the generator recipe) made every subsequent e2e run start
+        // from that leftover state — which is how `detail.edit` vanished on issue #6's first
+        // real suite run while `settings.detailPaneVisible` was `false`. Wiping the suite on
+        // every factory call also keeps two launches in one `xcodebuild test` from chaining
+        // settings. `AppShellTests` never goes through this factory for `AppSettings`; it
+        // builds its own scratch suite.
+        let suiteName = "app.passsumo.ui-testing"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let settings = AppSettings(defaults: defaults)
         autoLock.idleTimeout = settings.autoLockTimeout
         let clipboard = ClipboardService(clearInterval: settings.clipboardClearTimeout)
 

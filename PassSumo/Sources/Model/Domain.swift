@@ -173,8 +173,8 @@ extension VaultEntry {
     /// and that shape is the point: a property added to `VaultEntry` later is INCLUDED by default.
     /// The field-by-field form fails silently in the worse direction — a new field nobody thought
     /// to list here would simply stop being snapshotted, and the loss shows up as a missing old
-    /// password months later. `EntryEditView.save()`'s doc comment records the same class of bug
-    /// biting `iconID` for real.
+    /// password months later. `EntryEditView.save()` used to have the same class of bug (rebuilding
+    /// via `VaultEntry(...)` dropped `iconID`); it now copies-then-assigns (issue #95).
     ///
     /// Three things are deliberately not edits:
     ///

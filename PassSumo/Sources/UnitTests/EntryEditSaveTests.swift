@@ -3,11 +3,13 @@ import XCTest
 
 /// What `EntryEditView.save()` actually writes back.
 ///
-/// `save()` does not mutate the entry it was opened on — it builds a **new** `VaultEntry` from the
-/// fields the form owns. That makes every modelled field the form does not name a silent data-loss
-/// candidate: the initialiser's default value applies, nothing warns, and the user's value is gone
-/// the next time they fix a typo. `iconID` was exactly that between landing in the model and being
-/// threaded through this form (issue #89), and this is the assertion that catches it.
+/// `save()` copies the entry it was opened on and assigns only the fields the form owns (issue
+/// #95). The previous shape — building a **new** `VaultEntry` from those fields — made every
+/// modelled field the form did not name a silent data-loss candidate: the initialiser's default
+/// applied, nothing warned, and the user's value was gone the next time they fixed a typo.
+/// `iconID` was exactly that between landing in the model and being threaded through this form
+/// (issue #89). These assertions go through `save()` itself so a regression cannot hide behind a
+/// reimplementation that agrees with itself about which fields exist.
 ///
 /// Deliberately not an XCUITest: the point is what the save path produces, which is answerable
 /// in-process, and `make e2e` steals focus and is not run on every change. It does drive a real
@@ -108,5 +110,30 @@ final class EntryEditSaveTests: XCTestCase {
         editor.save()
 
         XCTAssertEqual(handedBack?.iconID, VaultEntry.defaultIconID)
+    }
+
+    /// A modelled field the form does not name must ride through `save()` unchanged.
+    ///
+    /// `passwordLastChanged` is derived at decode time and is not a control on this form — the
+    /// previous `VaultEntry(...)` rebuild dropped it on the floor because the initialiser
+    /// defaults it to `nil`. Copy-then-assign (issue #95) is what makes a field nobody has
+    /// added a control for yet survive the same way.
+    func testSavePreservesFieldsTheFormDoesNotOwn() async throws {
+        var original = entry(iconID: 3)
+        original.passwordLastChanged = Date(timeIntervalSince1970: 1_600_000_000)
+        let store = try await makeUnlockedStore(containing: original)
+
+        var handedBack: VaultEntry?
+        let editor = makeEditor(for: original, in: store) { handedBack = $0 }
+        editor.save()
+
+        XCTAssertEqual(
+            handedBack?.passwordLastChanged, original.passwordLastChanged,
+            "a field the form does not edit was reset because save() rebuilt the entry"
+        )
+        XCTAssertEqual(handedBack?.id, original.id)
+        XCTAssertEqual(handedBack?.created, original.created)
+        XCTAssertEqual(handedBack?.iconID, 3)
+        XCTAssertEqual(handedBack?.title, "Router")
     }
 }

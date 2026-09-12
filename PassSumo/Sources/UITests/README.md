@@ -60,6 +60,9 @@ Swap the class name for `LaunchTests`, `EntryEditTests`, `SecretHandlingTests`, 
 - Elements are looked up by accessibility identifier or, where none exists, by accessibility label
   (`XCUIApplication.byID`/`.waitForLabel`/`.fieldRowValue` in `UITestSupport.swift`) — never by
   screen position, and never by matching a localized string that isn't also the identifier.
+  **Selecting a list or sidebar row uses `selectRow(identifiedBy:)`, not `byID(_:).click()`.**
+  `byID` resolves to a leaf `Text`/`Image` inside the row, and clicking that leaf does not drive
+  `List(selection:)` on macOS; `selectRow` clicks the containing cell instead.
 - **A plain SwiftUI `Text` puts its string in the accessibility VALUE, not the LABEL, on macOS.**
   Confirmed against the real AX tree captured from this suite's first run on actual hardware
   (issue #6) — every `StaticText` in the dump had an empty `label` and the string in `value`.

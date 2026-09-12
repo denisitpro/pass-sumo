@@ -175,15 +175,24 @@ struct EntryListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
             } else {
-                List(entries, selection: $selectedEntryID) { entry in
-                    row(for: entry, isLast: entry.id == entries.last?.id)
-                        .accessibilityIdentifier("list.entry.\(entry.id)")
-                        // The row draws its own ground, height, padding and inset hairline (see
-                        // `entryRowSurface`), so `List` must contribute none of the three: no
-                        // insets, no separator, no default row background.
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                // `List(selection:)` + `ForEach`, not `List(entries, selection:)`. The binding is
+                // `UUID?`, and a macOS `List` only writes a tag that is the same type as the
+                // binding — `List(data:)` auto-tags with the non-optional `Identifiable.id`, which
+                // is a value the selection can never hold, so clicking a row did nothing. Same
+                // class of bug as issue #85 on the sidebar (where the tag is already
+                // `Optional(GroupSelection…)`); found by issue #6's first real e2e run.
+                List(selection: $selectedEntryID) {
+                    ForEach(entries) { entry in
+                        row(for: entry, isLast: entry.id == entries.last?.id)
+                            .tag(Optional(entry.id))
+                            .accessibilityIdentifier("list.entry.\(entry.id)")
+                            // The row draws its own ground, height, padding and inset hairline (see
+                            // `entryRowSurface`), so `List` must contribute none of the three: no
+                            // insets, no separator, no default row background.
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
