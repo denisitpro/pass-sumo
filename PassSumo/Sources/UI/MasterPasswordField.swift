@@ -49,9 +49,16 @@ struct MasterPasswordField: View {
     var isDisabled = false
     let fieldIdentifier: String
     let revealIdentifier: String
+    /// Parent-owned focus, so a caller can put the caret back after something else (the system
+    /// Touch ID sheet) stole it. When nil, the field keeps its own `@FocusState`.
+    var focused: FocusState<Bool>.Binding? = nil
 
     @State private var reveal = PasswordRevealState()
-    @FocusState private var isFocused: Bool
+    @FocusState private var internallyFocused: Bool
+
+    private var activeFocus: FocusState<Bool>.Binding {
+        focused ?? $internallyFocused
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -68,8 +75,8 @@ struct MasterPasswordField: View {
                 // `border-strong` line at `field-border-width`, which is what makes the field read
                 // as an input at a glance (issue #32); focus swaps to the accent at
                 // `border-focus-width` plus the `accent-200` glow.
-                .fieldChrome(isFocused: isFocused)
-                .focused($isFocused)
+                .fieldChrome(isFocused: activeFocus.wrappedValue)
+                .focused(activeFocus)
                 .disabled(isDisabled)
                 .accessibilityIdentifier(fieldIdentifier)
 
