@@ -30,6 +30,8 @@ final class AppSettings {
         static let generatorDigits = "settings.generator.digits"
         static let generatorSymbols = "settings.generator.symbols"
         static let defaultUsername = "settings.defaultUsername"
+        static let generatorProfiles = "settings.generatorProfiles"
+        static let generatorProfileID = "settings.generatorProfileID"
     }
 
     /// Mirrors `AutoLockController.idleTimeout`'s own default (300s) so a database that has never
@@ -43,24 +45,48 @@ final class AppSettings {
     static let maximumAutoLockTimeout: TimeInterval = 3600
     /// Mirrors `ClipboardService.clearInterval`'s own default.
     static let defaultClipboardClearTimeout: TimeInterval = 30
+    /// Product floor for the clipboard-clear field (issue #185), the old stepper's lower bound.
+    static let minimumClipboardClearTimeout: TimeInterval = 5
+    /// Product cap for the clipboard-clear field, the old stepper's upper bound.
+    static let maximumClipboardClearTimeout: TimeInterval = 300
 
-    /// Interprets the Settings auto-lock seconds field (issue #162).
+    /// Interprets a Settings timeout field typed in seconds (issues #162, #185).
     ///
-    /// `committing` is false while the user is still typing — so `"3"` is not forced up to 30,
-    /// which would make `"30"` untypeable — and true on submit / focus-loss, when out-of-range
-    /// values clamp. Returns `nil` for empty and non-numeric input so the caller can revert the
-    /// field to the last valid timeout; empty is not a timeout.
-    static func parsedAutoLockTimeout(fromTyped text: String, committing: Bool) -> TimeInterval? {
+    /// `committing` is false while the user is still typing — so `"3"` is not forced up to the
+    /// floor, which would make `"30"` untypeable — and true on submit / focus-loss, when
+    /// out-of-range values clamp. Returns `nil` for empty and non-numeric input so the caller can
+    /// revert the field to the last valid timeout; empty is not a timeout. Shared by the auto-lock
+    /// and clipboard-clear fields, which differ only in their floor and cap.
+    static func parsedTimeout(
+        fromTyped text: String,
+        committing: Bool,
+        minimum: TimeInterval,
+        maximum: TimeInterval
+    ) -> TimeInterval? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
         guard let value = Int(trimmed) else { return nil }
         let interval = TimeInterval(value)
         if committing {
-            return min(max(interval, minimumAutoLockTimeout), maximumAutoLockTimeout)
+            return min(max(interval, minimum), maximum)
         }
-        if interval > maximumAutoLockTimeout { return maximumAutoLockTimeout }
-        if interval >= minimumAutoLockTimeout { return interval }
+        if interval > maximum { return maximum }
+        if interval >= minimum { return interval }
         return nil
+    }
+
+    static func parsedAutoLockTimeout(fromTyped text: String, committing: Bool) -> TimeInterval? {
+        parsedTimeout(
+            fromTyped: text, committing: committing,
+            minimum: minimumAutoLockTimeout, maximum: maximumAutoLockTimeout
+        )
+    }
+
+    static func parsedClipboardClearTimeout(fromTyped text: String, committing: Bool) -> TimeInterval? {
+        parsedTimeout(
+            fromTyped: text, committing: committing,
+            minimum: minimumClipboardClearTimeout, maximum: maximumClipboardClearTimeout
+        )
     }
 
     private let defaults: UserDefaults
@@ -85,11 +111,33 @@ final class AppSettings {
         didSet { defaults.set(detailPaneVisible, forKey: Key.detailPaneVisible) }
     }
 
-    /// Only `length` and the four character classes are user-facing (see `SettingsView`'s body) —
-    /// `excludeAmbiguous`/`customSymbols` stay at `PasswordGenerator.Recipe`'s own defaults, which
-    /// is exactly "few controls, no clutter" applied to the recipe itself, not just the screen.
+    /// The saved generator default, edited through `GeneratorSheet` (opened from the toolbar and
+    /// the entry editor) — issue #186 removed the duplicate controls Settings used to show. Only
+    /// `length` and the four character classes are user-facing there; `excludeAmbiguous` /
+    /// `customSymbols` stay at `PasswordGenerator.Recipe`'s own defaults, which is exactly "few
+    /// controls, no clutter" applied to the recipe itself, not just the screen.
     var generatorRecipe: PasswordGenerator.Recipe {
         didSet { persistRecipe() }
+    }
+
+    /// The saved named generator profiles (issue #187). Stored as JSON because `PasswordProfile`
+    /// is a small value type, not a plist primitive. The flat `generatorRecipe` above stays the
+    /// "last recipe used" that the new-entry password prefill and the existing tests read; profiles
+    /// are layered on top of it rather than replacing it.
+    var generatorProfiles: [PasswordProfile] {
+        didSet { persistProfiles() }
+    }
+
+    /// The profile currently selected in the generator UI. `nil` (or a dangling id) means "the
+    /// first profile" — see `selectedGeneratorProfile`.
+    var selectedGeneratorProfileID: UUID? {
+        didSet { defaults.set(selectedGeneratorProfileID?.uuidString, forKey: Key.generatorProfileID) }
+    }
+
+    /// The profile the generator should act on. Falls back to the first profile so a missing or
+    /// dangling selection can never leave the generator with nothing to generate from.
+    var selectedGeneratorProfile: PasswordProfile? {
+        generatorProfiles.first { $0.id == selectedGeneratorProfileID } ?? generatorProfiles.first
     }
 
     /// Prefill for a brand-new entry's username (issue #140). Empty means leave it blank.
@@ -113,6 +161,8 @@ final class AppSettings {
         if let value = defaults.object(forKey: Key.generatorSymbols) as? Bool { recipe.symbols = value }
         defaultUsername = defaults.string(forKey: Key.defaultUsername) ?? ""
         generatorRecipe = recipe
+        generatorProfiles = Self.storedProfiles(defaults) ?? PasswordProfile.defaults
+        selectedGeneratorProfileID = defaults.string(forKey: Key.generatorProfileID).flatMap(UUID.init(uuidString:))
         // Note on `didSet` during `init`: assigning the stored properties above does run their
         // `didSet` (Swift only skips observers for a property's own *declaration-time* default, not
         // for an explicit assignment in `init`'s body), so this constructor writes each value
@@ -126,6 +176,19 @@ final class AppSettings {
         defaults.set(generatorRecipe.uppercase, forKey: Key.generatorUppercase)
         defaults.set(generatorRecipe.digits, forKey: Key.generatorDigits)
         defaults.set(generatorRecipe.symbols, forKey: Key.generatorSymbols)
+    }
+
+    private func persistProfiles() {
+        if let data = try? JSONEncoder().encode(generatorProfiles) {
+            defaults.set(data, forKey: Key.generatorProfiles)
+        }
+    }
+
+    /// Decodes the stored profile list, or `nil` when absent or corrupt — the caller then falls
+    /// back to `PasswordProfile.defaults` rather than trapping on a half-written `UserDefaults`.
+    private static func storedProfiles(_ defaults: UserDefaults) -> [PasswordProfile]? {
+        guard let data = defaults.data(forKey: Key.generatorProfiles) else { return nil }
+        return try? JSONDecoder().decode([PasswordProfile].self, from: data)
     }
 
     /// `UserDefaults.double(forKey:)` returns `0` for a missing key, indistinguishable from a
@@ -224,12 +287,18 @@ struct SettingsView: View {
     /// (issue #162).
     @State private var autoLockTimeoutText: String
     @FocusState private var isAutoLockTimeoutFocused: Bool
+    /// The typed clipboard-clear field's own string, for the same reason `autoLockTimeoutText`
+    /// exists: a mid-edit `"3"` (prefix of `"30"`) must not be clamped to the floor on every
+    /// keystroke (issue #185).
+    @State private var clipboardClearTimeoutText: String
+    @FocusState private var isClipboardClearTimeoutFocused: Bool
 
     private let versionInfo = AppVersionInfo.current()
 
     init(environment: AppEnvironment) {
         self.environment = environment
         _autoLockTimeoutText = State(initialValue: String(Int(environment.settings.autoLockTimeout)))
+        _clipboardClearTimeoutText = State(initialValue: String(Int(environment.settings.clipboardClearTimeout)))
     }
 
     var body: some View {
@@ -251,7 +320,7 @@ struct SettingsView: View {
                         .padding(.horizontal, Spacing.s3)
                         .padding(.vertical, Spacing.s2)
                         .frame(width: Spacing.s10 + Spacing.s6)
-                        .sunkenWell()
+                        .fieldChrome(isFocused: isAutoLockTimeoutFocused)
                         .focused($isAutoLockTimeoutFocused)
                         .accessibilityIdentifier("settings.autoLockTimeout")
                         .onSubmit { applyTypedAutoLockTimeout(committing: true) }
@@ -262,35 +331,33 @@ struct SettingsView: View {
             }
 
             Section("Clipboard") {
-                Stepper(
-                    "Clear clipboard after \(Int(environment.settings.clipboardClearTimeout))s",
-                    value: $environment.settings.clipboardClearTimeout,
-                    in: 5...300,
-                    step: 5
-                )
-                .accessibilityIdentifier("settings.clipboardClearTimeout")
+                // Same numeric-field pattern as the auto-lock field above (issue #185), so the two
+                // timeout controls look and behave identically instead of one being a stepper.
+                HStack(alignment: .center, spacing: Spacing.s3) {
+                    Text("Clear clipboard after")
+                    Spacer()
+                    TextField("seconds", text: $clipboardClearTimeoutText)
+                        .textFieldStyle(.plain)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.text)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .padding(.horizontal, Spacing.s3)
+                        .padding(.vertical, Spacing.s2)
+                        .frame(width: Spacing.s10 + Spacing.s6)
+                        .fieldChrome(isFocused: isClipboardClearTimeoutFocused)
+                        .focused($isClipboardClearTimeoutFocused)
+                        .accessibilityIdentifier("settings.clipboardClearTimeout")
+                        .onSubmit { applyTypedClipboardClearTimeout(committing: true) }
+                    Text("s")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
+                }
             }
 
             Section("New Entries") {
                 TextField("Default username", text: $environment.settings.defaultUsername)
                     .accessibilityIdentifier("settings.defaultUsername")
-            }
-
-            Section("Password Generator") {
-                Stepper(
-                    "Length: \(environment.settings.generatorRecipe.length)",
-                    value: $environment.settings.generatorRecipe.length,
-                    in: 8...64
-                )
-                .accessibilityIdentifier("settings.generatorLength")
-                Toggle("Lowercase (a-z)", isOn: $environment.settings.generatorRecipe.lowercase)
-                    .accessibilityIdentifier("settings.generatorLowercase")
-                Toggle("Uppercase (A-Z)", isOn: $environment.settings.generatorRecipe.uppercase)
-                    .accessibilityIdentifier("settings.generatorUppercase")
-                Toggle("Digits (0-9)", isOn: $environment.settings.generatorRecipe.digits)
-                    .accessibilityIdentifier("settings.generatorDigits")
-                Toggle("Symbols (!#$…)", isOn: $environment.settings.generatorRecipe.symbols)
-                    .accessibilityIdentifier("settings.generatorSymbols")
             }
 
             Section {
@@ -332,9 +399,18 @@ struct SettingsView: View {
         .onChange(of: isAutoLockTimeoutFocused) {
             if !isAutoLockTimeoutFocused { applyTypedAutoLockTimeout(committing: true) }
         }
+        .onChange(of: clipboardClearTimeoutText) {
+            applyTypedClipboardClearTimeout(committing: false)
+        }
+        .onChange(of: isClipboardClearTimeoutFocused) {
+            if !isClipboardClearTimeoutFocused { applyTypedClipboardClearTimeout(committing: true) }
+        }
         .onAppear { refreshTouchIDEnabled() }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in
             environment.clipboard.clearInterval = newValue
+            if !isClipboardClearTimeoutFocused {
+                clipboardClearTimeoutText = String(Int(newValue))
+            }
         }
     }
 
@@ -361,6 +437,30 @@ struct SettingsView: View {
         if let timeout = AppSettings.parsedAutoLockTimeout(fromTyped: autoLockTimeoutText, committing: false) {
             if environment.settings.autoLockTimeout != timeout {
                 environment.settings.autoLockTimeout = timeout
+            }
+        }
+    }
+
+    /// The clipboard-clear timeout the typed field would commit for `text`, mirroring
+    /// `committedAutoLockTimeout` — revert-to-current on empty or non-numeric input (issue #185).
+    func committedClipboardClearTimeout(fromTyped text: String) -> TimeInterval {
+        AppSettings.parsedClipboardClearTimeout(fromTyped: text, committing: true)
+            ?? environment.settings.clipboardClearTimeout
+    }
+
+    /// Clamp / revert for the typed clipboard-clear field, the same policy as the auto-lock field.
+    private func applyTypedClipboardClearTimeout(committing: Bool) {
+        if committing {
+            let timeout = committedClipboardClearTimeout(fromTyped: clipboardClearTimeoutText)
+            if environment.settings.clipboardClearTimeout != timeout {
+                environment.settings.clipboardClearTimeout = timeout
+            }
+            clipboardClearTimeoutText = String(Int(timeout))
+            return
+        }
+        if let timeout = AppSettings.parsedClipboardClearTimeout(fromTyped: clipboardClearTimeoutText, committing: false) {
+            if environment.settings.clipboardClearTimeout != timeout {
+                environment.settings.clipboardClearTimeout = timeout
             }
         }
     }

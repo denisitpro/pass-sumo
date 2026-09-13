@@ -237,39 +237,46 @@ struct EntryListView: View {
 
     private func row(for entry: VaultEntry, isLast: Bool) -> some View {
         let isSelected = entry.id == selectedEntryID
-        // Title and sub-line are pushed together into the mockup's 34pt row: 13/17 over 11/13, so
-        // both fit without the row growing. Dense on purpose — hundreds of entries is the expected
-        // scale (repo CLAUDE.md positioning notes). The icon added in front of them is why the row
-        // height is worth restating: it costs width, not height, and the two-line stack is
-        // unchanged.
+        // Single-line columnar row (issue #182): the icon, a flexing Title, then fixed-width
+        // Username / URL / Modified columns so those fields line up row to row — the Strongbox
+        // layout the owner asked for, replacing the title-over-username stack. Dense on purpose:
+        // hundreds of entries is the expected scale (repo CLAUDE.md positioning notes), and one
+        // 34pt line per row keeps that.
         return HStack(spacing: Spacing.s4) {
-            // The entry's own built-in KDBX icon (issue #89). Drawn at `caption`, the same size the
-            // sidebar's folder glyph uses, so the two list surfaces read as one system rather than
-            // as two columns that each decided how big an icon is; and in the fixed
-            // `row-icon-slot` square, because the symbol is one of 69 the user picks and their
-            // widths differ enough to leave the title column visibly ragged otherwise.
+            // The entry's built-in KDBX icon, honouring the "inherit the group's icon" rule
+            // (issue #194) through `rowSymbol(for:)`. Drawn at `caption` and in the fixed
+            // `row-icon-slot` square for the same reason the sidebar's folder glyph is: the symbol
+            // is one of 69 the user picks, and their widths differ enough to leave the title
+            // column visibly ragged otherwise (issue #89).
             //
             // No accessibility label: the icon is decoration of the title beside it, not a second
             // fact about the entry, and VoiceOver reading "key, Router" on every row is noise. The
             // TOTP glyph below IS labelled, because it says something the row does not otherwise.
-            Image(systemName: entry.symbolName)
+            Image(systemName: rowSymbol(for: entry))
                 .font(Typography.caption)
                 .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
                 .frame(width: Metrics.rowIconSlot)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(entry.title.isEmpty ? "Untitled" : entry.title)
-                    .font(isSelected ? Typography.bodyMedium : Typography.body)
-                    .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.text)
-                    .lineLimit(1)
-                if !entry.username.isEmpty {
-                    Text(entry.username)
-                        .font(Typography.caption2)
-                        .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
+            Text(entry.title.isEmpty ? "Untitled" : entry.title)
+                .font(isSelected ? Typography.bodyMedium : Typography.body)
+                .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.text)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(entry.username)
+                .font(Typography.caption)
+                .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
+                .lineLimit(1)
+                .frame(width: Metrics.entryColumnUsername, alignment: .leading)
+            Text(entry.url)
+                .font(Typography.caption)
+                .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textSecondary)
+                .lineLimit(1)
+                .frame(width: Metrics.entryColumnURL, alignment: .leading)
+            Text(Self.modifiedFormatter.string(from: entry.modified))
+                .font(Typography.caption2)
+                .foregroundStyle(isSelected ? Palette.rowSelectionText : Palette.textTertiary)
+                .lineLimit(1)
+                .frame(width: Metrics.entryColumnModified, alignment: .leading)
             if entry.otpAuthURL != nil {
                 Image(systemName: "clock.badge.checkmark")
                     .font(Typography.caption)
@@ -300,6 +307,25 @@ struct EntryListView: View {
         .draggable(DraggedEntryID(id: entry.id))
         .contextMenu { contextMenuItems(for: entry) }
     }
+
+    /// The SF Symbol an entry row draws, honouring the "inherit the group's icon" rule (issue #194):
+    /// an entry that still carries the default key shows its folder's icon when it is filed in one,
+    /// because the owner files an entry in a folder partly to give it that folder's look until a
+    /// per-entry icon is chosen. Any non-default entry icon wins outright; a default-icon entry
+    /// with no group draws the key.
+    private func rowSymbol(for entry: VaultEntry) -> String {
+        let groupIconID = entry.groupID.flatMap { id in
+            vault.groups.first { $0.id == id }?.iconID
+        }
+        return StandardIconCatalog.symbolName(forEntryIconID: entry.iconID, groupIconID: groupIconID)
+    }
+
+    private static let modifiedFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     /// Mirrors the toolbar/menu-bar actions already available for the selected entry — see
     /// `onOpenEntry`'s doc comment for why nothing here is a new code path. An item that cannot

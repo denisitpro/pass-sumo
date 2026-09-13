@@ -132,6 +132,21 @@ enum StandardIconCatalog {
     static func symbolName(for iconID: UInt32, fallingBackTo fallbackIconID: UInt32) -> String {
         symbolName(for: iconID) ?? symbolName(for: fallbackIconID) ?? symbolNames[0]
     }
+
+    /// The symbol an entry row draws, honouring the "inherit the group's icon" rule (issue #194):
+    /// an entry that still carries the default key (0) shows its folder's icon when it is filed in
+    /// one, because the owner files an entry in a folder partly to give it that folder's look until
+    /// a per-entry icon is chosen. Any non-default entry icon wins outright; a default-icon entry
+    /// with no group draws the key.
+    static func symbolName(forEntryIconID entryIconID: UInt32, groupIconID: UInt32?) -> String {
+        if entryIconID != VaultEntry.defaultIconID {
+            return symbolName(for: entryIconID, fallingBackTo: VaultEntry.defaultIconID)
+        }
+        if let groupIconID {
+            return symbolName(for: groupIconID, fallingBackTo: VaultGroup.defaultIconID)
+        }
+        return symbolName(for: entryIconID, fallingBackTo: VaultEntry.defaultIconID)
+    }
 }
 
 // MARK: - What each kind of item falls back to
