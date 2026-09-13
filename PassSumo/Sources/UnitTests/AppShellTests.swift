@@ -88,11 +88,58 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(settings.clipboardClearTimeout, AppSettings.defaultClipboardClearTimeout)
         XCTAssertTrue(settings.showPasswordStrength)
         XCTAssertEqual(settings.generatorRecipe, PasswordGenerator.Recipe())
+        XCTAssertEqual(settings.generatorRecipe.length, 15)
+        XCTAssertTrue(settings.generatorRecipe.lowercase)
+        XCTAssertTrue(settings.generatorRecipe.uppercase)
+        XCTAssertTrue(settings.generatorRecipe.digits)
+        XCTAssertFalse(settings.generatorRecipe.symbols)
         // The detail inspector starts shown — issue #49's default matches the pane's old,
         // always-visible `detail:` column behavior, so upgrading from a build with no saved
         // preference does not silently hide it.
         XCTAssertTrue(settings.detailPaneVisible)
         XCTAssertEqual(settings.defaultUsername, "")
+    }
+
+    // MARK: - Auto-lock timeout field (issue #162)
+
+    /// Empty and non-numeric commit to `nil` so the field reverts; out-of-range numbers clamp.
+    /// Live typing (`committing: false`) does not lift `"3"` to 30, or `"30"` would be untypeable.
+    func testParsedAutoLockTimeoutCommitsClampAndRevertsEmpty() {
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "120", committing: true), 120)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "30", committing: true), 30)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "3600", committing: true), 3600)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "10", committing: true), 30)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "29", committing: true), 30)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "3601", committing: true), 3600)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "9999", committing: true), 3600)
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "", committing: true))
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "   ", committing: true))
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "abc", committing: true))
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "12x", committing: true))
+
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "3", committing: false))
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "29", committing: false))
+        XCTAssertNil(AppSettings.parsedAutoLockTimeout(fromTyped: "", committing: false))
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "120", committing: false), 120)
+        XCTAssertEqual(AppSettings.parsedAutoLockTimeout(fromTyped: "9999", committing: false), 3600)
+    }
+
+    /// Issue #162: the typed auto-lock field clamps on commit. Empty and non-numeric input
+    /// reverts to the timeout the settings already hold, not to the floor — wiping 300 down to
+    /// 30 because the user typed "abc" would be the wrong correction.
+    func testAutoLockTimeoutFieldClampsAndRevertsWithoutRendering() {
+        let environment = AppEnvironment.uiTesting()
+        XCTAssertEqual(environment.settings.autoLockTimeout, AppSettings.defaultAutoLockTimeout)
+        let view = SettingsView(environment: environment)
+
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "120"), 120)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "30"), 30)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "3600"), 3600)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "10"), 30)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "9999"), 3600)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: ""), AppSettings.defaultAutoLockTimeout)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "abc"), AppSettings.defaultAutoLockTimeout)
+        XCTAssertEqual(view.committedAutoLockTimeout(fromTyped: "   "), AppSettings.defaultAutoLockTimeout)
     }
 
     // MARK: - AppCommands enablement

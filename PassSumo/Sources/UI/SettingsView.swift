@@ -35,8 +35,33 @@ final class AppSettings {
     /// Mirrors `AutoLockController.idleTimeout`'s own default (300s) so a database that has never
     /// touched Settings still auto-locks on the same schedule the controller would pick on its own.
     static let defaultAutoLockTimeout: TimeInterval = 300
+    /// Product floor for the Settings auto-lock field (issue #162). Below this, commit clamps
+    /// rather than storing a timeout shorter than the old stepper allowed.
+    static let minimumAutoLockTimeout: TimeInterval = 30
+    /// Product cap, matching the old stepper's upper bound. A typed hour-plus value is not a
+    /// useful idle timeout.
+    static let maximumAutoLockTimeout: TimeInterval = 3600
     /// Mirrors `ClipboardService.clearInterval`'s own default.
     static let defaultClipboardClearTimeout: TimeInterval = 30
+
+    /// Interprets the Settings auto-lock seconds field (issue #162).
+    ///
+    /// `committing` is false while the user is still typing — so `"3"` is not forced up to 30,
+    /// which would make `"30"` untypeable — and true on submit / focus-loss, when out-of-range
+    /// values clamp. Returns `nil` for empty and non-numeric input so the caller can revert the
+    /// field to the last valid timeout; empty is not a timeout.
+    static func parsedAutoLockTimeout(fromTyped text: String, committing: Bool) -> TimeInterval? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        guard let value = Int(trimmed) else { return nil }
+        let interval = TimeInterval(value)
+        if committing {
+            return min(max(interval, minimumAutoLockTimeout), maximumAutoLockTimeout)
+        }
+        if interval > maximumAutoLockTimeout { return maximumAutoLockTimeout }
+        if interval >= minimumAutoLockTimeout { return interval }
+        return nil
+    }
 
     private let defaults: UserDefaults
 
@@ -114,7 +139,7 @@ final class AppSettings {
 
 // MARK: - Version info
 
-/// The version/build/revision/OS line shown, and made copyable, by the Settings "About" section
+/// The version/build/revision line shown, and made copyable, by the Settings "About" section
 /// (issue #51) — assembled for pasting whole into a bug report.
 ///
 /// Built from explicit inputs rather than reading `Bundle.main`/`ProcessInfo` inside the view, the
@@ -138,7 +163,8 @@ struct AppVersionInfo {
     static let unknownBuild = "1"
     static let unknownGitRevision = "dev"
 
-    /// Reads the three git-stamped `Info.plist` keys plus the running macOS version.
+    /// Reads the three git-stamped `Info.plist` keys plus the running macOS version (kept on the
+    /// struct for tests/injection; not shown in any user-visible string — issue #164).
     /// `infoDictionary`/`osVersion` are injectable so tests can supply a dictionary missing one or
     /// all of the git-stamping keys without touching `Bundle.main`.
     static func current(
@@ -155,19 +181,19 @@ struct AppVersionInfo {
     }
 
     /// Unlock's version line (issue #146): marketing version, build number, short git hash.
-    /// Settings keeps the longer `summary` (adds the word "build" and the OS). Never localized.
+    /// Settings keeps the longer `summary` (adds the word "build"). Never localized.
     var compactLine: String {
         "PassSumo \(shortVersion) (\(build)) · \(gitRevision)"
     }
 
     /// The exact bug-report string. Never localized, never run through a locale-aware formatter.
+    /// ShotSumo's shape (issue #164): no OS version.
     var summary: String {
-        "PassSumo \(shortVersion) (build \(build)) · \(gitRevision) · macOS \(osVersion)"
+        "PassSumo \(shortVersion) (build \(build)) · \(gitRevision)"
     }
 
     /// Compact stamp for the window corner / status bar so a leftover build is obvious at a
-    /// glance (issue #153). Not `summary` — that is the copyable bug-report line and includes
-    /// macOS, which this readout does not need.
+    /// glance (issue #153). Not `summary` — that is the copyable bug-report line.
     var shortLabel: String {
         "\(shortVersion) (\(build)) · \(gitRevision)"
     }
@@ -193,7 +219,18 @@ struct SettingsView: View {
     /// version string — local, transient UI state, reset by `copyVersionInfo`'s own timer.
     @State private var didCopyVersionInfo = false
 
+    /// The typed auto-lock field's own string, distinct from `settings.autoLockTimeout`, so a
+    /// mid-edit `"3"` (prefix of `"30"`) is not forced up to the floor of 30 on every keystroke
+    /// (issue #162).
+    @State private var autoLockTimeoutText: String
+    @FocusState private var isAutoLockTimeoutFocused: Bool
+
     private let versionInfo = AppVersionInfo.current()
+
+    init(environment: AppEnvironment) {
+        self.environment = environment
+        _autoLockTimeoutText = State(initialValue: String(Int(environment.settings.autoLockTimeout)))
+    }
 
     var body: some View {
         Form {
@@ -202,13 +239,26 @@ struct SettingsView: View {
             }
 
             Section("Locking") {
-                Stepper(
-                    "Auto-lock after \(Int(environment.settings.autoLockTimeout))s of inactivity",
-                    value: $environment.settings.autoLockTimeout,
-                    in: 30...3600,
-                    step: 30
-                )
-                .accessibilityIdentifier("settings.autoLockTimeout")
+                HStack(alignment: .center, spacing: Spacing.s3) {
+                    Text("Auto-lock after inactivity")
+                    Spacer()
+                    TextField("seconds", text: $autoLockTimeoutText)
+                        .textFieldStyle(.plain)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.text)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .padding(.horizontal, Spacing.s3)
+                        .padding(.vertical, Spacing.s2)
+                        .frame(width: Spacing.s10 + Spacing.s6)
+                        .sunkenWell()
+                        .focused($isAutoLockTimeoutFocused)
+                        .accessibilityIdentifier("settings.autoLockTimeout")
+                        .onSubmit { applyTypedAutoLockTimeout(committing: true) }
+                    Text("s")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
+                }
             }
 
             Section("Clipboard") {
@@ -272,10 +322,46 @@ struct SettingsView: View {
         // itself is the thing that survives a relaunch; these two lines are the live-wiring on top.
         .onChange(of: environment.settings.autoLockTimeout) { _, newValue in
             environment.applyAutoLockTimeout(newValue)
+            if !isAutoLockTimeoutFocused {
+                autoLockTimeoutText = String(Int(newValue))
+            }
+        }
+        .onChange(of: autoLockTimeoutText) {
+            applyTypedAutoLockTimeout(committing: false)
+        }
+        .onChange(of: isAutoLockTimeoutFocused) {
+            if !isAutoLockTimeoutFocused { applyTypedAutoLockTimeout(committing: true) }
         }
         .onAppear { refreshTouchIDEnabled() }
         .onChange(of: environment.settings.clipboardClearTimeout) { _, newValue in
             environment.clipboard.clearInterval = newValue
+        }
+    }
+
+    /// The timeout the typed field would commit for `text`, including revert-to-current on
+    /// empty or non-numeric input. Factored out of the TextField wiring so issue #162's clamp
+    /// tests can drive it without rendering — same "call the real method" seam as
+    /// `GeneratorSheet.committedLength`.
+    func committedAutoLockTimeout(fromTyped text: String) -> TimeInterval {
+        AppSettings.parsedAutoLockTimeout(fromTyped: text, committing: true)
+            ?? environment.settings.autoLockTimeout
+    }
+
+    /// Clamp / revert for the typed auto-lock field. `parsedAutoLockTimeout` owns the policy;
+    /// this writes the result back onto settings (which then live-applies via `onChange`).
+    private func applyTypedAutoLockTimeout(committing: Bool) {
+        if committing {
+            let timeout = committedAutoLockTimeout(fromTyped: autoLockTimeoutText)
+            if environment.settings.autoLockTimeout != timeout {
+                environment.settings.autoLockTimeout = timeout
+            }
+            autoLockTimeoutText = String(Int(timeout))
+            return
+        }
+        if let timeout = AppSettings.parsedAutoLockTimeout(fromTyped: autoLockTimeoutText, committing: false) {
+            if environment.settings.autoLockTimeout != timeout {
+                environment.settings.autoLockTimeout = timeout
+            }
         }
     }
 

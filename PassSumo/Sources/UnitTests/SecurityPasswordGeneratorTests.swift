@@ -26,6 +26,22 @@ final class SecurityPasswordGeneratorTests: XCTestCase {
         )
     }
 
+    // MARK: - Factory defaults (issue #163)
+
+    /// Product default for a new install / never-set recipe. Explicit so a change to `Recipe()`
+    /// cannot hide behind `testSettingsDefaultsWhenNothingStoredYet`'s equality with another
+    /// `Recipe()`.
+    func testRecipeFactoryDefaultIsFifteenLettersAndDigitsWithoutSymbols() {
+        let recipe = PasswordGenerator.Recipe()
+        XCTAssertEqual(recipe.length, 15)
+        XCTAssertTrue(recipe.lowercase)
+        XCTAssertTrue(recipe.uppercase)
+        XCTAssertTrue(recipe.digits)
+        XCTAssertFalse(recipe.symbols)
+        XCTAssertTrue(recipe.excludeAmbiguous)
+        XCTAssertNil(recipe.customSymbols)
+    }
+
     // MARK: - Unsatisfiable recipes
 
     func testThrowsWhenNoClassIsEnabled() {

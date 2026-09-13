@@ -34,7 +34,7 @@ final class GeneratorTests: XCTestCase {
         )
 
         // Drag to the slider's maximum (64 characters, per `GeneratorSheet`'s `4...64` range) —
-        // as far as possible from the 20-character default, so a flaky few-character wobble in
+        // as far as possible from the 15-character default, so a flaky few-character wobble in
         // `adjust(toNormalizedSliderPosition:)`'s precision can't be mistaken for "didn't change".
         lengthSlider.adjust(toNormalizedSliderPosition: 1.0)
         // `GeneratorSheet.onChange(of: recipe, regenerate)` already regenerates on the slider
@@ -77,8 +77,8 @@ final class GeneratorTests: XCTestCase {
         XCTAssertNotEqual(generated, concealed, "revealing must expose the real password, not bullets")
         XCTAssertFalse(generated.isEmpty)
         XCTAssertEqual(
-            generated.count, 20,
-            "ui-testing uses a throwaway defaults suite, so generate-now starts from Recipe()'s 20"
+            generated.count, 15,
+            "ui-testing uses a throwaway defaults suite, so generate-now starts from Recipe()'s 15"
         )
 
         app.byID("edit.cancel").click()
