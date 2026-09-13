@@ -4,8 +4,8 @@ import SwiftUI
 /// A one-shot nudge from the menu bar to whichever view owns the UI a command needs but this file
 /// does not: an editor sheet, a focused search field, a file-picker flow. Set by `AppCommands`,
 /// observed and cleared (`environment.menuRequest = nil`) by the view that can act on it —
-/// `RootView` for `.openDatabase` (it is the only view mounted in every store state, and since
-/// issue #84 that item is enabled while a vault is open), `WelcomeView` for `.newDatabase`,
+/// `RootView` for `.openDatabase` and `.newDatabase` (it is the only view mounted in every store
+/// state; since issue #84 Open is enabled with tabs, and since issue #165 so is Create),
 /// `VaultBrowserView` (owned separately) for the entry/search ones. A menu command that can act
 /// entirely on its own (Save, Lock, Delete Entry,
 /// Copy Username/Password) never goes through this — it calls straight into `VaultStore` /
@@ -195,14 +195,10 @@ struct AppCommands: Commands {
     /// including mid-unlock of the front tab, which used to drop the request.
     var canOpenDatabase: Bool { true }
 
-    /// "New Database…" stays scoped to "no tabs", deliberately.
-    ///
-    /// The create sheet lives inside `WelcomeView`, which is unmounted whenever a tab exists.
-    /// Giving Create the same add-a-tab treatment as Open is its own change, with its own tests,
-    /// not a side effect of issue #47.
-    var canCreateNewDatabase: Bool {
-        environment.sessionList.sessions.isEmpty
-    }
+    /// "New Database…" is no longer scoped to "no tabs" (issue #165). Create adds a tab the
+    /// same way Open does, and `RootView` owns the create sheet in every store state — including
+    /// mid-unlock of the front tab.
+    var canCreateNewDatabase: Bool { true }
 
     /// Whether the open database has anything in its recycle bin. Drives the enablement of
     /// "Empty Recycle Bin…" so the item is not offered for a database that has no bin, or a bin

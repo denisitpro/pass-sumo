@@ -19,6 +19,7 @@ struct DatabaseTabBar: View {
                         onClose: { _ = environment.sessionList.requestClose(session.id) }
                     )
                 }
+                NewDatabaseTabControl(environment: environment)
             }
             .padding(.horizontal, Spacing.s2)
         }
@@ -87,5 +88,31 @@ private struct DatabaseTab: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("root.tab.\(title)")
+    }
+}
+
+/// Trailing + in the empty slot after the last tab (issue #165). Raises the same `menuRequest`
+/// values File → Open / File → New do, so this control cannot present a second open panel or
+/// a second create sheet for one click.
+private struct NewDatabaseTabControl: View {
+    let environment: AppEnvironment
+
+    var body: some View {
+        Menu {
+            Button("Open Database…") { environment.menuRequest = .openDatabase }
+            Button("Create New Database…") { environment.menuRequest = .newDatabase }
+        } label: {
+            Image(systemName: "plus")
+                .font(Typography.caption2)
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: Metrics.glyphButtonSize, height: Metrics.glyphButtonSize)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .padding(.leading, Spacing.s2)
+        .padding(.vertical, Spacing.s2)
+        .accessibilityLabel("New database")
+        .accessibilityIdentifier("root.tabs.new")
     }
 }
