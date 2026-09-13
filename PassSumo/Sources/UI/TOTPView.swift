@@ -11,7 +11,9 @@ import SwiftUI
 /// weak-self/invalidate dance for exactly this reason — a `TimelineView` needs none of it).
 struct TOTPView: View {
     let otpAuthURL: String
-    let clipboard: ClipboardService
+    /// Called with the code currently on screen. The caller owns the pasteboard write (and the
+    /// copy toast) so this view cannot diverge from `AppCommands.copyTOTP`.
+    let onCopy: (String) -> Void
 
     /// Parsed once, in `init`, rather than re-parsed on every tick — the URL doesn't change while
     /// this view is on screen, and `TOTPGenerator(parsing:)` isn't free (base32 decode, query
@@ -19,9 +21,9 @@ struct TOTPView: View {
     /// instead of crashing on an entry some other KDBX client wrote with a shape we don't expect.
     private let generatorResult: Result<TOTPGenerator, Error>
 
-    init(otpAuthURL: String, clipboard: ClipboardService) {
+    init(otpAuthURL: String, onCopy: @escaping (String) -> Void) {
         self.otpAuthURL = otpAuthURL
-        self.clipboard = clipboard
+        self.onCopy = onCopy
         do {
             generatorResult = .success(try TOTPGenerator(parsing: otpAuthURL))
         } catch {
@@ -73,7 +75,7 @@ struct TOTPView: View {
                             // it rather than calling `generator.code(at:)` again guarantees the
                             // copied string matches what's on screen even if the tap lands right
                             // on a period boundary.
-                            clipboard.copy(code)
+                            onCopy(code)
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
@@ -104,7 +106,7 @@ struct TOTPView: View {
 #Preview {
     TOTPView(
         otpAuthURL: "otpauth://totp/Google:demo@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Google",
-        clipboard: ClipboardService()
+        onCopy: { _ in }
     )
     .padding()
 }
@@ -112,6 +114,6 @@ struct TOTPView: View {
 #Preview("Invalid URL") {
     // `host` is "hotp", not "totp" — a guaranteed `TOTPError.notATOTPURL`, exercising the inline
     // error path without relying on a string that merely happens to fail base32 decoding.
-    TOTPView(otpAuthURL: "otpauth://hotp/Example?secret=JBSWY3DPEHPK3PXP", clipboard: ClipboardService())
+    TOTPView(otpAuthURL: "otpauth://hotp/Example?secret=JBSWY3DPEHPK3PXP", onCopy: { _ in })
         .padding()
 }

@@ -193,8 +193,8 @@ struct VaultBrowserView: View {
             searchText: $searchText,
             selectedEntryID: $selectedEntryID,
             onOpenEntry: { id in openForEdit(id) },
-            onCopyUsername: { entry in clipboard.copy(entry.username) },
-            onCopyPassword: { entry in clipboard.copy(entry.password) },
+            onCopyUsername: { entry in copy(entry.username, notice: "Copied username") },
+            onCopyPassword: { entry in copy(entry.password, notice: "Copied password") },
             onDeleteEntry: { id in requestDelete(id) },
             onNewEntry: startNewEntry
         )
@@ -227,28 +227,24 @@ struct VaultBrowserView: View {
             // the view carrying `.inspector` itself.
             //
             // Without a width range the inspector sits at SwiftUI's unconfigured default and
-            // its divider does not drag at all (issue #86). The three numbers are measured
-            // against what `EntryDetailView` actually renders, not copied from another app:
+            // its divider does not drag at all (issue #86). The three numbers are a product
+            // call, not a clipping floor (issue #166): the list is the working column, the
+            // inspector is a side pane. A ~900–1100pt window must not give the empty
+            // "No Entry Selected" inspector more than half the width. FieldRow values wrap,
+            // so the old 400pt TOTP floor is no longer the constraint.
             //
-            // **min 400.** The pane's one row that cannot reflow is `TOTPView`: an `HStack` of
-            // fixed-size parts with no flexible member. At the widest code an `otpauth://` URI
-            // may ask for (8 digits) it measures 343pt — "One-time" 53 + `s5` + the code 111
-            // plus 18 of `tracking` + `s5` + the 40pt progress bar + `s5` + the 24pt seconds
-            // slot + `s5` + a 24pt copy glyph + `s5` of well padding each side — and the pane
-            // adds `s7` of its own padding on both sides, putting the clipping floor at 383.
-            // 400 is that floor rounded up. Everything else reflows: a `FieldRow` value wraps,
-            // an attachment preview is capped at 220, the header title truncates to one line.
+            // **min 300.** Tight enough that the list keeps the leftover in a non-fullscreen
+            // window. The attachment preview is capped at 220, the header title truncates to
+            // one line, and TOTPView's HStack compresses — none of those need 400pt.
             //
-            // **ideal 480.** The width `EntryDetailView`'s own `#Preview` frames at, i.e. the
-            // one this layout was eyeballed against. It is also where the Metadata section's
-            // KDBX entry UUID — 289pt of 13pt monospace, the longest fixed string in the pane
-            // — first fits beside its 90pt label on one line (431pt needed).
+            // **ideal 340.** The width the inspector asks for before leftover space is
+            // assigned. Kept below the list's ideal (400) so the list wins the slack.
             //
-            // **max 640.** Past this the extra width reaches only wrapped prose: at 640 a
-            // Notes value already runs about 81 characters per line, which is past a
-            // comfortable measure rather than short of one. Everything else — labels, glyphs,
-            // the preview cap — is fixed and stops using the room long before.
-            .inspectorColumnWidth(min: 400, ideal: 480, max: 640)
+            // **max 480.** Past this the extra width reaches only wrapped prose. The old 640
+            // let a notes field run ~81 characters a line; 480 is still past a comfortable
+            // measure for labels and glyphs, and stops the pane eating the list when the
+            // window is merely large, not fullscreen.
+            .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
         }
     }
 
@@ -302,16 +298,17 @@ struct VaultBrowserView: View {
             // anything has to reflow.
             //
             // **max 320.** A sidebar row carries far less than the inspector's prose-bearing fields
-            // — a short label and a number, nothing that benefits from wrapping — so it is capped at
-            // about half the inspector's 640: past this point extra width only stretches empty
+            // — a short label and a number, nothing that benefits from wrapping — so it is capped
+            // well short of the inspector: past this point extra width only stretches empty
             // trailing space between a group's name and its count.
             .navigationSplitViewColumnWidth(min: 165, ideal: 220, max: 320)
         } detail: {
             detailColumn
                 // Without a floor this column can be dragged to zero and SwiftUI crashes
-                // (issue #139). 165 + 220 + 400 = 785, which still fits the browser window's
-                // 900pt minimum.
-                .navigationSplitViewColumnWidth(min: 220, ideal: 360)
+                // (issue #139). 165 + 220 + 300 = 685, which still fits the browser window's
+                // 900pt minimum. Ideal 400 (issue #166) so leftover space prefers the list
+                // over the inspector.
+                .navigationSplitViewColumnWidth(min: 220, ideal: 400)
         }
         // The toolbar shares the sidebar's tone, as the mockup's `.toolbar` does — otherwise the
         // window's chrome is the one band still painted by the system.
@@ -464,8 +461,50 @@ struct VaultBrowserView: View {
         }
     }
 
-    var body: some View {
+    /// Overlay factored out of `body` so the type-checker keeps a boundary — same reason
+    /// `browserContent` exists. The toast sits in the split-view area, above the status bar.
+    private var browserWithCopyToast: some View {
         browserContent
+            .overlay(alignment: .bottom) {
+                copyToast
+                    .animation(.easeInOut(duration: 0.15), value: appEnvironment?.copyNotice?.id)
+            }
+    }
+
+    /// Bottom-centre pill for a username / password / TOTP copy (issue #167). Hit-testing is
+    /// off so it cannot steal clicks from the list or the inspector while it is fading out.
+    @ViewBuilder
+    private var copyToast: some View {
+        if let message = appEnvironment?.copyNotice?.message {
+            Text(message)
+                .font(Typography.captionMedium)
+                .foregroundStyle(Palette.white)
+                .padding(.horizontal, Spacing.s6)
+                .padding(.vertical, Spacing.s3)
+                .background(
+                    Palette.text,
+                    in: RoundedRectangle(cornerRadius: Radius.pill, style: .continuous)
+                )
+                .padding(.bottom, Spacing.s6)
+                .accessibilityIdentifier("browser.copyToast")
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
+    /// Username / password copies go through `AppEnvironment.copy` so the toast and the
+    /// pasteboard write cannot diverge. Previews have no environment and fall back to the
+    /// injected `clipboard`.
+    private func copy(_ value: String, notice: String) {
+        if let appEnvironment {
+            appEnvironment.copy(value, notice: notice)
+        } else {
+            clipboard.copy(value)
+        }
+    }
+
+    var body: some View {
+        browserWithCopyToast
             .sheet(item: $editingEntry) { editing in
                 EntryEditView(
                     entry: editing.entry,

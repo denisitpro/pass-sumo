@@ -35,6 +35,37 @@ final class AppShellTests: XCTestCase {
         XCTAssertFalse(environment.biometrics.isEnabled(for: VaultKeyIdentifier("any-database")))
     }
 
+    // MARK: - Copy toast (issue #167)
+
+    /// `copy(_:notice:)` is the single write path for username / password / TOTP copies. The
+    /// toast string is what `VaultBrowserView` overlays; a test that only checked the pasteboard
+    /// would miss a notice that never got published.
+    func testCopyPublishesTheNotice() {
+        let pasteboard = FakePasteboard()
+        let environment = AppEnvironment.uiTesting(
+            clipboard: ClipboardService(pasteboard: pasteboard, clearInterval: 30)
+        )
+        XCTAssertNil(environment.copyNotice)
+
+        environment.copy("alice", notice: "Copied username")
+        XCTAssertEqual(environment.copyNotice?.message, "Copied username")
+        XCTAssertEqual(pasteboard.currentString, "alice")
+    }
+
+    func testSecondCopyReplacesTheNotice() {
+        let pasteboard = FakePasteboard()
+        let environment = AppEnvironment.uiTesting(
+            clipboard: ClipboardService(pasteboard: pasteboard, clearInterval: 30)
+        )
+        environment.copy("alice", notice: "Copied username")
+        let firstID = environment.copyNotice?.id
+
+        environment.copy("s3cret", notice: "Copied password")
+        XCTAssertEqual(environment.copyNotice?.message, "Copied password")
+        XCTAssertEqual(pasteboard.currentString, "s3cret")
+        XCTAssertNotEqual(environment.copyNotice?.id, firstID)
+    }
+
     // MARK: - AppSettings round-trip
 
     /// A fresh scratch suite per test, removed in a `defer` — never `UserDefaults.standard`, which
