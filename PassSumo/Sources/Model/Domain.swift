@@ -537,18 +537,49 @@ enum VaultError: Error, Equatable {
     case corrupted(String, diagnostic: String?)
     case unsupportedFeature(String)
     case io(String)
+    /// The file on disk is not the one this process decoded: another client (or another Mac via
+    /// iCloud Drive) wrote it while we had it open. A save that ignored this would clobber that
+    /// copy; the UI offers Overwrite / Reload / Cancel.
+    case externallyModified
+    /// The URL is an iCloud Drive placeholder that has not been downloaded yet. Distinct from
+    /// `.io` so the unlock screen can say what to do instead of a generic I/O failure.
+    case iCloudNotDownloaded
 }
 
-/// Why `VaultStore.upsert` refused an entry (issue #148).
+/// Why `VaultStore.upsert` or `EntryEditView.save()` refused an entry (issue #148, #174).
 ///
 /// KeePass does not require unique titles, so a file we open may already contain collisions.
 /// We still refuse to SAVE a colliding title of our own. Opening never rewrites titles.
+/// The TOTP / custom-field cases are form-level: the store never sees a garbage `otp` string
+/// or a reserved-name custom field, because the editor refuses before `upsert`.
 enum EntryUpsertError: Error, Equatable {
     /// Title is empty or whitespace-only. That is how two live `Untitled` rows happened.
     case emptyTitle
     /// Another live entry (not Recycle Bin) already uses this title, compared
     /// case-insensitively after trim.
     case duplicateTitle
+    /// The one-time-password field is neither empty, a valid `otpauth://totp/…` URI, nor a
+    /// valid bare base32 secret.
+    case invalidTOTP
+    /// Custom-field name collides with a standard KDBX or TOTP key (`Password`, `otp`, …)
+    /// and would be silently dropped on encode.
+    case reservedCustomField(String)
+    /// Two custom-field drafts share a name; the dictionary would keep only the last.
+    case duplicateCustomField(String)
+}
+
+/// Field names that occupy standard or TOTP slots in a KDBX entry and must not be used as
+/// custom-field names. Compared case-insensitively at the form, because `Password` and
+/// `password` are the same accident.
+enum EntryCustomFieldName {
+    static let reserved: Set<String> = [
+        "Title", "UserName", "Password", "URL", "Notes",
+        "otp", "TOTP Seed", "TOTP Settings",
+    ]
+
+    static func isReserved(_ name: String) -> Bool {
+        reserved.contains { $0.compare(name, options: .caseInsensitive) == .orderedSame }
+    }
 }
 
 // MARK: - Vault convenience lookups

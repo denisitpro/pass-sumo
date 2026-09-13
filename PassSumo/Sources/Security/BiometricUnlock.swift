@@ -164,8 +164,22 @@ struct KeychainSecretStore: SecretStore {
             // would undo that choice on their behalf. It is also incompatible with
             // `ThisDeviceOnly` above, so setting it would fail anyway — but it is spelled out
             // explicitly rather than left to a default, because a default can change.
-            kSecAttrSynchronizable as String: false
+            kSecAttrSynchronizable as String: false,
+            // `kSecAttrAccessible` (inside the access-control object) applies on macOS only
+            // when this key or `synchronizable` is set (SecItem.h). Without it the
+            // ThisDeviceOnly guarantee this type documents is not actually honoured
+            // (issue #179).
+            kSecUseDataProtectionKeychain as String: true,
         ]
+    }
+
+    /// Query used to find items written before `kSecUseDataProtectionKeychain` was set.
+    /// A retrieve that fails to find the flagged item retries this once so an update does
+    /// not silently disable Touch ID for existing enrollments.
+    private func legacyQuery(for id: VaultKeyIdentifier) -> [String: Any] {
+        var query = baseQuery(for: id)
+        query.removeValue(forKey: kSecUseDataProtectionKeychain as String)
+        return query
     }
 
     // MARK: - SecretStore
@@ -206,7 +220,14 @@ struct KeychainSecretStore: SecretStore {
         query[kSecUseAuthenticationContext as String] = context
 
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        var status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            var legacy = legacyQuery(for: id)
+            legacy[kSecReturnData as String] = true
+            legacy[kSecMatchLimit as String] = kSecMatchLimitOne
+            legacy[kSecUseAuthenticationContext as String] = context
+            status = SecItemCopyMatching(legacy as CFDictionary, &result)
+        }
         guard status == errSecSuccess else { throw Self.mapped(status: status) }
         guard let data = result as? Data else { throw BiometricUnlockError.keychain(errSecInternalError) }
         return SecureBytes(data)
@@ -214,6 +235,13 @@ struct KeychainSecretStore: SecretStore {
 
     func delete(for id: VaultKeyIdentifier) throws {
         let status = SecItemDelete(baseQuery(for: id) as CFDictionary)
+        if status == errSecItemNotFound {
+            let legacy = SecItemDelete(legacyQuery(for: id) as CFDictionary)
+            guard legacy == errSecSuccess || legacy == errSecItemNotFound else {
+                throw Self.mapped(status: legacy)
+            }
+            return
+        }
         // "Nothing to delete" is the normal case on first enrolment, not a failure.
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Self.mapped(status: status)
@@ -241,9 +269,19 @@ struct KeychainSecretStore: SecretStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
         case errSecSuccess: return true
-        case errSecItemNotFound: return false
         case errSecInteractionNotAllowed:
             return true
+        case errSecItemNotFound:
+            var legacy = legacyQuery(for: id)
+            legacy[kSecReturnAttributes as String] = true
+            legacy[kSecMatchLimit as String] = kSecMatchLimitOne
+            legacy[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+            let legacyStatus = SecItemCopyMatching(legacy as CFDictionary, &result)
+            switch legacyStatus {
+            case errSecSuccess, errSecInteractionNotAllowed: return true
+            case errSecItemNotFound: return false
+            default: throw Self.mapped(status: legacyStatus)
+            }
         default: throw Self.mapped(status: status)
         }
     }

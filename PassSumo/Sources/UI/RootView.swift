@@ -100,6 +100,70 @@ struct RootView: View {
                     "“\(session.title)” has unsaved changes. Closing it discards them unless you save first."
                 )
             }
+            .confirmationDialog(
+                "Save changes before locking this database?",
+                isPresented: Binding(
+                    get: { environment.sessionList.unsavedChangesLockID != nil },
+                    set: { if !$0 { environment.sessionList.cancelLock() } }
+                ),
+                presenting: environment.sessionList.unsavedChangesLockSession
+            ) { session in
+                Button("Save") { Task { await environment.sessionList.saveThenLockPending() } }
+                    .accessibilityIdentifier("root.lock.save")
+                Button("Discard", role: .destructive) {
+                    environment.sessionList.discardThenLockPending()
+                }
+                .accessibilityIdentifier("root.lock.discard")
+                Button("Cancel", role: .cancel) { environment.sessionList.cancelLock() }
+            } message: { session in
+                Text(
+                    "“\(session.title)” has unsaved changes. Locking discards them unless you save first."
+                )
+            }
+            .confirmationDialog(
+                "Save changes before quitting?",
+                isPresented: Binding(
+                    get: { environment.sessionList.isQuitPending },
+                    set: { if !$0 { cancelQuit() } }
+                )
+            ) {
+                Button("Save") {
+                    Task {
+                        if await environment.sessionList.saveThenQuit() {
+                            NSApp.reply(toApplicationShouldTerminate: true)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("root.quit.save")
+                Button("Discard", role: .destructive) {
+                    environment.sessionList.discardThenQuit()
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+                .accessibilityIdentifier("root.quit.discard")
+                Button("Cancel", role: .cancel) { cancelQuit() }
+            } message: {
+                let names = environment.sessionList.dirtySessions.map(\.title).joined(separator: ", ")
+                Text("Unsaved changes in \(names). Quitting discards them unless you save first.")
+            }
+            .confirmationDialog(
+                "This database changed on disk",
+                isPresented: Binding(
+                    get: { environment.store.lastError == .externallyModified },
+                    set: { if !$0 { environment.store.acknowledgeError() } }
+                )
+            ) {
+                Button("Overwrite") {
+                    Task { await environment.store.save(overwritingExternalChange: true) }
+                }
+                .accessibilityIdentifier("root.externalOverwrite.overwrite")
+                Button("Reload", role: .destructive) {
+                    Task { await environment.store.reloadFromDisk() }
+                }
+                .accessibilityIdentifier("root.externalOverwrite.reload")
+                Button("Cancel", role: .cancel) { environment.store.acknowledgeError() }
+            } message: {
+                Text("Another app or Mac saved this file while it was open here. Overwrite keeps your copy; Reload discards your unsaved edits.")
+            }
             // One monitor per tab, including background ones: auto-lock and Touch ID re-arm have
             // to follow that session's store, not whichever tab is selected.
             .background {
@@ -134,9 +198,9 @@ struct RootView: View {
                 .accessibilityIdentifier("root.unlock")
 
         case .unlocking:
-            // Argon2 key derivation is deliberately ~1s of real work (see `VaultStore.open`'s
-            // doc comment) — long enough that a blank window here would read as frozen, so this
-            // state is its own visible case rather than folded into `.locked`.
+            // Argon2 key derivation is deliberately slow (see `VaultStore.open`'s doc comment)
+            // — long enough that a blank window here would read as frozen, so this state is
+            // its own visible case rather than folded into `.locked`.
             ProgressView("Unlocking…")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textSecondary)
@@ -153,6 +217,11 @@ struct RootView: View {
             )
             .accessibilityIdentifier("root.browser")
         }
+    }
+
+    private func cancelQuit() {
+        environment.sessionList.cancelQuit()
+        NSApp.reply(toApplicationShouldTerminate: false)
     }
 }
 

@@ -302,8 +302,10 @@ struct GroupSidebar: View {
                 Button("Empty Recycle Bin", role: .destructive, action: onEmptyRecycleBin)
                     .accessibilityIdentifier("sidebar.emptyRecycleBin")
             } else {
-                Button("New Group…") { onGroupCommand(.create(parentID: node.group.id)) }
-                    .accessibilityIdentifier("sidebar.newGroup")
+                if !vault.recycleBinGroupIDs.contains(node.group.id) {
+                    Button("New Group…") { onGroupCommand(.create(parentID: node.group.id)) }
+                        .accessibilityIdentifier("sidebar.newGroup")
+                }
                 Button("Rename…") { onGroupCommand(.rename(node.group.id)) }
                     .accessibilityIdentifier("sidebar.renameGroup")
                 // Beside Rename, because it is the same kind of act: naming the folder, in the

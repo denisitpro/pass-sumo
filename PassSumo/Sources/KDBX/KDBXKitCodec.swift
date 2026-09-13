@@ -118,7 +118,14 @@ struct KDBXKitCodec: VaultCodec {
         // they think their vault already exists.
         _ = try Self.unlockData(for: credentials)
 
-        let content = KDBXContent.makeEmpty(databaseName: name, generator: Self.generator)
+        // KDF is set explicitly rather than inherited by accident from a future library
+        // default (issue #178). t=3, m=64 MiB, p=4 is RFC 9106 §4's memory-constrained
+        // Argon2id option — not a measured ~1 s target.
+        let content = KDBXContent.makeEmpty(
+            databaseName: name,
+            kdf: .argon2idDefault(),
+            generator: Self.generator
+        )
         return DecodedVault(
             vault: KDBXVaultProjection.vault(from: content),
             opaque: KDBXOrigin(content: content)

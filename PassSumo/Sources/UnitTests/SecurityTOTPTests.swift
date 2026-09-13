@@ -49,7 +49,7 @@ final class SecurityBase32Tests: XCTestCase {
     /// *different secret* that generates wrong codes forever with no visible error — far worse
     /// than refusing the import.
     func testRejectsInvalidCharacters() {
-        for input in ["MZXW6YTB1I", "MZXW6YTB0I", "MZXW6YTB!I", "héllo"] {
+        for input in ["MZXW6YTB1I", "MZXW6YTB0I", "MZXW6YTB!I", "héllo", "ß"] {
             XCTAssertThrowsError(try Base32.decode(input), "should reject \(input)") { error in
                 guard case .invalidCharacter = error as? Base32.DecodeError else {
                     return XCTFail("expected .invalidCharacter for \(input), got \(error)")

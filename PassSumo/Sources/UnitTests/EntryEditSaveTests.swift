@@ -193,4 +193,75 @@ final class EntryEditSaveTests: XCTestCase {
         }
         XCTAssertEqual(vault.entries.count, 1)
     }
+
+    func testSaveRefusesInvalidTOTPAndDoesNotDismiss() async throws {
+        var draft = entry(iconID: 3)
+        draft.otpAuthURL = "not a secret!!"
+        let store = try await makeUnlockedStore(containing: draft)
+        var saved = false
+        var dismissed = false
+        let editor = makeEditor(
+            for: draft,
+            in: store,
+            onSave: { _ in saved = true },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertEqual(editor.save(), .invalidTOTP)
+        XCTAssertFalse(saved)
+        XCTAssertFalse(dismissed)
+    }
+
+    func testSaveAcceptsABareBase32TOTPSecret() async throws {
+        var draft = entry(iconID: 3)
+        draft.otpAuthURL = "JBSWY3DPEHPK3PXP"
+        let store = try await makeUnlockedStore(containing: draft)
+        var saved: VaultEntry?
+        let editor = makeEditor(
+            for: draft,
+            in: store,
+            onSave: { saved = $0 },
+            onDismiss: {}
+        )
+
+        XCTAssertNil(editor.save())
+        XCTAssertEqual(saved?.otpAuthURL, "JBSWY3DPEHPK3PXP")
+    }
+
+    func testSaveRefusesAReservedCustomFieldName() async throws {
+        var draft = entry(iconID: 3)
+        draft.customFields = [
+            "Password": VaultFieldValue(value: "nope", isProtected: true),
+        ]
+        let store = try await makeUnlockedStore(containing: draft)
+        var saved = false
+        let editor = makeEditor(
+            for: draft,
+            in: store,
+            onSave: { _ in saved = true },
+            onDismiss: {}
+        )
+
+        XCTAssertEqual(editor.save(), .reservedCustomField("Password"))
+        XCTAssertFalse(saved)
+    }
+
+    func testSaveRefusesDuplicateCustomFieldNames() async throws {
+        let draft = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: draft)
+        var saved = false
+        let editor = makeEditor(
+            for: draft,
+            in: store,
+            onSave: { _ in saved = true },
+            onDismiss: {}
+        )
+        editor.replaceCustomFieldsForTesting([
+            (name: "PIN", value: "1"),
+            (name: "PIN", value: "2"),
+        ])
+
+        XCTAssertEqual(editor.save(), .duplicateCustomField("PIN"))
+        XCTAssertFalse(saved)
+    }
 }

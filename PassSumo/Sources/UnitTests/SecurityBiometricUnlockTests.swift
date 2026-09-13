@@ -141,6 +141,18 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
     }
 
+    func testWrongCredentialsAfterBiometricUnlockClearsEnrollment() {
+        XCTAssertTrue(
+            BiometricUnlockRecovery.shouldClearEnrollmentAfterUnlockFailure(.wrongCredentials)
+        )
+        XCTAssertFalse(
+            BiometricUnlockRecovery.shouldClearEnrollmentAfterUnlockFailure(.io("disk full"))
+        )
+        XCTAssertFalse(
+            BiometricUnlockRecovery.shouldClearEnrollmentAfterUnlockFailure(nil)
+        )
+    }
+
     /// Cancelling the system sheet is a request to type, not a failure. A red
     /// "Touch ID was cancelled." line reads as the opposite.
     func testCancellingTouchIDShowsNoVisibleError() {
@@ -296,6 +308,11 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertNil(query[kSecReturnData as String], "asking for data is what prompts")
         XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
         XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitOne as String)
+        XCTAssertEqual(
+            query[kSecUseDataProtectionKeychain as String] as? Bool,
+            true,
+            "ThisDeviceOnly is a no-op on macOS unless this flag is set (issue #179)"
+        )
     }
 
     /// The real store is verified by hand on a machine with Touch ID. This method is a skip

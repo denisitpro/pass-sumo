@@ -190,6 +190,16 @@ final class RecycleBinTests: XCTestCase {
         XCTAssertTrue(store.isDirty)
     }
 
+    func testStoreAddGroupRefusesARecycleBinParent() async throws {
+        let store = await makeStore(makeVault(entries: [makeEntry(title: "Gmail")]))
+        let id = try unlockedVault(of: store).entries[0].id
+        store.delete(entryID: id)
+        let binID = try XCTUnwrap(try unlockedVault(of: store).recycleBin.groupID)
+
+        XCTAssertNil(store.addGroup(named: "Born Deleted", parentID: binID))
+        XCTAssertEqual(try unlockedVault(of: store).groups.filter { $0.parentID == binID }.count, 0)
+    }
+
     func testStoreReportsASecondDeleteAsPermanentAndThenPerformsIt() async throws {
         let store = await makeStore(makeVault(entries: [makeEntry(title: "Gmail")]))
         let id = try unlockedVault(of: store).entries[0].id

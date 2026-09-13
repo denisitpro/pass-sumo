@@ -27,7 +27,15 @@ extension Date {
     ///
     /// This value matches how dates are encoded in KDBX files.
     var secondsSinceDotNetEpoch: Int64 {
-        Int64(timeIntervalSince(Self.dotNetEpoch).rounded())
+        let interval = timeIntervalSince(Self.dotNetEpoch)
+        guard interval.isFinite else { return 0 }
+        let rounded = interval.rounded()
+        // `Int64(Double)` traps when the Double is outside Int64's range. A hostile
+        // (or far-future) timestamp that decoded fine must not make the vault
+        // unsavable — saturate instead of aborting the process.
+        if rounded >= Double(Int64.max) { return Int64.max }
+        if rounded <= Double(Int64.min) { return Int64.min }
+        return Int64(rounded)
     }
 
     /// Creates a `Date` from the number of seconds since the .NET epoch (`0001-01-01T00:00:00Z`).

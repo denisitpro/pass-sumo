@@ -47,11 +47,17 @@ enum Argon2KDF {
             hashPtr.deallocate()
         }
 
+        guard let iterations = UInt32(exactly: params.iterations),
+              let memoryKiB = UInt32(exactly: params.memory / 1024)
+        else {
+            throw .argonFailure(code: ARGON2_MEMORY_TOO_MUCH.rawValue, variant: variant)
+        }
+
         let result = password.withUnsafeBytes { passwordPtr in
             params.salt.withUnsafeBytes { saltPtr in
                 hash(
-                    UInt32(params.iterations),
-                    UInt32(params.memory / 1024), // argon2 expects memory cost in kibibytes
+                    iterations,
+                    memoryKiB, // argon2 expects memory cost in kibibytes
                     params.parallelism,
                     passwordPtr.baseAddress,
                     password.count,

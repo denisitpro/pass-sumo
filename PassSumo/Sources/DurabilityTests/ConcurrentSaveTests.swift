@@ -60,6 +60,8 @@ private final class OverlapObservingFileAccess: VaultFileAccess {
 
     func read(from url: URL) throws -> Data { try wrapped.read(from: url) }
 
+    func fingerprint(of url: URL) throws -> FileFingerprint? { try wrapped.fingerprint(of: url) }
+
     func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         defer { recorder.leave() }
         return try wrapped.write(data, to: url)

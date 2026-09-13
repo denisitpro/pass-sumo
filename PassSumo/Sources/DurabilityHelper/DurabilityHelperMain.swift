@@ -213,6 +213,10 @@ final class StageAnnouncingFileAccess: VaultFileAccess {
         try wrapped.read(from: url)
     }
 
+    func fingerprint(of url: URL) throws -> FileFingerprint? {
+        try wrapped.fingerprint(of: url)
+    }
+
     func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         Marker.emit(.writeBegin)
         hangIfRequested(at: .writeBegin)

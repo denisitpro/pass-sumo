@@ -106,7 +106,7 @@ final class AutoLockController {
 
     private let now: @Sendable () -> Date
     private let eventSource: any LockEventSource
-    private let onLock: () -> Void
+    private let onLock: (LockReason) -> Void
 
     private var lastActivity: Date
     private var timer: Timer?
@@ -131,7 +131,7 @@ final class AutoLockController {
         idleTimeout: TimeInterval = 300,
         eventSource: any LockEventSource = WorkspaceLockEventSource(),
         now: @escaping @Sendable () -> Date = Date.init,
-        onLock: @escaping () -> Void
+        onLock: @escaping (LockReason) -> Void
     ) {
         self.idleTimeout = idleTimeout
         self.eventSource = eventSource
@@ -181,7 +181,19 @@ final class AutoLockController {
         secondsUntilIdleLock = nil
         timer?.invalidate()
         timer = nil
-        onLock()
+        onLock(reason)
+    }
+
+    /// Idle auto-save failed: the controller already flipped to locked (to stop the timer from
+    /// re-entering) but the store must stay unlocked with the edits intact. Re-arms the idle
+    /// clock so a later successful save can still lock. Issue #172.
+    func recoverFromFailedSave() {
+        guard isLocked else { return }
+        isLocked = false
+        lastLockReason = nil
+        lastActivity = now()
+        secondsUntilIdleLock = Int(idleTimeout.rounded())
+        armTimer()
     }
 
     /// The user asked for it — "Lock Database" (⌘L) and the browser toolbar's Lock button.
@@ -204,7 +216,7 @@ final class AutoLockController {
     func lockRequestedByUser() {
         if isLocked {
             lastLockReason = .userRequested
-            onLock()
+            onLock(.userRequested)
         } else {
             lock(reason: .userRequested)
         }
