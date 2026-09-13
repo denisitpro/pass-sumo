@@ -37,8 +37,11 @@ enum Base32 {
 
         for character in input {
             if character == "=" || character == " " || character == "-" { continue }
-            let upper = Character(String(character).uppercased())
-            guard let value = alphabet.firstIndex(of: upper) else {
+            let folded = String(character).uppercased()
+            // `ß` / `ﬁ` uppercased to more than one Character; constructing
+            // `Character` from that string traps in Debug. Reject instead.
+            guard folded.count == 1, let upper = folded.first,
+                  let value = alphabet.firstIndex(of: upper) else {
                 throw DecodeError.invalidCharacter(character)
             }
             accumulator = (accumulator << 5) | UInt32(value)

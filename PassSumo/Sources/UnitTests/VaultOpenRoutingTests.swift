@@ -32,7 +32,8 @@ final class VaultOpenRoutingTests: XCTestCase {
         VaultSessionList(
             codec: InMemoryVaultCodec(),
             fileAccess: InMemoryVaultFileAccess(),
-            autoLockTimeout: 300
+            autoLockTimeout: 300,
+            clipboard: ClipboardService(pasteboard: FakePasteboard())
         )
     }
 

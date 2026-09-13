@@ -25,7 +25,8 @@ final class VaultSessionTests: XCTestCase {
         VaultSessionList(
             codec: InMemoryVaultCodec(),
             fileAccess: InMemoryVaultFileAccess(),
-            autoLockTimeout: 300
+            autoLockTimeout: 300,
+            clipboard: ClipboardService(pasteboard: FakePasteboard())
         )
     }
 
@@ -209,5 +210,100 @@ final class VaultSessionTests: XCTestCase {
 
         XCTAssertTrue(list.sessions.isEmpty)
         XCTAssertNil(list.unsavedChangesCloseID)
+    }
+
+    // MARK: - Lock / quit with unsaved edits (issue #172)
+
+    private func unsavedEntry() -> VaultEntry {
+        VaultEntry(
+            id: UUID(), groupID: nil, title: "Unsaved", username: "", password: "",
+            url: "", notes: "", otpAuthURL: nil, customFields: [:],
+            created: Date(timeIntervalSince1970: 0), modified: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    func testUserLockOnADirtyTabAsksFirst() async {
+        let list = makeList()
+        let session = await openVault(at: url("dirty-lock.kdbx"), in: list)
+        session.store.upsert(unsavedEntry())
+        XCTAssertTrue(session.store.isDirty)
+
+        XCTAssertEqual(list.requestLockSelected(), .confirmUnsavedChanges)
+        XCTAssertEqual(list.unsavedChangesLockID, session.id)
+        XCTAssertTrue(session.isUnlocked)
+    }
+
+    func testDiscardThenLockDropsEditsAndLocks() async {
+        let pasteboard = FakePasteboard()
+        let clipboard = ClipboardService(pasteboard: pasteboard)
+        clipboard.copy("secret-password")
+        let list = VaultSessionList(
+            codec: InMemoryVaultCodec(),
+            fileAccess: InMemoryVaultFileAccess(),
+            autoLockTimeout: 300,
+            clipboard: clipboard
+        )
+        let session = await openVault(at: url("discard-lock.kdbx"), in: list)
+        session.store.upsert(unsavedEntry())
+        _ = list.requestLockSelected()
+
+        list.discardThenLockPending()
+
+        XCTAssertFalse(session.isUnlocked)
+        XCTAssertNil(list.unsavedChangesLockID)
+        XCTAssertGreaterThan(pasteboard.clearCallCount, 0)
+    }
+
+    func testSaveThenLockWritesThenLocks() async {
+        let list = makeList()
+        let session = await openVault(at: url("save-lock.kdbx"), in: list)
+        session.store.upsert(unsavedEntry())
+        _ = list.requestLockSelected()
+
+        await list.saveThenLockPending()
+
+        XCTAssertFalse(session.isUnlocked)
+        XCTAssertNil(list.unsavedChangesLockID)
+        XCTAssertNil(session.store.lastError)
+    }
+
+    func testIdleLockSavesADirtyVaultThenLocks() async {
+        let list = makeList()
+        let session = await openVault(at: url("idle-lock.kdbx"), in: list)
+        session.store.upsert(unsavedEntry())
+        XCTAssertTrue(session.store.isDirty)
+
+        await session.handleAutomaticLock(reason: .idleTimeout)
+
+        XCTAssertFalse(session.isUnlocked, "idle lock must still drop the vault after a successful save")
+    }
+
+    func testQuitWithDirtyTabsParksAPrompt() async {
+        let list = makeList()
+        let session = await openVault(at: url("quit.kdbx"), in: list)
+        session.store.upsert(unsavedEntry())
+
+        XCTAssertFalse(list.requestQuit())
+        XCTAssertTrue(list.isQuitPending)
+
+        list.cancelQuit()
+        XCTAssertFalse(list.isQuitPending)
+        XCTAssertTrue(session.isUnlocked)
+    }
+
+    func testQuitWhenCleanClearsTheClipboardAndAllowsExit() async {
+        let pasteboard = FakePasteboard()
+        let clipboard = ClipboardService(pasteboard: pasteboard)
+        clipboard.copy("secret-password")
+        let list = VaultSessionList(
+            codec: InMemoryVaultCodec(),
+            fileAccess: InMemoryVaultFileAccess(),
+            autoLockTimeout: 300,
+            clipboard: clipboard
+        )
+        _ = await openVault(at: url("clean-quit.kdbx"), in: list)
+
+        XCTAssertTrue(list.requestQuit())
+        XCTAssertGreaterThan(pasteboard.clearCallCount, 0)
     }
 }

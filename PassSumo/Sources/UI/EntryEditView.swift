@@ -54,6 +54,8 @@ struct EntryEditView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
+    /// Optional: previews and unit tests that do not drive auto-lock omit it.
+    var autoLock: AutoLockController?
     var onSave: (VaultEntry) -> Void
     var onDismiss: () -> Void
     /// Optional so existing call sites still compile (the browser is another lane). The only
@@ -100,6 +102,8 @@ struct EntryEditView: View {
     /// Set when `VaultStore.upsert` refuses the title (empty or a live duplicate, issue #148)
     /// and shown under the title field. Cleared on the next keystroke and on a successful save.
     @State private var titleError: String?
+    @State private var totpError: String?
+    @State private var fieldsError: String?
     /// Parent-owned so opening the sheet puts the caret in Title rather than on the icon-picker
     /// button that happens to be first in `headerRow` (issue #151). `EditLineField`'s own
     /// `@FocusState` cannot be driven from here — same split as `MasterPasswordField`.
@@ -113,6 +117,7 @@ struct EntryEditView: View {
         clipboard: ClipboardService,
         generator: PasswordGenerator,
         generatorRecipe: PasswordGenerator.Recipe,
+        autoLock: AutoLockController? = nil,
         onSave: @escaping (VaultEntry) -> Void,
         onDismiss: @escaping () -> Void,
         onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
@@ -122,6 +127,7 @@ struct EntryEditView: View {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
+        self.autoLock = autoLock
         self.onSave = onSave
         self.onDismiss = onDismiss
         self.onRecipeChanged = onRecipeChanged
@@ -191,6 +197,15 @@ struct EntryEditView: View {
         .background(Palette.surface)
         .defaultFocus($isTitleFocused, true)
         .onAppear { isTitleFocused = true }
+        .onChange(of: title) { _, _ in autoLock?.noteActivity() }
+        .onChange(of: username) { _, _ in autoLock?.noteActivity() }
+        .onChange(of: password) { _, _ in autoLock?.noteActivity() }
+        .onChange(of: url) { _, _ in autoLock?.noteActivity() }
+        .onChange(of: notes) { _, _ in autoLock?.noteActivity() }
+        .onChange(of: otpAuthURLText) { _, _ in
+            totpError = nil
+            autoLock?.noteActivity()
+        }
         .onChange(of: store.state) { _, newState in
             guard case .unlocked = newState else {
                 wasLockedWhileEditing = true
@@ -337,6 +352,12 @@ struct EntryEditView: View {
                 identifier: "edit.totp",
                 monospaced: true
             )
+            if let totpError {
+                Text(totpError)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+                    .accessibilityIdentifier("edit.totpError")
+            }
         }
     }
 
@@ -370,6 +391,12 @@ struct EntryEditView: View {
                     }
                     .buttonStyle(.tokenDestructiveGlyph)
                 }
+            }
+            if let fieldsError {
+                Text(fieldsError)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+                    .accessibilityIdentifier("edit.fieldsError")
             }
             Button("Add Field") {
                 // Protected by default, which is where the codec's old hardcoded
@@ -636,12 +663,36 @@ struct EntryEditView: View {
     func save() -> EntryUpsertError? {
         guard !wasLockedWhileEditing else { return nil }
 
+        totpError = nil
+        fieldsError = nil
+
+        let totpText = otpAuthURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !totpText.isEmpty {
+            do {
+                _ = try TOTPGenerator(parsing: totpText)
+            } catch {
+                let refusal = EntryUpsertError.invalidTOTP
+                totpError = Self.message(for: refusal)
+                return refusal
+            }
+        }
+
         var fields: [String: VaultFieldValue] = [:]
-        // Last-write-wins on a duplicate name rather than crashing: two drafts can legitimately
-        // share a name for a moment while the user is mid-rename, and `Dictionary(uniqueKeysWithValues:)`
-        // would trap on that instead of just resolving to one value.
+        var seen: [String: Int] = [:]
         for field in customFields where !field.name.isEmpty {
-            fields[field.name] = VaultFieldValue(value: field.value, isProtected: field.isProtected)
+            let name = field.name
+            if EntryCustomFieldName.isReserved(name) {
+                let refusal = EntryUpsertError.reservedCustomField(name)
+                fieldsError = Self.message(for: refusal)
+                return refusal
+            }
+            if seen[name] != nil {
+                let refusal = EntryUpsertError.duplicateCustomField(name)
+                fieldsError = Self.message(for: refusal)
+                return refusal
+            }
+            seen[name] = 1
+            fields[name] = VaultFieldValue(value: field.value, isProtected: field.isProtected)
         }
 
         var entry = original
@@ -667,12 +718,26 @@ struct EntryEditView: View {
         return nil
     }
 
+    /// Test seam: the custom-field draft is `@State` and otherwise unreachable. Two drafts
+    /// with the same name cannot exist in `VaultEntry.customFields` (it is a dictionary).
+    func replaceCustomFieldsForTesting(_ drafts: [(name: String, value: String)]) {
+        customFields = drafts.map {
+            CustomFieldDraft(name: $0.name, value: $0.value, isProtected: true)
+        }
+    }
+
     private static func message(for error: EntryUpsertError) -> String {
         switch error {
         case .emptyTitle:
             return "Title cannot be empty."
         case .duplicateTitle:
             return "Another entry already uses this title."
+        case .invalidTOTP:
+            return "That is not a valid authenticator secret."
+        case .reservedCustomField(let name):
+            return "“\(name)” is a reserved field name and cannot be used as a custom field."
+        case .duplicateCustomField(let name):
+            return "Two custom fields are named “\(name)”. Give each field a unique name."
         }
     }
 

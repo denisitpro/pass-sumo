@@ -504,4 +504,44 @@ final class VaultStoreTests: XCTestCase {
         store.lock()
         XCTAssertNil(store.currentMasterPassword, "a locked vault must not still hand back the master password")
     }
+
+    // MARK: - External modification (issue #173)
+
+    func testSaveRefusesWhenTheFileChangedOnDisk() async {
+        let fileAccess = InMemoryVaultFileAccess()
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: fileAccess)
+        let vaultURL = URL(fileURLWithPath: "/external-mod/vault.kdbx")
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        await store.save()
+        XCTAssertFalse(store.isDirty)
+
+        store.upsert(makeEntry(title: "Mine"))
+        fileAccess.bumpFingerprint(of: vaultURL)
+
+        await store.save()
+
+        XCTAssertEqual(store.lastError, .externallyModified)
+        XCTAssertTrue(store.isDirty, "a refused save must not claim the edits are on disk")
+
+        await store.save(overwritingExternalChange: true)
+        XCTAssertNil(store.lastError)
+        XCTAssertFalse(store.isDirty)
+    }
+
+    func testAcknowledgeErrorClearsExternalModificationWithoutWriting() async {
+        let fileAccess = InMemoryVaultFileAccess()
+        let store = VaultStore(codec: InMemoryVaultCodec(), fileAccess: fileAccess)
+        let vaultURL = URL(fileURLWithPath: "/external-mod/cancel.kdbx")
+        await store.createNew(at: vaultURL, credentials: VaultCredentials(password: "pw", keyFile: nil))
+        await store.save()
+        store.upsert(makeEntry(title: "Mine"))
+        fileAccess.bumpFingerprint(of: vaultURL)
+        await store.save()
+        XCTAssertEqual(store.lastError, .externallyModified)
+
+        store.acknowledgeError()
+
+        XCTAssertNil(store.lastError)
+        XCTAssertTrue(store.isDirty)
+    }
 }

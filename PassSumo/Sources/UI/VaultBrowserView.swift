@@ -397,7 +397,11 @@ struct VaultBrowserView: View {
                     // This is the one thing this view does through `autoLock` besides reading its
                     // countdown, and it is not "this view locks the vault": it reports that the
                     // user asked, and the controller's `onLock` is still what performs it.
-                    autoLock.lockRequestedByUser()
+                    if let appEnvironment {
+                        appEnvironment.sessionList.requestLockSelected()
+                    } else {
+                        autoLock.lockRequestedByUser()
+                    }
                 } label: {
                     Label("Lock", systemImage: "lock")
                 }
@@ -517,6 +521,7 @@ struct VaultBrowserView: View {
                     // whatever was most recently saved in Settings, not a value snapshotted once
                     // when `VaultBrowserView` itself was constructed (issue #106).
                     generatorRecipe: settings.generatorRecipe,
+                    autoLock: autoLock,
                     onSave: { saved in selectedEntryID = saved.id },
                     onDismiss: { editingEntry = nil },
                     onRecipeChanged: { settings.generatorRecipe = $0 }
@@ -896,7 +901,8 @@ struct VaultBrowserView: View {
 
     /// A brand-new entry starts inside whatever group is currently selected — the natural
     /// "New Entry" expectation is that it lands where you're already looking, not always at the
-    /// vault's top level regardless of context. `id`/`created`/`modified` are placeholders:
+    /// vault's top level regardless of context. The Recycle Bin (and its descendants) fall
+    /// back to the top level, same as New Group: a live entry must not be born deleted (issue #174). `id`/`created`/`modified` are placeholders:
     /// `VaultStore.upsert` treats this as an insert (no existing entry with that `id`) and stamps
     /// `modified` itself.
     ///
@@ -914,7 +920,7 @@ struct VaultBrowserView: View {
         let password = (try? generator.generate(settings.generatorRecipe)) ?? ""
         return VaultEntry(
             id: UUID(),
-            groupID: groupSelection.containingGroupID,
+            groupID: newGroupParentID,
             title: "",
             username: appEnvironment?.settings.defaultUsername ?? "",
             password: password,
@@ -945,7 +951,7 @@ struct VaultBrowserView: View {
         store: store,
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
-        autoLock: AutoLockController(onLock: { [weak store] in store?.lock() }),
+        autoLock: AutoLockController(onLock: { [weak store] _ in store?.lock() }),
         settings: AppSettings()
     )
 }

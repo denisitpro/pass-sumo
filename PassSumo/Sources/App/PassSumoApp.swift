@@ -84,7 +84,10 @@ struct PassSumoApp: App {
                 // adaptor builds it before this scene's `environment` exists. The receiver buffers
                 // a URL that arrives before this runs (a cold launch by double-click does exactly
                 // that), so nothing is lost in the gap — see its doc comment.
-                .task { openReceiver.onOpen { requestOpen($0) } }
+                .task {
+                    openReceiver.onOpen { requestOpen($0) }
+                    openReceiver.onShouldTerminate { requestTerminate() }
+                }
         }
         .windowToolbarStyle(.unified)
         .commands {
@@ -107,6 +110,14 @@ struct PassSumoApp: App {
     /// no lock, no reload, no lost selection. Launch Services activates the app on its own, but not
     /// a window the user had minimised, so that half is done here. Every other branch is already
     /// complete by the time `requestOpen` returns.
+    @MainActor
+    private func requestTerminate() -> NSApplication.TerminateReply {
+        if environment.sessionList.requestQuit() {
+            return .terminateNow
+        }
+        return .terminateLater
+    }
+
     @MainActor
     private func requestOpen(_ url: URL) {
         guard case .alreadyOpen = environment.openRouter.requestOpen(url) else { return }

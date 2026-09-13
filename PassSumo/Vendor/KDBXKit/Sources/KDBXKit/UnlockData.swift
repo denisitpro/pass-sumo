@@ -310,7 +310,9 @@ public struct UnlockData: Sendable {
             // producers also write base64 — try hex first, then base64
             // as a fallback.
             let stripped = text.filter { !$0.isWhitespace }
-            if stripped.count == 64,
+            // UTF-8 byte count, not graphemes: 64 non-ASCII characters are not a hex key
+            // and must not trip the `decodeHexKeyFile` length precondition.
+            if stripped.utf8.count == 64,
                let hex = decodeHexKeyFile(Data(stripped.utf8))
             {
                 decoded = hex
@@ -362,7 +364,7 @@ public struct UnlockData: Sendable {
     /// Decode a 64-byte ASCII hex string into 32 bytes. Returns nil if any
     /// byte is not an ASCII hex digit.
     private static func decodeHexKeyFile(_ data: Data) -> Data? {
-        precondition(data.count == 64)
+        guard data.count == 64 else { return nil }
         var out = Data(capacity: 32)
         var i = data.startIndex
         while i < data.endIndex {

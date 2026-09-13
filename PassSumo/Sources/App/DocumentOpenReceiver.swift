@@ -26,6 +26,7 @@ import AppKit
 final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     private var handler: ((URL) -> Void)?
     private var pending: [URL] = []
+    private var shouldTerminate: (() -> NSApplication.TerminateReply)?
 
     /// **Issue #16's ⌘T caveat.** macOS turns on automatic window tabbing for every resizable
     /// window by default, which is what installs a system-supplied Window ▸ "New Tab" item bound
@@ -34,6 +35,13 @@ final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     /// NSWindow tabbing, so this stays off.
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
+    /// Issue #172: ⌘Q used to skip the unsaved-changes prompt that closing a tab already has.
+    /// Returning `.terminateLater` parks the request until Save / Discard / Cancel replies via
+    /// `NSApp.reply(toApplicationShouldTerminate:)`.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        shouldTerminate?() ?? .terminateNow
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -51,6 +59,10 @@ final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
         let buffered = pending
         pending = []
         buffered.forEach(handler)
+    }
+
+    func onShouldTerminate(_ handler: @escaping () -> NSApplication.TerminateReply) {
+        shouldTerminate = handler
     }
 
     private func deliver(_ url: URL) {

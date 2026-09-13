@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Decisions the unlock screen makes after a Touch ID attempt fails. Pulled out of the view body
@@ -15,6 +16,14 @@ enum BiometricUnlockRecovery {
     /// else clears anything.
     static func shouldClearEnrollment(after error: BiometricUnlockError) -> Bool {
         error == .invalidatedByBiometryChange
+    }
+
+    /// A biometric retrieve that then fails to decrypt is a stored password that no longer
+    /// matches the file (the user changed the master password in another client). Leaving the
+    /// keychain item in place would auto-prompt, succeed at Touch ID, and say "Wrong password"
+    /// on every launch (issue #175).
+    static func shouldClearEnrollmentAfterUnlockFailure(_ error: VaultError?) -> Bool {
+        error == .wrongCredentials
     }
 
     /// Cancelling is not a failure — the user is asking to type the master password instead — so
@@ -76,6 +85,8 @@ struct UnlockView: View {
     /// The "Remember with Touch ID" checkbox on the master-password field — see `canOfferEnrollment`
     /// for why a checkbox rather than a post-unlock modal, and why it is not offered on every unlock.
     @State private var rememberWithTouchID = false
+    @State private var keyFileData: Data?
+    @State private var keyFileName: String?
     /// Parent-owned so a cancelled (or otherwise failed) Touch ID sheet can put the caret back in
     /// the master-password field. The field's own `@FocusState` cannot be driven from here.
     @FocusState private var passwordFieldFocused: Bool
@@ -87,6 +98,21 @@ struct UnlockView: View {
     private var isUnlocking: Bool {
         if case .unlocking = environment.store.state { return true }
         return false
+    }
+
+    /// Wrong-password copy names the key-file case instead of lying that the password is
+    /// wrong when the file actually needs a key (issue #175). Other `VaultError`s keep their
+    /// global `displayMessage`.
+    var unlockErrorMessage: String? {
+        if let error = environment.store.lastError {
+            if error == .wrongCredentials {
+                return keyFileData == nil
+                    ? "Wrong password. If this database needs a key file, choose it and try again."
+                    : "Wrong password or key file. Try again."
+            }
+            return error.displayMessage
+        }
+        return biometricFailure
     }
 
     private var canOfferBiometrics: Bool {
@@ -257,7 +283,29 @@ struct UnlockView: View {
             // (which un-mounts it entirely).
             .onSubmit { Task { await submit() } }
 
-            if let message = environment.store.lastError?.displayMessage ?? biometricFailure {
+            HStack(spacing: Spacing.s4) {
+                Button("Key File…") { chooseKeyFile() }
+                    .buttonStyle(.tokenQuiet)
+                    .disabled(isUnlocking)
+                    .accessibilityIdentifier("unlock.keyFile")
+                if let keyFileName {
+                    Text(keyFileName)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("unlock.keyFileName")
+                    Button("Remove") {
+                        keyFileData = nil
+                        keyFileName = nil
+                    }
+                    .buttonStyle(.tokenQuiet)
+                    .disabled(isUnlocking)
+                    .accessibilityIdentifier("unlock.keyFile.clear")
+                }
+            }
+
+            if let message = unlockErrorMessage {
                 Text(message)
                     .font(Typography.body)
                     .foregroundStyle(Palette.danger)
@@ -388,6 +436,25 @@ struct UnlockView: View {
         }
     }
 
+    private func chooseKeyFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the key file for this database."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let granted = url.startAccessingSecurityScopedResource()
+        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        do {
+            keyFileData = try Data(contentsOf: url)
+            keyFileName = url.lastPathComponent
+        } catch {
+            keyFileData = nil
+            keyFileName = nil
+            biometricFailure = "Couldn't read the key file."
+        }
+    }
+
     private func submit() async {
         guard !password.isEmpty, !isUnlocking else { return }
         biometricFailure = nil
@@ -397,7 +464,10 @@ struct UnlockView: View {
         // inspection instead of by tracing every later use of the property.
         let typedPassword = password
         let shouldEnroll = rememberWithTouchID
-        await environment.store.open(url: url, credentials: VaultCredentials(password: typedPassword, keyFile: nil))
+        await environment.store.open(
+            url: url,
+            credentials: VaultCredentials(password: typedPassword, keyFile: keyFileData)
+        )
 
         guard shouldEnroll, case .unlocked = environment.store.state else { return }
         await enrollBiometrics(masterPassword: typedPassword)
@@ -451,7 +521,15 @@ struct UnlockView: View {
         do {
             let secret = try environment.biometrics.unlock(resolved, reason: "Unlock \(url.lastPathComponent)")
             if let revealed = secret.revealedString() {
-                await environment.store.open(url: url, credentials: VaultCredentials(password: revealed, keyFile: nil))
+                await environment.store.open(
+                    url: url,
+                    credentials: VaultCredentials(password: revealed, keyFile: keyFileData)
+                )
+                if BiometricUnlockRecovery.shouldClearEnrollmentAfterUnlockFailure(environment.store.lastError) {
+                    try? environment.biometrics.disable(for: resolved)
+                    environment.forgetBiometricsEnrollment(for: url)
+                    biometricFailure = "The stored password no longer unlocks this database. Enter the current master password."
+                }
             } else {
                 biometricFailure = "The stored password isn't valid text. Enter it manually instead."
             }

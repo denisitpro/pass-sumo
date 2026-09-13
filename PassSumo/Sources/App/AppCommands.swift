@@ -71,7 +71,7 @@ struct AppCommands: Commands {
             // Through the controller, not `store.lock()` directly: the lock has to be RECORDED as
             // deliberate, or the unlock screen cannot tell "the Mac slept" from "I just hit ⌘L"
             // and prompts for Touch ID a second after the user chose to lock (issue #69).
-            Button("Lock Database") { environment.autoLock.lockRequestedByUser() }
+            Button("Lock Database") { environment.sessionList.requestLockSelected() }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(!isUnlocked)
             Divider()

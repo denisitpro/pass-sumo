@@ -126,13 +126,14 @@ final class AppEnvironment {
         self.idleStore = idleStore
         self.idleAutoLock = AutoLockController(
             idleTimeout: settings.autoLockTimeout,
-            onLock: { [weak idleStore] in idleStore?.lock() }
+            onLock: { [weak idleStore] _ in idleStore?.lock() }
         )
         self.idleAutomaticBiometricUnlock = AutomaticBiometricUnlockPolicy()
         let sessionList = VaultSessionList(
             codec: codec,
             fileAccess: fileAccess,
-            autoLockTimeout: settings.autoLockTimeout
+            autoLockTimeout: settings.autoLockTimeout,
+            clipboard: clipboard
         )
         self.sessionList = sessionList
         // Built here from `sessionList` rather than taken as a parameter: a router pointed at a
@@ -433,6 +434,10 @@ extension VaultError {
             return "This database uses a feature pass-sumo doesn't support yet: \(feature)"
         case .io(let detail):
             return "Couldn't read the file: \(detail)"
+        case .externallyModified:
+            return "This database was changed in another app or on another Mac. Save again to overwrite, or reopen to load the other copy."
+        case .iCloudNotDownloaded:
+            return "This database is in iCloud and has not finished downloading. Wait a moment and try again."
         }
     }
 
@@ -457,7 +462,8 @@ extension VaultError {
     /// `nil` for every error whose whole content is already a sentence a person can act on.
     var diagnosticDetail: String? {
         switch self {
-        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io:
+        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io,
+             .externallyModified, .iCloudNotDownloaded:
             return nil
         case .corrupted(_, let diagnostic):
             return diagnostic

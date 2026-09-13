@@ -3,8 +3,34 @@ import Foundation
 /// File I/O behind a protocol so `VaultStore` never touches security-scoped bookmarks or the
 /// filesystem directly (Dependency Inversion — `VaultStore`'s tests and SwiftUI previews get
 /// `InMemoryVaultFileAccess` below instead: no sandbox, no temp directories, no real timing).
+/// On-disk identity of a vault file, captured at decode so a later save can refuse to
+/// clobber a copy another client wrote in the meantime (issue #173).
+struct FileFingerprint: Equatable, Sendable {
+    var modificationDate: Date
+    var size: Int
+}
+
+/// Maps iCloud Drive download state onto `VaultError` so `SandboxedVaultFileAccess.read`
+/// and a unit test share one rule (issue #177). `.downloaded` and `.current` are both
+/// local enough to open; `.notDownloaded` is the placeholder.
+enum UbiquitousItemRead {
+    static func errorIfNotDownloaded(
+        isUbiquitous: Bool,
+        status: URLUbiquitousItemDownloadingStatus?
+    ) -> VaultError? {
+        guard isUbiquitous else { return nil }
+        if status == .notDownloaded { return .iCloudNotDownloaded }
+        return nil
+    }
+}
+
 protocol VaultFileAccess: Sendable {
     func read(from url: URL) throws -> Data
+
+    /// Metadata of the file at `url` as of this call, or `nil` when the file does not exist
+    /// yet (first save of a newly created database). Used by `VaultStore.save` to detect an
+    /// external write since decode.
+    func fingerprint(of url: URL) throws -> FileFingerprint?
 
     /// Atomic write, preceded by an attempt to back the existing file up.
     ///
@@ -79,11 +105,36 @@ final class SandboxedVaultFileAccess: VaultFileAccess {
 
     func read(from url: URL) throws -> Data {
         try withSecurityScope(url) {
+            let values = try? url.resourceValues(forKeys: [
+                .isUbiquitousItemKey,
+                .ubiquitousItemDownloadingStatusKey,
+            ])
+            if let blocked = UbiquitousItemRead.errorIfNotDownloaded(
+                isUbiquitous: values?.isUbiquitousItem ?? false,
+                status: values?.ubiquitousItemDownloadingStatus
+            ) {
+                try? fileManager.startDownloadingUbiquitousItem(at: url)
+                throw blocked
+            }
             do {
                 return try Data(contentsOf: url)
             } catch {
                 throw VaultError.io("failed to read \(url.lastPathComponent): \(error.localizedDescription)")
             }
+        }
+    }
+
+    func fingerprint(of url: URL) throws -> FileFingerprint? {
+        try withSecurityScope(url) {
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
+            let values = try url.resourceValues(forKeys: [
+                .contentModificationDateKey,
+                .fileSizeKey,
+            ])
+            guard let date = values.contentModificationDate, let size = values.fileSize else {
+                return nil
+            }
+            return FileFingerprint(modificationDate: date, size: size)
         }
     }
 
@@ -166,6 +217,10 @@ final class InMemoryVaultFileAccess: VaultFileAccess, @unchecked Sendable {
     private let lock = NSLock()
     private var files: [URL: Data] = [:]
     private var bookmarks: [Data: URL] = [:]
+    private var fingerprints: [URL: FileFingerprint] = [:]
+    /// Monotonic clock so two writes in the same wall-clock second still get distinct
+    /// fingerprints — `Date()` would collide and hide an external-modification test.
+    private var monotonic: TimeInterval = 1_000_000
 
     init() {}
 
@@ -177,10 +232,24 @@ final class InMemoryVaultFileAccess: VaultFileAccess, @unchecked Sendable {
         return data
     }
 
+    func fingerprint(of url: URL) throws -> FileFingerprint? {
+        lock.lock(); defer { lock.unlock() }
+        return fingerprints[url]
+    }
+
+    /// Test seam for issue #173: pretend another client wrote the file without changing
+    /// the bytes this process holds.
+    func bumpFingerprint(of url: URL) {
+        lock.lock(); defer { lock.unlock() }
+        guard fingerprints[url] != nil else { return }
+        fingerprints[url] = nextFingerprint(size: files[url]?.count ?? 0)
+    }
+
     @discardableResult
     func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         lock.lock(); defer { lock.unlock() }
         files[url] = data
+        fingerprints[url] = nextFingerprint(size: data.count)
         // The fake keeps no backups — nothing in `Sources/UI`/previews depends on that, and the
         // real retention behavior is tested against `SandboxedVaultFileAccess` instead.
         // `.notNeeded` rather than `.failed`: this is not a backup that went wrong, it is a
@@ -211,4 +280,9 @@ final class InMemoryVaultFileAccess: VaultFileAccess, @unchecked Sendable {
     /// `nil`: there is no directory to reveal, which is what disables "Show Backups in Finder"
     /// under `-ui-testing 1` instead of opening Finder on a real path during an e2e run.
     func backupDirectory(for url: URL?) -> URL? { nil }
+
+    private func nextFingerprint(size: Int) -> FileFingerprint {
+        monotonic += 1
+        return FileFingerprint(modificationDate: Date(timeIntervalSince1970: monotonic), size: size)
+    }
 }

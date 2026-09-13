@@ -29,7 +29,6 @@ public extension KDBX {
                 self = .default
             } else {
                 guard stringValue.hasPrefix("#"), stringValue.count == 7 else {
-                    assertionFailure("Invalid color input: \(stringValue)")
                     return nil
                 }
                 let hexString = String(stringValue.dropFirst())
