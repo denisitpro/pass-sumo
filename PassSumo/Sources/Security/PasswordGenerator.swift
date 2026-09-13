@@ -91,7 +91,7 @@ struct PasswordGenerator: Sendable {
 
     /// What the user asked for. Defaults are the ones the "generate" button starts from: 15
     /// characters of letters and digits, no symbols, ambiguous glyphs excluded (issue #163).
-    struct Recipe: Sendable, Equatable {
+    struct Recipe: Sendable, Equatable, Codable {
         var length: Int = 15
         var lowercase: Bool = true
         var uppercase: Bool = true
@@ -284,5 +284,49 @@ struct PasswordGenerator: Sendable {
         }
         guard pool > 0 else { return 0 }
         return Double(password.count) * log2(Double(pool))
+    }
+}
+
+/// A saved, named password-generation recipe (issue #187). The generator holds several of these —
+/// e.g. "Default", "PIN", "High-security" — and the user picks one wherever they generate, instead
+/// of re-tuning the character-class toggles every time (MacPass's saved generator profiles).
+///
+/// A value type, not a settings entry: it pairs a stable `id` (so a picker can carry a selection
+/// across edits without keying on the mutable `name`) with the `Recipe` it describes. `Codable` so
+/// `AppSettings` can persist the whole list as JSON in `UserDefaults`.
+struct PasswordProfile: Identifiable, Codable, Sendable, Equatable {
+    var id: UUID
+    var name: String
+    var recipe: PasswordGenerator.Recipe
+
+    init(id: UUID = UUID(), name: String, recipe: PasswordGenerator.Recipe) {
+        self.id = id
+        self.name = name
+        self.recipe = recipe
+    }
+
+    /// The profiles a fresh install starts with. `Recipe()` is the same default the single-recipe
+    /// generator already shipped with; the other two are reasonable starting points the owner can
+    /// adjust. Fresh UUIDs each call is fine — `AppSettings` persists the list on first read, so
+    /// these ids stabilise on disk and the stored selection resolves against them.
+    static var defaults: [PasswordProfile] {
+        [
+            PasswordProfile(name: "Default", recipe: PasswordGenerator.Recipe()),
+            PasswordProfile(
+                name: "High-security",
+                recipe: PasswordGenerator.Recipe(length: 24, symbols: true)
+            ),
+            PasswordProfile(
+                name: "PIN",
+                recipe: PasswordGenerator.Recipe(
+                    length: 6,
+                    lowercase: false,
+                    uppercase: false,
+                    digits: true,
+                    symbols: false,
+                    excludeAmbiguous: false
+                )
+            ),
+        ]
     }
 }

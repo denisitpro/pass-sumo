@@ -438,7 +438,12 @@ struct VaultBrowserView: View {
                 Button {
                     Task { await store.save() }
                 } label: {
+                    // `.titleAndIcon` keeps the word "Save" visible (issue #191): an icon-only
+                    // toolbar button whose glyph is `square.and.arrow.down` did not read clearly
+                    // as "save", and Save is the one action here whose meaning changes with
+                    // `isDirty` — an explicit label is the honest affordance for that.
                     Label("Save", systemImage: "square.and.arrow.down")
+                        .labelStyle(.titleAndIcon)
                 }
                 .accessibilityIdentifier("browser.save")
                 .disabled(!store.isDirty)

@@ -105,6 +105,7 @@ struct EntryEditView: View {
     /// `@FocusState` cannot be driven from here — same split as `MasterPasswordField`.
     @FocusState private var isTitleFocused: Bool
     @FocusState private var isPasswordFocused: Bool
+    @FocusState private var isNotesFocused: Bool
 
     init(
         entry: VaultEntry,
@@ -165,6 +166,7 @@ struct EntryEditView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.s6) {
                     headerRow
+                    groupBlock
                     labeled("Username") {
                         EditLineField(placeholder: "Username", text: $username, identifier: "edit.username")
                     }
@@ -247,6 +249,34 @@ struct EntryEditView: View {
         }
     }
 
+    /// Where the entry lives (issue #195). Editing an entry's group used to be impossible without
+    /// leaving the sheet — a drag in the list, or a re-create — so this picker closes that gap.
+    /// "No Group" (`nil`) is the vault's top level, the same convention `VaultEntry.groupID` uses.
+    /// The recycle bin and its subtree are excluded: filing an entry into the bin is a delete, not
+    /// a location, and doing it here would bypass `VaultStore`'s recycle rule.
+    private var groupBlock: some View {
+        labeled("Group") {
+            Picker("Group", selection: $groupID) {
+                Text("No Group").tag(nil as UUID?)
+                ForEach(availableGroups) { group in
+                    Text(group.name.isEmpty ? "Untitled" : group.name).tag(Optional(group.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .accessibilityIdentifier("edit.group")
+        }
+    }
+
+    /// The folders a group picker may offer: everything in the vault except the recycle bin and
+    /// whatever is filed inside it. Read from the store each render rather than cached, so a group
+    /// created elsewhere while this sheet is open shows up.
+    private var availableGroups: [VaultGroup] {
+        guard case .unlocked(let vault) = store.state else { return [] }
+        let binIDs = vault.recycleBinGroupIDs
+        return vault.groups.filter { !binIDs.contains($0.id) }
+    }
+
     private var passwordBlock: some View {
         labeled("Password") {
             VStack(alignment: .leading, spacing: Spacing.s2) {
@@ -314,13 +344,17 @@ struct EntryEditView: View {
     private var notesBlock: some View {
         VStack(alignment: .leading, spacing: Spacing.s2) {
             sectionTitle("Notes")
+            // `fieldChrome`, not `sunkenWell`: a sunken grey ground reads as a read-only well, and
+            // this is an editable field (issue #183). It is the same chrome every other text field
+            // on this sheet draws, so "editable" looks the same here as it does in Username/URL.
             TextEditor(text: $notes)
                 .font(Typography.body)
                 .foregroundStyle(Palette.text)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 80)
                 .padding(Spacing.s4)
-                .sunkenWell()
+                .fieldChrome(isFocused: isNotesFocused)
+                .focused($isNotesFocused)
                 .accessibilityIdentifier("edit.notes")
         }
     }

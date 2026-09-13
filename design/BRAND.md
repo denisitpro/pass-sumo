@@ -151,6 +151,9 @@ here so the views never carry them as literals:
 | `hero-glyph-size` | 40 | `.big-lock`, the glyph heading a centred card |
 | `search-field-width` | 252 | `.search`, the toolbar's search well |
 | `search-field-height` | 24 | `.search` |
+| `entry-col-username` | 132 | invented — see below |
+| `entry-col-url` | 160 | invented — see below |
+| `entry-col-modified` | 150 | invented — see below |
 
 **`control-disabled-opacity` = 0.4 has no counterpart in the mockup.** The mockup draws no disabled
 state, and a custom SwiftUI `ButtonStyle` gets no automatic dimming, so a disabled primary action
@@ -164,7 +167,14 @@ a different x on every row. The slot is the fixed square the glyph is centred in
 does not move. 20 rather than 21+: it holds every glyph but the widest to within half a point per
 side, and sizing to the extreme would push every title 4pt right for one outlier.
 
-Those two are the only invented values in the set.
+**The three `entry-col-*` widths are invented too** — the mockup draws a single title per entry
+row and no columns at all, so it never had to answer the question issue #182 asks: a Strongbox-style
+single-line row with fixed Username / URL / Modified columns, so those fields line up row to row and
+only Title flexes. The widths are a product call (a live username or URL usually fits without
+truncation, a medium date does too), not measured from the mockup — change them alongside
+`DesignTokens.swift` in the same PR.
+
+Those five are the only invented values in the set.
 
 ## Elevation
 

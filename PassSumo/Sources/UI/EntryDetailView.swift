@@ -294,31 +294,22 @@ struct EntryDetailView: View {
         NSWorkspace.shared.open(resolvedURL)
     }
 
-    /// Issue #17: the URL value itself now opens on click (`FieldRow.onActivateLink`), matching
-    /// Strongbox. The adjacent glyph button stays rather than being removed as redundant: a plain
-    /// clicked value has no keyboard-focus stop on macOS (only controls do), so a Tab-only user —
-    /// sighted, not using VoiceOver — would lose the ability to open the URL at all if this were
-    /// the sole affordance. `detail.openURL` keeps naming the button; the value's own click and
-    /// VoiceOver action are unnamed extras, not a replacement for it.
+    /// Issue #192: the open-URL glyph is gone. The URL value now carries both affordances in one
+    /// `FieldRow` — click the value to open it (`onActivateLink`), or hit the trailing copy button
+    /// to put it on the pasteboard (`onCopy`). A URL is far more often copied (into a browser the
+    /// user already has open, a support ticket, a message) than opened from the row, so the copy is
+    /// the visible control and opening stays the link-click. `detail.copyURL` names the copy
+    /// button; the value's own click and VoiceOver action are unnamed extras.
     private var urlRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.s4) {
-            FieldRow(
-                label: "URL", value: entry.url,
-                // A closure literal, not a bare `openResolvedURL` method reference: the ternary
-                // with `nil` otherwise defeats the type checker (a real failure seen here, not a
-                // style preference — see the compiler's own "please submit a bug report").
-                onActivateLink: resolvedURL != nil ? { openResolvedURL() } : nil
-            )
-            if resolvedURL != nil {
-                Button(action: openResolvedURL) {
-                    Image(systemName: "arrow.up.forward.square")
-                }
-                .buttonStyle(.tokenGlyph)
-                .help("Open URL")
-                .accessibilityLabel("Open URL")
-                .accessibilityIdentifier("detail.openURL")
-            }
-        }
+        FieldRow(
+            label: "URL", value: entry.url,
+            // A closure literal, not a bare `openResolvedURL` method reference: the ternary
+            // with `nil` otherwise defeats the type checker (a real failure seen here, not a
+            // style preference — see the compiler's own "please submit a bug report").
+            onActivateLink: resolvedURL != nil ? { openResolvedURL() } : nil,
+            onCopy: { copy(entry.url, notice: "Copied URL") },
+            copyIdentifier: "detail.copyURL"
+        )
     }
 
     private var customFieldsSection: some View {

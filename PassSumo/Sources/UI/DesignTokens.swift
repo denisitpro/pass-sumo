@@ -233,6 +233,12 @@ enum Metrics {
     /// point per side, where a slot sized to the extreme would push every title 4pt further right
     /// for the sake of a glyph almost nothing uses.
     static let rowIconSlot: CGFloat = 20
+    /// Entry-list column widths (issue #182): fixed slots for the non-flexing columns of the
+    /// Strongbox-style single-line row, so the title column is the only one that flexes and the
+    /// Username / URL / Modified columns line up row to row.
+    static let entryColumnUsername: CGFloat = 132
+    static let entryColumnURL: CGFloat = 160
+    static let entryColumnModified: CGFloat = 150
     /// The large lock/shield glyph a centred card is headed by — the mockup's `.big-lock`.
     static let heroGlyphSize: CGFloat = 40
 
