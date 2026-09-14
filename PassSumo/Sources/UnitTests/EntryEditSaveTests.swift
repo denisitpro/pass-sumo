@@ -46,6 +46,9 @@ final class EntryEditSaveTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: PasswordGenerator.Recipe(),
+            // `FakeLockEventSource` so constructing the form cannot register for real
+            // `NSWorkspace` notifications; nothing here drives the idle clock.
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: onSave,
             onDismiss: onDismiss
         )

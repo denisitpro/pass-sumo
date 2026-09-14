@@ -68,10 +68,12 @@ struct AppCommands: Commands {
             Button("Show Backups in Finder") { showBackupsInFinder() }
                 .disabled(environment.backupDirectory == nil)
             Divider()
-            // Through the controller, not `store.lock()` directly: the lock has to be RECORDED as
-            // deliberate, or the unlock screen cannot tell "the Mac slept" from "I just hit ⌘L"
-            // and prompts for Touch ID a second after the user chose to lock (issue #69).
-            Button("Lock Database") { environment.autoLock.lockRequestedByUser() }
+            // Through the tab list, which asks about unsaved edits before anything is dropped
+            // (issue #172) and then locks through the session's own controller — never
+            // `store.lock()` directly, because the lock has to be RECORDED as deliberate or the
+            // unlock screen cannot tell "the Mac slept" from "I just hit ⌘L" and prompts for Touch
+            // ID a second after the user chose to lock (issue #69).
+            Button("Lock Database") { environment.sessionList.requestLockSelected() }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(!isUnlocked)
             Divider()

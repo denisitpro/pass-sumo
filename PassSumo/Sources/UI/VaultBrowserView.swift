@@ -20,13 +20,18 @@ struct VaultBrowserView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
-    /// Read for `noteActivity()`, and told when the toolbar's Lock button is pressed — this view
-    /// still never locks anything itself, it reports the request and the controller performs the
-    /// lock through its own `onLock` (see `lockRequestedByUser()`). `StatusBar` stopped reading its
-    /// countdown when that readout was removed (issue #101); this is a constructor parameter rather
-    /// than an environment read for the same reason as before — an environment lookup that silently
-    /// resolves to nothing would let the activity-reporting and the Lock button go quietly inert.
+    /// Read for `noteActivity()`, and handed to the entry-edit sheet so typing in it counts as
+    /// activity too (issue #172). This view still never locks anything itself. `StatusBar` stopped
+    /// reading its countdown when that readout was removed (issue #101); this is a constructor
+    /// parameter rather than an environment read because an environment lookup that silently
+    /// resolves to nothing would let the activity-reporting go quietly inert.
     let autoLock: AutoLockController
+    /// What the toolbar's Lock button reports the user's request to. A closure, and not
+    /// `autoLock.lockRequestedByUser()` inline, because the request now has to pass the
+    /// unsaved-changes prompt first, and only `RootView` can see the tab list that raises it
+    /// (issue #172). Required rather than defaulted for the same reason `autoLock` is a parameter:
+    /// a Lock button wired to nothing is a button that silently does not lock.
+    let onLockRequested: () -> Void
     /// Read for the generator's saved recipe (`settings.generatorRecipe`, issue #106) — a
     /// constructor parameter for the same reason as `autoLock` above rather than fished out of
     /// `appEnvironment`, so a missing/misconfigured environment can't silently fall the generator
@@ -107,13 +112,15 @@ struct VaultBrowserView: View {
         clipboard: ClipboardService,
         generator: PasswordGenerator,
         autoLock: AutoLockController,
-        settings: AppSettings
+        settings: AppSettings,
+        onLockRequested: @escaping () -> Void
     ) {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
         self.autoLock = autoLock
         self.settings = settings
+        self.onLockRequested = onLockRequested
     }
 
     /// Factored out of `body`'s `.sheet(isPresented: $showingGenerator)` closure purely so the
@@ -393,11 +400,10 @@ struct VaultBrowserView: View {
             // binds ⌘L (Strongbox, issue #16).
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    // The controller, not `store.lock()` — see `AutoLockController.lockRequestedByUser()`.
-                    // This is the one thing this view does through `autoLock` besides reading its
-                    // countdown, and it is not "this view locks the vault": it reports that the
-                    // user asked, and the controller's `onLock` is still what performs it.
-                    autoLock.lockRequestedByUser()
+                    // Still not "this view locks the vault": it reports that the user asked, and
+                    // the owner decides — which since issue #172 means asking about unsaved edits
+                    // before the controller is told anything.
+                    onLockRequested()
                 } label: {
                     Label("Lock", systemImage: "lock")
                 }
@@ -517,6 +523,9 @@ struct VaultBrowserView: View {
                     // whatever was most recently saved in Settings, not a value snapshotted once
                     // when `VaultBrowserView` itself was constructed (issue #106).
                     generatorRecipe: settings.generatorRecipe,
+                    // Issue #172: composing an entry is not idleness. The sheet reports its own
+                    // typing, because this view cannot see a keystroke inside it.
+                    autoLock: autoLock,
                     onSave: { saved in selectedEntryID = saved.id },
                     onDismiss: { editingEntry = nil },
                     onRecipeChanged: { settings.generatorRecipe = $0 }
@@ -945,7 +954,10 @@ struct VaultBrowserView: View {
         store: store,
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
-        autoLock: AutoLockController(onLock: { [weak store] in store?.lock() }),
-        settings: AppSettings()
+        autoLock: AutoLockController(onLock: { [weak store] _ in store?.lock() }),
+        settings: AppSettings(),
+        // No tab list in a preview, and nothing in one is ever dirty: lock straight through the
+        // controller, the way every caller did before issue #172.
+        onLockRequested: { [weak store] in store?.lock() }
     )
 }

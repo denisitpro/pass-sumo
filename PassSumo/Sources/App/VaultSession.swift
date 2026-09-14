@@ -16,6 +16,8 @@ final class VaultSession: Identifiable {
     let url: URL
     let store: VaultStore
     let autoLock: AutoLockController
+    /// What a lock actually does to this session — see `SessionLockPolicy`.
+    let lockPolicy: SessionLockPolicy
     let automaticBiometricUnlock = AutomaticBiometricUnlockPolicy()
 
     var title: String { url.lastPathComponent }
@@ -29,14 +31,22 @@ final class VaultSession: Identifiable {
         url: URL,
         codec: any VaultCodec,
         fileAccess: any VaultFileAccess,
-        autoLockTimeout: TimeInterval
+        autoLockTimeout: TimeInterval,
+        clipboard: ClipboardService
     ) {
         self.url = url
         let store = VaultStore(codec: codec, fileAccess: fileAccess)
         self.store = store
-        self.autoLock = AutoLockController(idleTimeout: autoLockTimeout, onLock: { [weak store] in
-            store?.lock()
+        // Built in this order because each link needs the one before it: the policy needs the
+        // store and the pasteboard, the controller needs the policy's handler at init, and the
+        // policy needs the controller back to report a lock it declined — which is the one
+        // reference that has to be assigned afterwards, and is weak.
+        let lockPolicy = SessionLockPolicy(store: store, clipboard: clipboard)
+        self.lockPolicy = lockPolicy
+        self.autoLock = AutoLockController(idleTimeout: autoLockTimeout, onLock: { reason in
+            lockPolicy.handleLock(reason: reason)
         })
+        lockPolicy.controller = autoLock
     }
 
     /// Mirrors `VaultStore.state` into this session's auto-lock and Touch ID policy. Called from
@@ -64,6 +74,97 @@ final class VaultSession: Identifiable {
     }
 }
 
+/// What a lock does to one session: the pasteboard first, then the vault — and, for a lock the
+/// user could not be asked about, an auto-save before the vault is dropped.
+///
+/// **`VaultStore.lock()` stays the security primitive that drops plaintext; the policy lives
+/// here** (issue #172). That split is the same one `select(url:)` already draws for issue #84: the
+/// store refuses to discard unsaved work, and what to do about it — prompt, save, refuse — is
+/// decided a layer up, where there is a pasteboard, a tab list and a user to ask.
+///
+/// A type of its own rather than a method on `VaultSession`, for two reasons. Construction order
+/// is one: `AutoLockController` takes its `onLock` handler at init, and a closure calling back
+/// into the session cannot be written before the session's own stored properties — that
+/// controller among them — are initialised, whereas a policy built *before* the controller needs
+/// no weak-self dance and no forwarding object to break the cycle. The other is that this is
+/// where the issue's decision lives, and it is worth exercising against a store and a pasteboard
+/// with no tab list, no window and no timer anywhere in the picture.
+@MainActor
+final class SessionLockPolicy {
+    private let store: VaultStore
+    private let clipboard: ClipboardService
+
+    /// Weak because the controller owns the closure that owns this policy, so a strong reference
+    /// back would close the cycle. Assigned once, by `VaultSession.init`, as soon as the
+    /// controller it points at exists.
+    weak var controller: AutoLockController?
+
+    init(store: VaultStore, clipboard: ClipboardService) {
+        self.store = store
+        self.clipboard = clipboard
+    }
+
+    /// Every lock this session's controller decides on arrives here — see `AutoLockController`'s
+    /// `onLock`.
+    func handleLock(reason: LockReason) {
+        // The pasteboard goes first, for every reason, including the ones that end up leaving the
+        // vault open below (audit finding M1). A password we put there is the one secret that
+        // outlives this process, the user is provably away for every automatic reason and has just
+        // asked to lock for the other one, and `clearNow()` already declines to touch a pasteboard
+        // somebody else has taken over since.
+        clipboard.clearNow()
+
+        // Everything except an automatic lock of a vault with unsaved edits is settled right here,
+        // synchronously. That is not an optimisation: `WorkspaceLockEventSource` goes out of its
+        // way to deliver `.systemSleep` with no hop through a `Task` (see its `observe`), and
+        // making this path async unconditionally would hand that whole window back.
+        guard reason != .userRequested, store.isDirty else {
+            store.lock()
+            return
+        }
+        Task { [weak self] in await self?.saveThenLock() }
+    }
+
+    /// Drops the decrypted vault and anything of ours on the pasteboard, with no policy attached —
+    /// for callers that have already settled what happens to unsaved edits, i.e. closing a tab.
+    func lockNow() {
+        clipboard.clearNow()
+        store.lock()
+    }
+
+    /// The automatic path with unsaved edits: idle timeout, sleep, screen lock, fast user
+    /// switching. There is nobody at the keyboard to prompt, so the edits are written rather than
+    /// discarded — discarding them silently on a timer is the defect (audit finding H1).
+    ///
+    /// **A failed save leaves the vault unlocked, for every reason, sleep included.** The two
+    /// harms are not symmetrical. A lock that did not happen is recoverable: the user comes back
+    /// to a vault that is still open, with the failure already on screen (`VaultStore.lastError`,
+    /// shown by `StatusBar` exactly as for a failed ⌘S), and can fix the cause and lock. Edits
+    /// dropped along with the decrypted vault exist nowhere at all — not in the file, because the
+    /// save is what failed, and not in the pre-save backup, which is a copy of the file as it was
+    /// *before* them. So this refuses to trade a possible exposure for a certain, irreversible
+    /// loss. It also is not the whole exposure it looks like: for `.systemSleep` and
+    /// `.screenLocked` the Mac's own login screen is already in front of this window.
+    ///
+    /// `lockDeclined()` re-arms the idle clock rather than abandoning the attempt, so a save that
+    /// starts working — the volume came back, the disk was freed — locks the vault on the next
+    /// round instead of leaving it open until somebody notices.
+    ///
+    /// Internal rather than private **because it is the test seam**: the suite drives it directly
+    /// against a file access that refuses to write, with no timer and no notification involved.
+    func saveThenLock() async {
+        await store.save()
+        // `isDirty`, not `lastError`: a save can succeed and still leave edits unwritten, because
+        // an edit that landed while Argon2 was running is deliberately not claimed as saved
+        // (issue #27's `editRevision` rule). Those edits are as unwritten as a failed save's.
+        guard !store.isDirty else {
+            controller?.lockDeclined()
+            return
+        }
+        store.lock()
+    }
+}
+
 /// Ordered tabs plus the selected one. The only type that adds or drops a `VaultSession`.
 ///
 /// Opening a file that is already a tab focuses it rather than duplicating it (issue #47). Closing
@@ -79,6 +180,13 @@ final class VaultSessionList {
     /// The tab a close request is waiting on a Save / Discard / Cancel answer for.
     private(set) var unsavedChangesCloseID: UUID?
 
+    /// The tab a user-requested lock is waiting on that same answer for (issue #172).
+    private(set) var unsavedChangesLockID: UUID?
+
+    /// Whether ⌘Q is parked on that answer. One flag for the whole app rather than per tab: the
+    /// question is "may the process exit", and it is asked once however many tabs are dirty.
+    private(set) var isQuitPending = false
+
     var selected: VaultSession? {
         sessions.first { $0.id == selectedID }
     }
@@ -88,18 +196,35 @@ final class VaultSessionList {
         return sessions.first { $0.id == unsavedChangesCloseID }
     }
 
+    var unsavedChangesLockSession: VaultSession? {
+        guard let unsavedChangesLockID else { return nil }
+        return sessions.first { $0.id == unsavedChangesLockID }
+    }
+
+    /// Every tab with edits that are not on disk, in tab order — what the quit prompt names.
+    var dirtySessions: [VaultSession] {
+        sessions.filter(\.store.isDirty)
+    }
+
     private let codec: any VaultCodec
     private let fileAccess: any VaultFileAccess
+    /// The app's single `ClipboardService`, handed to every session's lock policy and used
+    /// directly on the quit path. One instance, not one per tab: there is one system pasteboard,
+    /// and its `changeCount` ownership check only works if a single object remembers what it put
+    /// there.
+    private let clipboard: ClipboardService
     private var autoLockTimeout: TimeInterval
 
     init(
         codec: any VaultCodec,
         fileAccess: any VaultFileAccess,
-        autoLockTimeout: TimeInterval
+        autoLockTimeout: TimeInterval,
+        clipboard: ClipboardService
     ) {
         self.codec = codec
         self.fileAccess = fileAccess
         self.autoLockTimeout = autoLockTimeout
+        self.clipboard = clipboard
     }
 
     func session(matching url: URL) -> VaultSession? {
@@ -210,7 +335,11 @@ final class VaultSessionList {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         let session = sessions[index]
         session.autoLock.stop()
-        session.store.lock()
+        // Through the policy, not `store.lock()`: closing a tab drops that vault, so it clears the
+        // pasteboard for the same reason every other lock does (audit finding M1). Whether the
+        // unsaved edits may go was already answered — a dirty tab cannot reach `drop` without
+        // passing the Save / Discard prompt above.
+        session.lockPolicy.lockNow()
         sessions.remove(at: index)
         if unsavedChangesCloseID == id {
             unsavedChangesCloseID = nil
@@ -225,12 +354,131 @@ final class VaultSessionList {
         }
     }
 
+    // MARK: - Lock (issue #172)
+
+    enum LockDecision: Equatable {
+        case locked
+        case confirmUnsavedChanges
+        case ignored
+    }
+
+    /// "Lock Database" (⌘L) and the browser toolbar's Lock button. A clean tab locks immediately;
+    /// a dirty one parks the request on `unsavedChangesLockID` and `RootView` asks Save / Discard
+    /// / Cancel — the same prompt, and the same three answers, closing a dirty tab already gets.
+    ///
+    /// **The dirty question is settled here, above the controller, and that is what keeps the lock
+    /// path single-pass.** By the time `AutoLockController.lockRequestedByUser()` is called — from
+    /// this method, or from Discard/Save below — the answer is already known, which is why
+    /// `SessionLockPolicy` can treat `.userRequested` as "drop it" with no second guard and no way
+    /// back into this decision.
+    @discardableResult
+    func requestLock(_ id: UUID) -> LockDecision {
+        guard let session = sessions.first(where: { $0.id == id }), session.isUnlocked else {
+            return .ignored
+        }
+        if session.store.isDirty {
+            unsavedChangesLockID = id
+            return .confirmUnsavedChanges
+        }
+        session.autoLock.lockRequestedByUser()
+        return .locked
+    }
+
+    @discardableResult
+    func requestLockSelected() -> LockDecision {
+        guard let selectedID else { return .ignored }
+        return requestLock(selectedID)
+    }
+
+    func cancelLock() {
+        unsavedChangesLockID = nil
+    }
+
+    /// "Discard": the user has said the unsaved edits may go, so the lock proceeds on a vault that
+    /// is still dirty. This is the one path where dropping them is not silent.
+    func discardThenLockPending() {
+        guard let id = unsavedChangesLockID,
+              let session = sessions.first(where: { $0.id == id })
+        else { return }
+        unsavedChangesLockID = nil
+        session.autoLock.lockRequestedByUser()
+    }
+
+    /// "Save": write the tab, then lock it. A failed save, or an edit that landed during Argon2
+    /// (issue #27's `editRevision` rule), leaves the vault unlocked with the edits intact — same
+    /// shape, and the same reasoning, as `saveThenClosePending()`.
+    func saveThenLockPending() async {
+        guard let id = unsavedChangesLockID,
+              let session = sessions.first(where: { $0.id == id })
+        else { return }
+        await session.store.save()
+        guard session.store.lastError == nil else {
+            unsavedChangesLockID = nil
+            return
+        }
+        guard !session.store.isDirty else { return }
+        unsavedChangesLockID = nil
+        session.autoLock.lockRequestedByUser()
+    }
+
+    // MARK: - Quit (issue #172)
+
+    enum QuitDecision: Equatable {
+        case quitNow
+        case confirmUnsavedChanges
+        /// A quit request arrived while an earlier one is still parked on its prompt.
+        case alreadyAsking
+    }
+
+    /// Whether ⌘Q may proceed. Called from `applicationShouldTerminate`, which turns the answer
+    /// into a `TerminateReply` — this method deliberately knows nothing about `NSApplication`, so
+    /// the decision is assertable without an app to quit.
+    ///
+    /// `.alreadyAsking` is not a defensive nicety. A second ⌘Q while the prompt is up makes AppKit
+    /// ask again, and answering both requests with the one `reply(toApplicationShouldTerminate:)`
+    /// the prompt will send leaves the other one parked forever — an app that can no longer be
+    /// quit. The caller cancels the duplicate instead, leaving the first request and its prompt
+    /// exactly as they were.
+    func requestQuit() -> QuitDecision {
+        if isQuitPending { return .alreadyAsking }
+        guard dirtySessions.isEmpty else {
+            isQuitPending = true
+            return .confirmUnsavedChanges
+        }
+        prepareToQuit()
+        return .quitNow
+    }
+
+    /// Takes the quit request off the prompt. Whoever calls this owns replying to AppKit, and the
+    /// flag going false is what makes that reply exactly-once (see `RootView`).
+    func endQuitRequest() {
+        isQuitPending = false
+    }
+
+    /// Saves every dirty tab and reports whether they are all clean afterwards, i.e. whether the
+    /// process may exit. Saves them all rather than stopping at the first failure: one database on
+    /// an unreachable volume must not cost the others their edits.
+    func saveDirtySessionsForQuit() async -> Bool {
+        for session in dirtySessions {
+            await session.store.save()
+        }
+        return dirtySessions.isEmpty
+    }
+
+    /// The last thing that runs before the process exits. Only the pasteboard needs it: the
+    /// decrypted vaults die with the address space, while a password we copied outlives us
+    /// (audit finding M1), and `clearNow()` still leaves alone a pasteboard somebody else owns.
+    func prepareToQuit() {
+        clipboard.clearNow()
+    }
+
     private func makeSession(url: URL) -> VaultSession {
         VaultSession(
             url: url,
             codec: codec,
             fileAccess: fileAccess,
-            autoLockTimeout: autoLockTimeout
+            autoLockTimeout: autoLockTimeout,
+            clipboard: clipboard
         )
     }
 }

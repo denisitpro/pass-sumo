@@ -814,6 +814,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -839,6 +840,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -862,6 +864,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -884,6 +887,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {},
             onRecipeChanged: { persisted = $0 }
@@ -915,8 +919,9 @@ final class BrowserLogicTests: XCTestCase {
             // controller is an unused constructor dependency here, and registering for real
             // `NSWorkspace` notifications is exactly the side effect `SecurityAutoLockTests`'s own
             // doc comment warns a test must not risk.
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         let sheet = browser.makeGeneratorSheet()
@@ -967,8 +972,9 @@ final class BrowserLogicTests: XCTestCase {
             store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         let entry = browser.makeBlankEntry()
@@ -993,8 +999,9 @@ final class BrowserLogicTests: XCTestCase {
             store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         XCTAssertEqual(browser.makeBlankEntry().password, "")

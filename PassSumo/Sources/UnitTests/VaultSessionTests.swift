@@ -25,7 +25,10 @@ final class VaultSessionTests: XCTestCase {
         VaultSessionList(
             codec: InMemoryVaultCodec(),
             fileAccess: InMemoryVaultFileAccess(),
-            autoLockTimeout: 300
+            autoLockTimeout: 300,
+            // Never the real pasteboard: locking and quitting now clear it (issue #172), and a
+            // unit test must not be able to wipe what the developer had copied.
+            clipboard: ClipboardService(pasteboard: FakePasteboard())
         )
     }
 

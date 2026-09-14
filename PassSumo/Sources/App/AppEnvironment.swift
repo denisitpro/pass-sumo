@@ -126,13 +126,17 @@ final class AppEnvironment {
         self.idleStore = idleStore
         self.idleAutoLock = AutoLockController(
             idleTimeout: settings.autoLockTimeout,
-            onLock: { [weak idleStore] in idleStore?.lock() }
+            // No `SessionLockPolicy` behind this one, unlike a real tab's: nothing is ever
+            // unlocked in the idle store, so there are no edits to save and no pasteboard secret
+            // that could have come from it.
+            onLock: { [weak idleStore] _ in idleStore?.lock() }
         )
         self.idleAutomaticBiometricUnlock = AutomaticBiometricUnlockPolicy()
         let sessionList = VaultSessionList(
             codec: codec,
             fileAccess: fileAccess,
-            autoLockTimeout: settings.autoLockTimeout
+            autoLockTimeout: settings.autoLockTimeout,
+            clipboard: clipboard
         )
         self.sessionList = sessionList
         // Built here from `sessionList` rather than taken as a parameter: a router pointed at a

@@ -23,7 +23,7 @@ final class SecurityAutoLockTests: XCTestCase {
             idleTimeout: 300,
             eventSource: events,
             now: clock.provider,
-            onLock: { [self] in lockCount += 1 }
+            onLock: { [self] _ in lockCount += 1 }
         )
     }
 
@@ -108,7 +108,7 @@ final class SecurityAutoLockTests: XCTestCase {
             let events = FakeLockEventSource()
             var locks = 0
             let controller = AutoLockController(
-                idleTimeout: 300, eventSource: events, now: clock.provider, onLock: { locks += 1 }
+                idleTimeout: 300, eventSource: events, now: clock.provider, onLock: { _ in locks += 1 }
             )
             controller.vaultDidUnlock()
 

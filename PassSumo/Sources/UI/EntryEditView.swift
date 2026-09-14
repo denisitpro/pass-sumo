@@ -54,6 +54,8 @@ struct EntryEditView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
+    /// Told that the user is still here on every keystroke in this sheet — see `notingActivity`.
+    let autoLock: AutoLockController
     var onSave: (VaultEntry) -> Void
     var onDismiss: () -> Void
     /// Optional so existing call sites still compile (the browser is another lane). The only
@@ -113,6 +115,7 @@ struct EntryEditView: View {
         clipboard: ClipboardService,
         generator: PasswordGenerator,
         generatorRecipe: PasswordGenerator.Recipe,
+        autoLock: AutoLockController,
         onSave: @escaping (VaultEntry) -> Void,
         onDismiss: @escaping () -> Void,
         onRecipeChanged: ((PasswordGenerator.Recipe) -> Void)? = nil
@@ -122,6 +125,7 @@ struct EntryEditView: View {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
+        self.autoLock = autoLock
         self.onSave = onSave
         self.onDismiss = onDismiss
         self.onRecipeChanged = onRecipeChanged
@@ -166,12 +170,16 @@ struct EntryEditView: View {
                 VStack(alignment: .leading, spacing: Spacing.s6) {
                     headerRow
                     labeled("Username") {
-                        EditLineField(placeholder: "Username", text: $username, identifier: "edit.username")
+                        EditLineField(
+                            placeholder: "Username",
+                            text: notingActivity($username),
+                            identifier: "edit.username"
+                        )
                     }
                     passwordBlock
                     totpBlock
                     labeled("URL") {
-                        EditLineField(placeholder: "URL", text: $url, identifier: "edit.url")
+                        EditLineField(placeholder: "URL", text: notingActivity($url), identifier: "edit.url")
                     }
                     notesBlock
                     customFieldsBlock
@@ -232,7 +240,7 @@ struct EntryEditView: View {
 
                 EditLineField(
                     placeholder: "Title",
-                    text: $title,
+                    text: notingActivity($title),
                     identifier: "edit.title",
                     focused: $isTitleFocused
                 )
@@ -314,7 +322,7 @@ struct EntryEditView: View {
     private var notesBlock: some View {
         VStack(alignment: .leading, spacing: Spacing.s2) {
             sectionTitle("Notes")
-            TextEditor(text: $notes)
+            TextEditor(text: notingActivity($notes))
                 .font(Typography.body)
                 .foregroundStyle(Palette.text)
                 .scrollContentBackground(.hidden)
@@ -333,7 +341,7 @@ struct EntryEditView: View {
             // jargon belongs in `docs/feature.md`, not in the control the user types into.
             EditLineField(
                 placeholder: "Authenticator secret",
-                text: $otpAuthURLText,
+                text: notingActivity($otpAuthURLText),
                 identifier: "edit.totp",
                 monospaced: true
             )
@@ -345,8 +353,8 @@ struct EntryEditView: View {
             sectionTitle("Custom Fields")
             ForEach($customFields) { $field in
                 HStack(spacing: Spacing.s4) {
-                    TextField("Name", text: $field.name)
-                    TextField("Value", text: $field.value)
+                    TextField("Name", text: notingActivity($field.name))
+                    TextField("Value", text: notingActivity($field.value))
                     // A quiet glyph, not a `Toggle` — same reasoning as `FieldRow`'s eye: a
                     // switch or a filled button-style toggle in every row would read as
                     // heavier than Delete beside it. The label states the ACTION, so
@@ -564,9 +572,9 @@ struct EntryEditView: View {
     private var passwordField: some View {
         Group {
             if isPasswordVisible {
-                TextField("Password", text: $password)
+                TextField("Password", text: notingActivity($password))
             } else {
-                SecureField("Password", text: $password)
+                SecureField("Password", text: notingActivity($password))
             }
         }
         .textFieldStyle(.plain)
@@ -617,6 +625,31 @@ struct EntryEditView: View {
         case ..<70: return Palette.strengthFair
         default: return Palette.strengthStrong
         }
+    }
+
+    /// Wraps a draft field's binding so that typing into it reports activity to the idle clock
+    /// (issue #172).
+    ///
+    /// **Composing an entry used to count as idleness.** `noteActivity()` was called for entry
+    /// selection, the search field and a tab switch — none of which happens while someone is
+    /// typing a password into this sheet — so a long enough edit was locked out from under the
+    /// user, and before this issue the lock also discarded what they had typed.
+    ///
+    /// A wrapper on the binding rather than one `.onChange(of:)` per field, for two reasons. It
+    /// makes "typing counts" a property of the field itself, so a field added later gets it by
+    /// being wired up like its neighbours rather than by somebody remembering a second modifier.
+    /// And it is checkable: a test can set through this binding and watch the countdown reset,
+    /// where `.onChange` would need a rendered view and a window to fire at all.
+    ///
+    /// Internal, not private, for that second reason.
+    func notingActivity<Value>(_ binding: Binding<Value>) -> Binding<Value> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { newValue in
+                autoLock.noteActivity()
+                binding.wrappedValue = newValue
+            }
+        )
     }
 
     /// Not `private`, so `EntryEditSaveTests` can drive the real thing.
@@ -785,6 +818,7 @@ private struct EditLineField: View {
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
         generatorRecipe: PasswordGenerator.Recipe(),
+        autoLock: AutoLockController(onLock: { _ in }),
         onSave: { _ in },
         onDismiss: {}
     )
