@@ -37,8 +37,18 @@ enum Base32 {
 
         for character in input {
             if character == "=" || character == " " || character == "-" { continue }
-            let upper = Character(String(character).uppercased())
-            guard let value = alphabet.firstIndex(of: upper) else {
+            // `uppercased()` is a full Unicode case mapping, so it can return
+            // more than one Character: "\u{00DF}" (ß) becomes "SS", "\u{FB01}" (ﬁ)
+            // becomes "FI". `Character(String)` requires exactly one grapheme
+            // and aborts a Debug build otherwise — on input, which is never a
+            // programmer error. Neither expansion is in the base32 alphabet
+            // anyway, so a multi-character folding is simply an invalid
+            // character.
+            let folded = String(character).uppercased()
+            guard folded.count == 1,
+                  let upper = folded.first,
+                  let value = alphabet.firstIndex(of: upper)
+            else {
                 throw DecodeError.invalidCharacter(character)
             }
             accumulator = (accumulator << 5) | UInt32(value)

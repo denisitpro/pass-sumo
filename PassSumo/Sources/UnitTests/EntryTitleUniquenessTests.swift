@@ -174,7 +174,7 @@ final class EntryTitleUniquenessTests: XCTestCase {
     /// The same invariant through the real codec: a KDBX file that already contains two live
     /// entries with the same title must decode, and the titles must come back unchanged.
     func testImportedDuplicatesStillDecodeThroughKDBXKitCodec() throws {
-        let codec = KDBXKitCodec()
+        let codec = TestKDF.codec()
         let credentials = VaultCredentials(password: "dup-title-kdbx", keyFile: nil)
         var decoded = try codec.makeEmpty(name: "Duplicates", credentials: credentials)
         let first = makeEntry(title: "Untitled")

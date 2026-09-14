@@ -16,7 +16,7 @@ import XCTest
 ///   a file, and `keepassxc-cli` (which *reads* KDBX 4 perfectly well) is asked whether it opens
 ///   and what is in it.
 final class KDBXCodecTests: XCTestCase {
-    private let codec = KDBXKitCodec()
+    private let codec = TestKDF.codec()
 
     // Published test passwords. These files ship in the repo and contain no real secrets.
     private static let kpxcPassword = "correct horse battery staple"
@@ -666,6 +666,29 @@ final class KDBXCodecTests: XCTestCase {
         }
     }
 
+    /// Issue #178: the point of setting the KDF ourselves is that it stops tracking a library
+    /// default that is free to change. A test that only checked "some Argon2id" would not notice
+    /// that — so this pins the tuple, and fails loudly if anyone re-tunes it without deciding to.
+    ///
+    /// Asserted on `productionKDF()` rather than by creating a database, because the assertion is
+    /// about the parameters, and running them would cost the ~0.9 s they are chosen to cost.
+    func testNewDatabasesGetTheKDFParametersThisAppChoseRatherThanTheLibraryDefault() throws {
+        guard case let .argon2id(params, additional) = try KDBXKitCodec.productionKDF() else {
+            return XCTFail("new databases must use Argon2id")
+        }
+        XCTAssertEqual(params.version, .v1_3)
+        XCTAssertEqual(params.iterations, 120)
+        XCTAssertEqual(params.memory, 64 * 1024 * 1024, "64 MiB is the iOS AutoFill-safe ceiling — see productionKDF")
+        XCTAssertEqual(params.parallelism, 4)
+        XCTAssertEqual(params.salt.count, 32)
+        XCTAssertTrue(additional.isEmpty)
+
+        // A salt reused across databases would defeat the only thing a salt is for.
+        let second = try KDBXKitCodec.productionKDF()
+        guard case let .argon2id(secondParams, _) = second else { return XCTFail("expected Argon2id") }
+        XCTAssertNotEqual(params.salt, secondParams.salt, "each database must get its own salt")
+    }
+
     // MARK: - Stable database identity
 
     /// The Keychain/Touch ID layer needs an identifier that survives saves, moves and iCloud
@@ -716,7 +739,14 @@ final class KDBXCodecTests: XCTestCase {
 
         let password = "interop-test-password"
         let creds = credentials(password)
-        var created = try codec.makeEmpty(name: "Interop Vault", credentials: creds)
+        // The ONE test that must pay the real KDF. Everything else in this class uses
+        // `TestKDF.codec()` so `make test` is not dominated by key derivation — but the whole claim
+        // here is that a file we wrote opens in an independent implementation, and a file written
+        // with the cheap test KDF proves that about the test KDF, not about what users get. Argon2id
+        // at t=120 is exactly the parameter another client has to agree to perform (issue #178), so
+        // this one builds the production codec and spends the ~0.9 s.
+        let productionCodec = KDBXKitCodec()
+        var created = try productionCodec.makeEmpty(name: "Interop Vault", credentials: creds)
 
         let group = VaultGroup(id: UUID(), parentID: nil, name: "Work")
         created.vault.groups = [group]
@@ -734,7 +764,7 @@ final class KDBXCodecTests: XCTestCase {
             ),
         ]
 
-        let saved = try codec.encode(created.vault, credentials: creds, origin: created)
+        let saved = try productionCodec.encode(created.vault, credentials: creds, origin: created)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("passsumo-interop-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

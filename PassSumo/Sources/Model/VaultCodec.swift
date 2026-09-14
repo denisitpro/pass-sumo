@@ -11,9 +11,13 @@ import Foundation
 /// `DecodedVault.opaque` instead of being silently dropped on save. This is the interop guarantee
 /// the whole product depends on (repo CLAUDE.md: "Interop is a hard requirement").
 protocol VaultCodec: Sendable {
-    /// Decode a whole `.kdbx` file. Throws `VaultError`. May be slow — Argon2 key derivation is
-    /// deliberately expensive (~1s) — so callers MUST run this off the main actor
-    /// (see `VaultStore.open`, which does).
+    /// Decode a whole `.kdbx` file. Throws `VaultError`. May be slow — key derivation is
+    /// deliberately expensive — so callers MUST run this off the main actor (see `VaultStore.open`,
+    /// which does). How slow is the *file's* choice, not ours: the KDF and its cost parameters are
+    /// recorded in the header, so a database pass-sumo created costs what
+    /// `KDBXKitCodec.productionKDF` documents (measured ~0.9 s on an Apple Silicon desktop), while
+    /// one written by another client can be anything from a few milliseconds to many seconds. The
+    /// off-main-actor rule holds for all of them.
     func decode(fileData: Data, credentials: VaultCredentials) throws -> DecodedVault
 
     /// Re-encode `vault` back into file bytes. `origin` is what `decode` (or `makeEmpty`) returned

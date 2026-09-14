@@ -105,6 +105,13 @@ final class ConcurrentSaveTests: DurabilityTestCase {
     /// The lost update the overlap caused — and the dirty-flag half of it — are pinned
     /// deterministically in `UnitTests/VaultStoreSaveSerializationTests`, which can hold a fake
     /// codec inside the critical section instead of racing a real KDF.
+    ///
+    /// **Do not give this test a cheap KDF.** Its sibling suites create their fixtures with one to
+    /// keep `make durability` affordable (issue #178), and this looks like the same job half-done —
+    /// it is not. The window in which a second `save()` could overlap the first is the window
+    /// Argon2 holds open; shrink it and the race this test exists to lose stops being reachable,
+    /// leaving an assertion that passes because nothing raced rather than because the chain works.
+    /// The ~22 s is the price of the net that holds issue #27's fix in place.
     @MainActor
     func testTwoConcurrentSavesDoNotOverlap() async throws {
         let directory = try makeScratchDirectory()
