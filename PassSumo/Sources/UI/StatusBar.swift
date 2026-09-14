@@ -23,6 +23,27 @@ struct StatusBar: View {
     /// real decision this readout serves (how much longer do I have), not motion for its own sake,
     /// so it stays.
     let secondsUntilClipboardClear: Int?
+    /// Set when the save that would have written the current edits did not happen at all
+    /// (`VaultStore.lastError`, worded by `VaultError.displayMessage` — issue #203). `nil` once
+    /// there is nothing unwritten to report: `VaultStore` clears `lastError` the moment a save
+    /// succeeds, and the caller reads that live, so this follows automatically.
+    ///
+    /// Persistent, for the same reason `backupWarning` is (see below) — a failed save is a
+    /// condition that outlives the moment it happened: the vault stays dirty until the *next*
+    /// successful save, and a dismissable alert acknowledged once would leave the app looking idle
+    /// while a real save keeps failing underneath it (the same "swallowed failure" shape issue #26
+    /// rejected for the backup case). It reuses `VaultError.displayMessage` rather than a second
+    /// set of sentences for the same errors — `UnlockView` and `CreateDatabaseSheet` already render
+    /// exactly that string for the same type, and `.externallyModified`'s own wording was written
+    /// with this readout in mind (see that case's doc comment: "this string is also what a status
+    /// readout would show").
+    ///
+    /// Styled in `Palette.danger` — the text, not just the icon — unlike `backupWarning`'s
+    /// icon-only tint below. The two mean opposite things about the user's data (a backup warning
+    /// means the edits ARE on disk, just without the extra copy; this means they are NOT on disk at
+    /// all), and `danger` measures 5.93:1 against this band's `sidebar` ground — above WCAG AA's
+    /// 4.5:1 for normal text, unlike `warning`'s 4.41:1 that forced the icon-only compromise below.
+    let saveError: String?
     /// Set when the last save went through but its pre-save backup did not
     /// (`VaultStore.lastBackupError`, worded by `VaultError.backupFailureMessage`). `nil` in the
     /// normal case.
@@ -50,6 +71,22 @@ struct StatusBar: View {
                 Image(systemName: "lock.doc")
             }
             .accessibilityIdentifier("statusbar.path")
+
+            if let saveError {
+                // Text AND icon in `danger` — see `saveError`'s own doc comment on why this one,
+                // unlike `backupWarning` below, can afford full-sentence contrast on this ground.
+                Label {
+                    Text(saveError)
+                        .foregroundStyle(Palette.danger)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Palette.danger)
+                }
+                .help(saveError)
+                .accessibilityIdentifier("statusbar.saveError")
+            }
 
             if let backupWarning {
                 // `warning` tints the ICON only. It measures 4.41:1 against this band's `sidebar`
@@ -111,6 +148,7 @@ struct StatusBar: View {
         databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: false,
         secondsUntilClipboardClear: nil,
+        saveError: nil,
         backupWarning: nil
     )
 }
@@ -120,6 +158,7 @@ struct StatusBar: View {
         databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: true,
         secondsUntilClipboardClear: 7,
+        saveError: nil,
         backupWarning: nil
     )
 }
@@ -129,7 +168,39 @@ struct StatusBar: View {
         databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
         isDirty: false,
         secondsUntilClipboardClear: nil,
+        saveError: nil,
         backupWarning: "Saved, but no backup: couldn't back up Personal.kdbx before saving: "
             + "the volume is out of space."
     )
+}
+
+#Preview("Failed save") {
+    // Issue #203: nothing was written at all — the message a failed ⌘S or a failed automatic
+    // save (issue #172) both now show, via `VaultError.displayMessage`.
+    StatusBar(
+        databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
+        isDirty: true,
+        secondsUntilClipboardClear: nil,
+        saveError: "This database was changed on disk by another app or Mac. "
+            + "Your unsaved changes are still here, but nothing was written.",
+        backupWarning: nil
+    )
+}
+
+#Preview("Failed save AND a prior backup warning") {
+    // The crowded case decision 4 (issue #203) has to answer: a save can fail outright while an
+    // OLDER, still-unresolved backup warning from the last save that DID succeed is still showing
+    // — `lastError` and `lastBackupError` are independent properties, so both can be non-nil at
+    // once. Checked here at 900pt, the narrowest an unlocked-tab window is ever allowed to get
+    // (`PassSumoApp.body`'s `.frame(minWidth: isBrowserOpen ? 900 : 520, ...)`), not just at a
+    // comfortable one.
+    StatusBar(
+        databasePath: "/Users/demo/Documents/Family Passwords.kdbx",
+        isDirty: true,
+        secondsUntilClipboardClear: 42,
+        saveError: "Couldn't read the file: the volume is no longer available.",
+        backupWarning: "Saved, but no backup: couldn't back up Personal.kdbx before saving: "
+            + "the volume is out of space."
+    )
+    .frame(width: 900)
 }

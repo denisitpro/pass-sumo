@@ -139,7 +139,9 @@ final class SessionLockPolicy {
     /// **A failed save leaves the vault unlocked, for every reason, sleep included.** The two
     /// harms are not symmetrical. A lock that did not happen is recoverable: the user comes back
     /// to a vault that is still open, with the failure already on screen (`VaultStore.lastError`,
-    /// shown by `StatusBar` exactly as for a failed ⌘S), and can fix the cause and lock. Edits
+    /// read by `VaultBrowserView` into `StatusBar.saveError` exactly as for a failed ⌘S — issue
+    /// #203; before that fix this claim was false, and `StatusBar` showed nothing), and can fix
+    /// the cause and lock. Edits
     /// dropped along with the decrypted vault exist nowhere at all — not in the file, because the
     /// save is what failed, and not in the pre-save backup, which is a copy of the file as it was
     /// *before* them. So this refuses to trade a possible exposure for a certain, irreversible

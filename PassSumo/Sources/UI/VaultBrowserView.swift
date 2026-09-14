@@ -638,6 +638,13 @@ struct VaultBrowserView: View {
                     databasePath: store.currentURL?.path ?? "",
                     isDirty: store.isDirty,
                     secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
+                    // Issue #203: before this, a failed ⌘S — and the failed-auto-save path issue
+                    // #172 added — told the user nothing at all beyond the dirty indicator that was
+                    // already there. `store.lastError` is read live, so this covers both the same
+                    // way: an explicit save and `SessionLockPolicy.saveThenLock()`'s automatic one
+                    // both funnel through `VaultStore.save()`, which is the only place `lastError` is
+                    // set or cleared.
+                    saveError: store.lastError?.displayMessage,
                     // A failed pre-save backup no longer blocks the save (issue #26), so this is the
                     // one place the user learns it happened. Persistent rather than a transient alert:
                     // the condition persists — an unwritable container fails every save — and an alert
