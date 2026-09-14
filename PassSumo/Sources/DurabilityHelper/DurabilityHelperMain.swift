@@ -1,4 +1,5 @@
 import Foundation
+import KDBXKit
 import Security
 
 // MARK: - Why this executable exists
@@ -129,6 +130,14 @@ struct Options: Sendable {
     /// 8 MB test vaults there and prune the ones from the previous run. The suite always passes a
     /// per-test scratch directory. Left with a default so the helper stays runnable by hand.
     var backupRoot: URL?
+    /// Create the database with a deliberately cheap KDF instead of the production tuple.
+    ///
+    /// **The KDF a save pays is the one in the FILE's header, not the one the codec would pick for
+    /// a new database.** That is the non-obvious part: handing the codec a cheap KDF at save time
+    /// changes nothing, because the writer re-derives with `content.header.kdfParameters`. The only
+    /// moment the choice matters is creation — so this flag is only meaningful with `--mode create`,
+    /// and every later save of that file inherits what it wrote.
+    var cheapKDF: Bool
 
     static func parse(_ arguments: [String]) -> Options {
         var databasePath: String?
@@ -138,6 +147,7 @@ struct Options: Sendable {
         var attachmentBytes = 0
         var hangAt: Stage?
         var backupRoot: URL?
+        var cheapKDF = false
 
         var index = arguments.startIndex
         while index < arguments.endIndex {
@@ -166,6 +176,7 @@ struct Options: Sendable {
                 guard let parsed = Stage(rawValue: raw) else { Marker.fail("unknown --hang-at \(raw)") }
                 hangAt = parsed
             case "--backup-root": backupRoot = URL(fileURLWithPath: value(), isDirectory: true)
+            case "--cheap-kdf": cheapKDF = true
             default:
                 Marker.fail("unknown argument \(flag)")
             }
@@ -182,7 +193,8 @@ struct Options: Sendable {
             entryTitle: title,
             attachmentBytes: attachmentBytes,
             hangAt: hangAt,
-            backupRoot: backupRoot
+            backupRoot: backupRoot,
+            cheapKDF: cheapKDF
         )
     }
 }
@@ -263,8 +275,14 @@ enum DurabilityHelper {
         if let backupRoot = options.backupRoot {
             backupPolicy.root = { backupRoot }
         }
+        // AES-KDF with one round when asked: cheap by construction rather than by being a tuned-down
+        // Argon2, so nobody reads it as an opinion about Argon2 parameters. It reaches the file only
+        // through `--mode create`; see `Options.cheapKDF`.
+        let codec = options.cheapKDF
+            ? KDBXKitCodec(newDatabaseKDF: { .aes(.init(salt: Data(repeating: 0x2A, count: 32), rounds: 1), additional: [:]) })
+            : KDBXKitCodec()
         let store = VaultStore(
-            codec: KDBXKitCodec(),
+            codec: codec,
             fileAccess: StageAnnouncingFileAccess(
                 wrapping: SandboxedVaultFileAccess(backupPolicy: backupPolicy),
                 hangAt: options.hangAt

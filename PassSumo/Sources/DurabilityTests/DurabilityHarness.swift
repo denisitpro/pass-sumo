@@ -308,6 +308,7 @@ class DurabilityTestCase: XCTestCase {
         /// Prefix command that launches the helper, e.g. `["/usr/bin/sandbox-exec", "-f", profile]`.
         /// Empty means run it directly.
         launcher: [String] = [],
+        cheapKDF: Bool = false,
         timeout: TimeInterval = 120,
         file: StaticString = #filePath,
         line: UInt = #line
@@ -323,6 +324,12 @@ class DurabilityTestCase: XCTestCase {
         }
         if let hangAt {
             arguments += ["--hang-at", hangAt]
+        }
+        // Only meaningful with `--mode create`: the KDF a save pays comes from the file's header,
+        // not from the codec doing the saving. Off by default, so a test that says nothing still
+        // exercises the production derivation.
+        if cheapKDF {
+            arguments += ["--cheap-kdf"]
         }
         // Always: the helper is unsandboxed, so its production default would be the developer's
         // real Application Support. See `backupRoot()`.
@@ -481,6 +488,10 @@ class DurabilityTestCase: XCTestCase {
         named name: String = "vault.kdbx",
         title: String = "original",
         attachmentBytes: Int = 0,
+        /// Write a cheap KDF into this database's header, so neither creating it nor any later save
+        /// of it spends ~7 s in Argon2 (`KDBXKitCodec.productionKDF`, in a Debug build). The
+        /// parameters live in the file, so this one flag decides the cost of the whole test.
+        cheapKDF: Bool = false,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> URL {
@@ -490,6 +501,7 @@ class DurabilityTestCase: XCTestCase {
             mode: "create",
             title: title,
             attachmentBytes: attachmentBytes,
+            cheapKDF: cheapKDF,
             file: file, line: line
         )
         XCTAssertTrue(

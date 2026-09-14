@@ -13,6 +13,19 @@ import XCTest
 /// test can get to the plug coming out of the wall. What it does NOT reproduce is the layer below:
 /// `SIGKILL` leaves the filesystem intact, so page-cache contents already handed to the kernel are
 /// still written out. A genuine power loss can also lose an un-`fsync`ed rename. See README.md.
+///
+/// **Why this file passes `cheapKDF: true` and its siblings do not.** The KDF a save pays is the one
+/// recorded in the FILE's header, not the one the saving codec would choose for a new database — so
+/// the single place that decides the cost of a whole test is where its fixture is *created*. Every
+/// kill point below except one is a marker (the write beginning, the backup appearing, the atomic
+/// temporary appearing), and all of them come after key derivation, so that cost buys these tests
+/// nothing: `KDBXKitCodec.productionKDF` is ~0.9 s in Release and several seconds again in the Debug
+/// build the suite runs. `testKillDuringKeyDerivation…` is the exception and keeps the real KDF,
+/// because the window it kills inside *is* the derivation. `ConcurrentSaveTests` keeps it too — its
+/// whole subject is a race whose window the real Argon2 opens, and the deterministic version of that
+/// assertion already lives in `UnitTests/VaultStoreSaveSerializationTests`. `FormatConformanceTests`
+/// keeps it because its `keepassxc-cli` round trips are the only evidence that another client can
+/// open what our production parameters produce.
 final class TornWriteTests: DurabilityTestCase {
     // MARK: - The control
 
@@ -20,7 +33,7 @@ final class TornWriteTests: DurabilityTestCase {
     /// new version, leaves exactly one backup, and that backup is the complete old version.
     func testUninterruptedSaveWritesTheNewVersionAndLeavesACompleteBackup() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1")
+        let database = try createDatabase(in: directory, title: "v1", cheapKDF: true)
         let before = try Data(contentsOf: database)
 
         let outcome = try runHelper(database: database, title: "v2")
@@ -90,7 +103,7 @@ final class TornWriteTests: DurabilityTestCase {
     /// even a backup to clean up.
     func testKillAfterEncodingButBeforeAnyDiskWriteLeavesTheFileByteIdentical() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1")
+        let database = try createDatabase(in: directory, title: "v1", cheapKDF: true)
         let before = try Data(contentsOf: database)
 
         let outcome = try runHelper(
@@ -140,7 +153,7 @@ final class TornWriteTests: DurabilityTestCase {
     /// for. See README.md.
     func testKillWhileTheBackupIsBeingCopiedLeavesNoUnopenableBackup() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes)
+        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes, cheapKDF: true)
         let before = try Data(contentsOf: database)
 
         let outcome = try runHelper(
@@ -178,7 +191,7 @@ final class TornWriteTests: DurabilityTestCase {
     /// original and its copy and nothing has been overwritten.
     func testKillBetweenTheBackupAndTheWriteLeavesTheOldFileAndACompleteBackup() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes)
+        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes, cheapKDF: true)
         let before = try Data(contentsOf: database)
 
         let outcome = try runHelper(
@@ -214,7 +227,7 @@ final class TornWriteTests: DurabilityTestCase {
         try skipIfHostIsSandboxed("watching a directory closely enough to catch the atomic write's "
             + "temporary file")
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes)
+        let database = try createDatabase(in: directory, title: "v1", attachmentBytes: Self.paddingBytes, cheapKDF: true)
 
         let outcome = try runHelper(
             database: database,
@@ -258,13 +271,21 @@ final class TornWriteTests: DurabilityTestCase {
     /// killing at a spread of offsets after the save starts and asserting the same invariant every
     /// time. Any offset that lands after the save completed is not a wasted run: it still asserts
     /// the file opens.
+    ///
+    /// The offsets are absolute times, which makes `cheapKDF: true` load-bearing here rather than
+    /// merely fast: they have to span *the write*, and everything before the write is key
+    /// derivation. With the production KDF in a Debug build the derivation alone outlasts all eight
+    /// offsets, so every kill would land inside it and this test would silently stop covering the
+    /// `rename(2)` and `copyItem` instants it exists for — still passing, because the invariant
+    /// holds trivially when the kill lands before any byte is written. If these offsets are ever
+    /// rescaled, re-check that, not the wall-clock.
     func testKillsSpreadAcrossTheSaveNeverLeaveATornFile() throws {
         let offsets: [TimeInterval] = [0.05, 0.2, 0.4, 0.6, 0.8, 1.0, 1.3, 1.6]
 
         for offset in offsets {
             let directory = try makeScratchDirectory()
             let database = try createDatabase(
-                in: directory, title: "v1", attachmentBytes: Self.paddingBytes
+                in: directory, title: "v1", attachmentBytes: Self.paddingBytes, cheapKDF: true
             )
 
             let outcome = try runHelper(

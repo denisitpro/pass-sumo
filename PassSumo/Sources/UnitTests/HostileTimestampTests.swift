@@ -17,7 +17,7 @@ import XCTest
 /// `<CreationTime>` says `Int64.max` — the library keeps accepting those, because a reader stricter
 /// than the format is what made an intact database unopenable in issue #30.
 final class HostileTimestampTests: XCTestCase {
-    private let codec = KDBXKitCodec()
+    private let codec = TestKDF.codec()
 
     /// `9999-12-31T23:59:59` as whole seconds since `0001-01-01T00:00:00Z` — .NET's
     /// `DateTime.MaxValue`, and the largest offset a KDBX date element can express.

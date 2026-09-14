@@ -242,7 +242,7 @@ final class RecycleBinTests: XCTestCase {
 
     // MARK: - What reaches the file
 
-    private let codec = KDBXKitCodec()
+    private let codec = TestKDF.codec()
     private static let kdbxKitPassword = "123"
 
     private func fixture(_ name: String) throws -> Data {

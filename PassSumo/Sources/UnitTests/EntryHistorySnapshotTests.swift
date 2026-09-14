@@ -588,7 +588,7 @@ final class EntryHistorySnapshotTests: XCTestCase {
     /// reopens — and the file that comes back holds both previous values as `<History>`, with
     /// issue #33's password-change date now derivable from them.
     func testEditingSavingAndReopeningLeavesTheOldPasswordsInTheFile() async throws {
-        let codec = KDBXKitCodec()
+        let codec = TestKDF.codec()
         let (store, fileAccess, url) = await makeStore(codec: codec)
         store.upsert(makeEntry(title: "Bank", password: "first"))
         for value in ["second", "third"] {
@@ -630,7 +630,7 @@ final class EntryHistorySnapshotTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("history.kdbx")
 
-        let codec = KDBXKitCodec()
+        let codec = TestKDF.codec()
         let credentials = VaultCredentials(password: password, keyFile: nil)
         var created = try codec.makeEmpty(name: "History Vault", credentials: credentials)
         var entry = makeEntry(title: "Bank", password: "before-rotation")
