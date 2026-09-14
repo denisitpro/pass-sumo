@@ -213,6 +213,13 @@ final class StageAnnouncingFileAccess: VaultFileAccess {
         try wrapped.read(from: url)
     }
 
+    // Forwarded, not defaulted to `nil`: a wrapper that quietly returned "no fingerprint"
+    // would switch off issue #173's external-change check for the whole durability suite,
+    // which is the one suite that exercises this save path against a real filesystem.
+    func fingerprint(of url: URL) -> FileFingerprint? {
+        wrapped.fingerprint(of: url)
+    }
+
     func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         Marker.emit(.writeBegin)
         hangIfRequested(at: .writeBegin)

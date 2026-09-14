@@ -156,6 +156,47 @@ struct RootView: View {
                         + "Quitting discards them unless you save first."
                 )
             }
+            // A save that refused rather than clobber a file another app or Mac had already
+            // changed (issue #173). The fourth dialog on this view, and the only one not raised
+            // by a request the user made: it reports a condition a store has ended up in, so it
+            // is driven by `externalChangeSession` — see that property for why it is derived and
+            // per-tab rather than parked on a flag and read off the selected store.
+            .confirmationDialog(
+                "This database changed on disk",
+                isPresented: Binding(
+                    get: { environment.sessionList.externalChangeSession != nil },
+                    // Esc or a click outside means Cancel: the refusal is acknowledged, nothing is
+                    // written, and the edits stay dirty.
+                    set: { if !$0 { environment.sessionList.acknowledgeExternalChange() } }
+                ),
+                presenting: environment.sessionList.externalChangeSession
+            ) { session in
+                // Overwrite is NOT marked destructive and Reload is, which reads backwards until
+                // you ask what each one destroys and whether it can be got back. Overwrite
+                // replaces the other copy — and the pre-save backup taken immediately before that
+                // write is a copy of exactly what it replaces (`VaultFileAccess.write`), so it is
+                // recoverable through "Show Backups in Finder". Reload throws away edits that
+                // exist in this process's memory and nowhere else: not in the file, and not in any
+                // backup, because no backup was ever of them.
+                Button("Overwrite") {
+                    Task { await session.store.save(overwritingExternalChanges: true) }
+                }
+                .accessibilityIdentifier("root.externalChange.overwrite")
+                Button("Reload", role: .destructive) {
+                    Task { await session.store.reloadFromDisk() }
+                }
+                .accessibilityIdentifier("root.externalChange.reload")
+                Button("Cancel", role: .cancel) {
+                    environment.sessionList.acknowledgeExternalChange()
+                }
+            } message: { session in
+                Text(
+                    "“\(session.title)” was changed by another app or Mac since it was opened here, "
+                        + "so it was not saved. Overwrite replaces that copy with yours, keeping "
+                        + "the version it replaces as a backup. Reload discards your unsaved "
+                        + "changes and opens the file again."
+                )
+            }
             // One monitor per tab, including background ones: auto-lock and Touch ID re-arm have
             // to follow that session's store, not whichever tab is selected.
             .background {

@@ -51,6 +51,8 @@ final class SessionLockAndQuitTests: XCTestCase {
 
         func read(from url: URL) throws -> Data { try backing.read(from: url) }
 
+        func fingerprint(of url: URL) -> FileFingerprint? { backing.fingerprint(of: url) }
+
         @discardableResult
         func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
             guard !refusesWrites else { throw VaultError.io("the volume went away") }

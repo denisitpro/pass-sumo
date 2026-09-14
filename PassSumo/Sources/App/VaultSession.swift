@@ -206,6 +206,32 @@ final class VaultSessionList {
         sessions.filter(\.store.isDirty)
     }
 
+    /// The first tab whose last save refused because the file had changed underneath it (issue
+    /// #173), or `nil` when none has. What `RootView`'s external-change prompt is about.
+    ///
+    /// **Derived, not parked on a flag like the close/lock/quit requests above.** Those three are
+    /// questions the user asked and this list has to remember until they answer. This one is a
+    /// condition a store is already in, reached from paths this list does not drive — ⌘S in the
+    /// browser, a background tab's auto-lock save, the Touch ID enrolment save — so a flag would
+    /// have to be set by every one of them, and whichever one forgot would leave a save refused
+    /// with nothing on screen. Reading the stores cannot fall out of step with them.
+    ///
+    /// **Per-tab, and that is the point.** The prompt has to be about the store that actually
+    /// refused. Binding it to `AppEnvironment.store`, which resolves to whichever tab is selected,
+    /// would let a background tab's conflict be answered by an Overwrite aimed at the front one.
+    ///
+    /// `first` rather than all of them: two tabs in conflict are asked about one at a time, the
+    /// next appearing once the first is settled.
+    var externalChangeSession: VaultSession? {
+        sessions.first { $0.store.lastError == .externallyModified }
+    }
+
+    /// Dismisses the external-change prompt for the tab it is about, leaving that tab's edits
+    /// exactly as dirty as they were.
+    func acknowledgeExternalChange() {
+        externalChangeSession?.store.acknowledgeExternalChange()
+    }
+
     private let codec: any VaultCodec
     private let fileAccess: any VaultFileAccess
     /// The app's single `ClipboardService`, handed to every session's lock policy and used

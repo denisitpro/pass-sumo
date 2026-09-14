@@ -59,6 +59,20 @@ final class VaultStore {
     /// is what makes overlapping saves impossible here.
     private var saveChain: Task<Void, Never>?
 
+    /// What the file looked like the last time we agreed with it: at the decode this vault came
+    /// from, or right after the last write we made ourselves. Re-checked immediately before the
+    /// next write, so a copy another client synced in is not silently replaced (issue #173).
+    ///
+    /// **Read inside `performSave`, never in `save()`.** That is what makes it safe under the save
+    /// chain: `performSave` runs only after its predecessor has fully returned, so the baseline a
+    /// queued save compares against is the one the save ahead of it left behind, not the one that
+    /// was current when the save was requested.
+    ///
+    /// `nil` means "no baseline", and deliberately lets the save through — a database created in
+    /// this session has nothing on disk yet, and metadata we failed to read is not evidence of a
+    /// change. See `ExternalChangeCheck`.
+    private var openedFingerprint: FileFingerprint?
+
     /// Counts in-memory edits, so a completing save can tell whether the state it wrote is still
     /// the state in memory. Incremented by `markEdited()` and never reset — only compared.
     ///
@@ -88,11 +102,19 @@ final class VaultStore {
         // injected `codec`/`fileAccess` are themselves `Sendable` and safe to hand across.
         let codec = self.codec
         let fileAccess = self.fileAccess
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<DecodedVault, VaultError> in
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<(DecodedVault, FileFingerprint?), VaultError> in
             do {
+                // BEFORE the read, not after it, and the order is the whole point (issue #173).
+                // A write landing between these two lines is a race either way, but the two ways
+                // are not equally bad. Fingerprinting first pairs an older stamp with newer bytes:
+                // the next save sees a mismatch and asks, which costs one dialog. Fingerprinting
+                // after the read pairs the NEW stamp with the bytes we already hold, so the save
+                // that follows sees no change and overwrites the very copy it should have caught —
+                // the defect this issue is about, reintroduced in the window it was fixed in.
+                let fingerprint = fileAccess.fingerprint(of: url)
                 let data = try fileAccess.read(from: url)
                 let decoded = try codec.decode(fileData: data, credentials: credentials)
-                return .success(decoded)
+                return .success((decoded, fingerprint))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -101,10 +123,11 @@ final class VaultStore {
         }.value
 
         switch result {
-        case .success(let decoded):
+        case .success(let (decoded, fingerprint)):
             decodedOrigin = decoded
             self.credentials = credentials
             currentURL = url
+            openedFingerprint = fingerprint
             isDirty = false
             state = .unlocked(decoded.vault)
         case .failure(let error):
@@ -148,6 +171,9 @@ final class VaultStore {
         guard !isDirty || discardingUnsavedChanges else { return false }
         credentials = nil
         decodedOrigin = nil
+        // Dropped with the rest: a baseline belongs to the vault it was taken for, and keeping it
+        // across a switch to another file would compare the new file against the old one's stamp.
+        openedFingerprint = nil
         isDirty = false
         lastError = nil
         currentURL = url
@@ -238,6 +264,10 @@ final class VaultStore {
             decodedOrigin = decoded
             self.credentials = credentials
             currentURL = url
+            // No baseline, and there cannot be one: nothing has been written yet, so the first
+            // save must not be asked whether it is overwriting somebody (issue #173). Set rather
+            // than left alone, so this holds even for a store that had another file open before.
+            openedFingerprint = nil
             // Nothing is on disk yet: the first `save()` is not optional, it's how this database
             // starts existing at all.
             markEdited()
@@ -276,13 +306,20 @@ final class VaultStore {
     /// rejected: the in-flight save has already taken its snapshot, so it provably does *not*
     /// contain edits made after it started, and folding a later request into it would report
     /// success for exactly the edits it did not write.
-    func save() async {
+    ///
+    /// **`overwritingExternalChanges` is the user's answer, not a caller's convenience (issue
+    /// #173).** Left `false`, a save refuses with `.externallyModified` when the file no longer
+    /// matches what we decoded, writing nothing and leaving the edits dirty. Pass `true` only
+    /// after the person at the keyboard has been shown what that costs and chosen it — see
+    /// `RootView`'s external-change dialog. No automatic path (auto-lock, quit, Touch ID
+    /// enrolment) may pass it: those are exactly the saves nobody is watching.
+    func save(overwritingExternalChanges: Bool = false) async {
         let predecessor = saveChain
         let link = Task { @MainActor in
             // Nothing above this line touches the vault: the whole point is that the snapshot is
             // taken by `performSave()` AFTER the predecessor is done.
             if let predecessor { await predecessor.value }
-            await self.performSave()
+            await self.performSave(overwritingExternalChanges: overwritingExternalChanges)
         }
         saveChain = link
         await link.value
@@ -293,7 +330,7 @@ final class VaultStore {
 
     /// The actual encode-and-write. **Only ever called from inside the chain `save()` builds** —
     /// calling it directly would reintroduce exactly the overlap that chain exists to prevent.
-    private func performSave() async {
+    private func performSave(overwritingExternalChanges: Bool) async {
         // Snapshot HERE, not in `save()`: a queued save must encode the vault as of when it RUNS.
         // Snapshotting at request time would write whatever the vault looked like before the wait
         // and silently undo every edit made during it.
@@ -306,10 +343,27 @@ final class VaultStore {
         let fileAccess = self.fileAccess
         let origin = decodedOrigin
         let revision = editRevision
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<VaultBackupOutcome, VaultError> in
+        // Read here, on the main actor, before the hop: this is the baseline the predecessor in
+        // the chain left behind — see `openedFingerprint`'s own doc comment.
+        let expected = overwritingExternalChanges ? nil : openedFingerprint
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<(VaultBackupOutcome, FileFingerprint?), VaultError> in
             do {
                 let data = try codec.encode(vault, credentials: credentials, origin: origin)
-                return .success(try fileAccess.write(data, to: url))
+                // AFTER the encode and immediately before the write, not before the encode.
+                // Everything between the check and the rename is a window in which the other
+                // Mac's copy can land and be clobbered, and the encode is where the second of
+                // Argon2 goes — checking first would open that window a full second wide. The
+                // cost is a wasted derivation on the rare save that does conflict.
+                if ExternalChangeCheck.isConflict(expected: expected, current: fileAccess.fingerprint(of: url)) {
+                    throw VaultError.externallyModified
+                }
+                let backup = try fileAccess.write(data, to: url)
+                // Re-taken from disk rather than predicted from `data.count` and `Date()`: the
+                // next save compares against whatever the filesystem actually recorded, and a
+                // guess that is off by a nanosecond would make every second save a false alarm.
+                // Non-throwing, so a write that landed is never reported as a failure because the
+                // metadata read after it did not.
+                return .success((backup, fileAccess.fingerprint(of: url)))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -318,13 +372,17 @@ final class VaultStore {
         }.value
 
         switch result {
-        case .success(let backup):
+        case .success(let (backup, written)):
             // The save succeeded either way — `write` reports a failed backup as a value rather
             // than by throwing, precisely so a backup problem cannot cost the user their edits.
             // Both properties are assigned on every path so neither can be read as a stale claim
             // about the save that just happened.
             lastBackupURL = backup.url
             lastBackupError = backup.error
+            // The file is ours again. `nil` (metadata unreadable) is stored as `nil` on purpose:
+            // "unknown" must not be carried as the previous baseline, which the next save would
+            // then compare our own fresh write against and refuse.
+            openedFingerprint = written
             // Clear `isDirty` only if the snapshot this save wrote is still what's in memory. An
             // edit that landed while the KDF was running is genuinely NOT on disk; reporting the
             // vault as clean would be this save claiming credit for work it never wrote.
@@ -334,7 +392,45 @@ final class VaultStore {
             lastError = error
             // Deliberately leave `isDirty` untouched: a failed save must not let the caller believe
             // the in-memory edits are safely on disk.
+            //
+            // `openedFingerprint` is left alone for the same reason, and it matters most for
+            // `.externallyModified`: adopting the file we just refused to overwrite as the new
+            // baseline would make the user's next ⌘S sail straight through and clobber it in
+            // silence. The refusal has to keep refusing until somebody answers it.
         }
+    }
+
+    /// Dismisses an external-change refusal without touching the vault — the Cancel of
+    /// `RootView`'s prompt (issue #173). The edits stay dirty and unwritten, which is the honest
+    /// state: the user was told the file changed and chose to decide later.
+    ///
+    /// Guarded on the case rather than clearing `lastError` outright, so a different failure that
+    /// landed in the meantime (an unreachable volume, say) is not silently swallowed by a dialog
+    /// that was not about it.
+    func acknowledgeExternalChange() {
+        guard lastError == .externallyModified else { return }
+        lastError = nil
+    }
+
+    /// Throws away the in-memory vault and decodes the file again — the Reload of that same prompt.
+    ///
+    /// Routed through `open(url:credentials:)` rather than re-implementing the decode, because
+    /// `open` is the one place that establishes a consistent unlocked state: origin, credentials,
+    /// `isDirty`, and the fresh `openedFingerprint` that makes the reloaded vault saveable again.
+    /// Two consequences of that reuse are worth knowing rather than discovering:
+    ///
+    /// - The store passes through `.unlocking`, so the browser is replaced by the spinner for the
+    ///   length of a KDF and comes back with its view state (selected entry, search text, expanded
+    ///   folders) reset. Acceptable for an action whose whole meaning is "discard my copy".
+    /// - A decode that fails leaves the store `.locked` with the unsaved edits gone. There is no
+    ///   way around that — they were dropped the moment the user chose Reload — which is why that
+    ///   button, and not Overwrite, is the one marked destructive.
+    ///
+    /// Requires an unlocked vault: reloading a store that has no credentials in memory would only
+    /// bounce it to the unlock screen for no reason.
+    func reloadFromDisk() async {
+        guard case .unlocked = state, let url = currentURL, let credentials else { return }
+        await open(url: url, credentials: credentials)
     }
 
     /// Locks the vault: drops the decrypted `Vault` AND the retained `VaultCredentials` (not just
@@ -346,6 +442,10 @@ final class VaultStore {
     func lock() {
         credentials = nil
         decodedOrigin = nil
+        // Not a secret, but it describes a vault this store no longer holds. The next unlock takes
+        // its own, and a stale one surviving the lock would be compared against a file this
+        // process has not read since (issue #173).
+        openedFingerprint = nil
         isDirty = false
         if let url = currentURL {
             state = .locked(url)

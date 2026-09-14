@@ -437,6 +437,13 @@ extension VaultError {
             return "This database uses a feature pass-sumo doesn't support yet: \(feature)"
         case .io(let detail):
             return "Couldn't read the file: \(detail)"
+        case .externallyModified:
+            // Says what happened and what is still true, in that order: the user's edits are not
+            // lost, they are just not written. Neither "overwrite" nor "reload" is named here —
+            // this string is also what a status readout would show, and the choice belongs to the
+            // dialog that actually offers the buttons.
+            return "This database was changed on disk by another app or Mac. "
+                + "Your unsaved changes are still here, but nothing was written."
         }
     }
 
@@ -461,7 +468,8 @@ extension VaultError {
     /// `nil` for every error whose whole content is already a sentence a person can act on.
     var diagnosticDetail: String? {
         switch self {
-        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io:
+        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io,
+             .externallyModified:
             return nil
         case .corrupted(_, let diagnostic):
             return diagnostic

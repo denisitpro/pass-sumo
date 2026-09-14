@@ -537,6 +537,12 @@ enum VaultError: Error, Equatable {
     case corrupted(String, diagnostic: String?)
     case unsupportedFeature(String)
     case io(String)
+    /// The file on disk is not the one this process decoded — another client wrote it while we
+    /// held it open (issue #173). Its own case, and not an `.io` sentence, because it is the one
+    /// failure the user can answer three different ways (overwrite, reload, leave it alone) and
+    /// `RootView` has to recognise it to offer them. Nothing was written when this is reported,
+    /// and the in-memory edits stay dirty.
+    case externallyModified
 }
 
 /// Why `VaultStore.upsert` refused an entry (issue #148).
