@@ -141,6 +141,88 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
     }
 
+    // MARK: - Stale stored secret (issue #175, audit M5)
+
+    /// Touch ID succeeded, the keychain handed the password over, the database rejected it: the
+    /// master password was changed somewhere else and the stored copy is now permanently wrong.
+    /// Left alone it auto-prompts, passes, and fails on every launch forever.
+    func testAWrongStoredPasswordClearsTheEnrollment() {
+        XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: .wrongCredentials))
+    }
+
+    /// The narrowness is the point. Every other `VaultError` is about the FILE, not the secret —
+    /// an evicted iCloud placeholder is `.io` and happens in normal use — and discarding a working
+    /// enrollment over one would force a re-enrol, which WRITES a database ID into the user's
+    /// file. `nil` is a successful open and must obviously clear nothing.
+    func testAFileLevelFailureNeverClearsAWorkingEnrollment() {
+        let fileErrors: [VaultError] = [
+            .io("the file is an iCloud placeholder"),
+            .notAKDBXFile,
+            .unsupportedVersion("2.0"),
+            .unsupportedFeature("Twofish"),
+            .corrupted("The database header is damaged.", diagnostic: nil)
+        ]
+        for error in fileErrors {
+            XCTAssertFalse(
+                BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: error),
+                "\(error) says nothing about the stored password and must not discard it"
+            )
+        }
+        XCTAssertFalse(BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: nil))
+    }
+
+    /// The sentence has to survive a reader who is already confused about why Touch ID "worked"
+    /// and the vault still did not open: the stored password is gone, type the current one, and
+    /// Touch ID is still available to set up again.
+    func testTheStaleSecretMessageSaysWhatHappenedAndHowToRecover() {
+        let message = BiometricUnlockRecovery.messageAfterStoredSecretRejected()
+        XCTAssertTrue(message.lowercased().contains("master password"))
+        XCTAssertTrue(message.lowercased().contains("touch id"))
+        XCTAssertTrue(message.lowercased().contains("discarded"))
+        // Not the store's own line: that one hedges about key files (see `VaultError`'s
+        // `displayMessage`), which is noise on a path that knows exactly what went wrong.
+        XCTAssertNotEqual(message, VaultError.wrongCredentials.displayMessage)
+    }
+
+    /// The recovery is only useful if the user can SEE it. Both messages are set on this path —
+    /// the store's `lastError` is `.wrongCredentials` (true of the secret that was just thrown
+    /// away) and the biometric one explains the discard — and the original
+    /// `lastError ?? biometricFailure` precedence showed the wrong half.
+    func testTheStaleSecretMessageWinsOverTheStoresOwnLine() {
+        let shown = BiometricUnlockRecovery.visibleUnlockMessage(
+            storeMessage: VaultError.wrongCredentials.displayMessage,
+            biometricMessage: BiometricUnlockRecovery.messageAfterStoredSecretRejected()
+        )
+        XCTAssertEqual(shown, BiometricUnlockRecovery.messageAfterStoredSecretRejected())
+    }
+
+    /// With no biometric failure pending — every typed unlock — the store's message is still what
+    /// shows, and a screen with nothing wrong shows no red line at all.
+    func testTheStoreMessageStillShowsWhenNoBiometricFailureIsPending() {
+        XCTAssertEqual(
+            BiometricUnlockRecovery.visibleUnlockMessage(
+                storeMessage: VaultError.wrongCredentials.displayMessage,
+                biometricMessage: nil
+            ),
+            VaultError.wrongCredentials.displayMessage
+        )
+        XCTAssertNil(BiometricUnlockRecovery.visibleUnlockMessage(storeMessage: nil, biometricMessage: nil))
+    }
+
+    /// Clearing an enrollment must be safe to run twice — the invalidated-item path and the
+    /// stale-secret path both reach it, and a second pass hits a keychain item that is already
+    /// gone. `delete` treats `errSecItemNotFound` as success, so the second call is a no-op rather
+    /// than an error thrown out of the middle of a recovery.
+    func testClearingAnEnrollmentTwiceIsNotAnError() throws {
+        let store = FakeSecretStore()
+        let unlock = BiometricUnlock(store: store)
+        try unlock.enable(masterPassword: SecureBytes(string: "stale"), for: vaultA)
+
+        XCTAssertNoThrow(try unlock.disable(for: vaultA))
+        XCTAssertNoThrow(try unlock.disable(for: vaultA))
+        XCTAssertFalse(unlock.isEnabled(for: vaultA))
+    }
+
     /// Cancelling the system sheet is a request to type, not a failure. A red
     /// "Touch ID was cancelled." line reads as the opposite.
     func testCancellingTouchIDShowsNoVisibleError() {
