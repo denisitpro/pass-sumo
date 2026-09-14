@@ -543,6 +543,12 @@ enum VaultError: Error, Equatable {
     /// `RootView` has to recognise it to offer them. Nothing was written when this is reported,
     /// and the in-memory edits stay dirty.
     case externallyModified
+    /// The file is an iCloud Drive item macOS has not downloaded yet — the bytes are in the
+    /// cloud and only a placeholder is on disk (issue #177). Its own case, and not the `.io`
+    /// failure `Data(contentsOf:)` produces, because the user's next move is to wait rather than
+    /// to go looking for a damaged database. iCloud Drive is this app's sanctioned sync path, so
+    /// this is an ordinary state, not an exotic one.
+    case iCloudNotDownloaded
 }
 
 /// Why `VaultStore.upsert` refused an entry (issue #148).

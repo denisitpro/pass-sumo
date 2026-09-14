@@ -444,6 +444,12 @@ extension VaultError {
             // dialog that actually offers the buttons.
             return "This database was changed on disk by another app or Mac. "
                 + "Your unsaved changes are still here, but nothing was written."
+        case .iCloudNotDownloaded:
+            // Names iCloud, because the file looks perfectly present in Finder and the user has
+            // no other way to tell this apart from a broken database. Download has already been
+            // asked for by the time this is shown, so "try again" is advice that works.
+            return "This database is in iCloud and hasn't finished downloading. "
+                + "Wait a moment and try again."
         }
     }
 
@@ -469,7 +475,7 @@ extension VaultError {
     var diagnosticDetail: String? {
         switch self {
         case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io,
-             .externallyModified:
+             .externallyModified, .iCloudNotDownloaded:
             return nil
         case .corrupted(_, let diagnostic):
             return diagnostic
