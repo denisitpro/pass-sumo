@@ -36,6 +36,10 @@ enum KDBXLog {
     /// unsupported Argon2 version, etc.).
     static let kdf = Logger(label: "\(subsystem).kdf")
 
+    /// XML writer warnings: values the in-memory model can hold but the file
+    /// format cannot, and what was written in their place.
+    static let writer = Logger(label: "\(subsystem).writer")
+
     /// Open-pipeline timing breakdown (KDF / decrypt+decompress / parse).
     /// Emitted at `.debug` so it stays invisible under default backend
     /// filtering; a host debugging a slow unlock opts in by lowering its

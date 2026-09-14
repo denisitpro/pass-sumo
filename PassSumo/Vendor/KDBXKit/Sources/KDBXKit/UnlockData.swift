@@ -310,7 +310,12 @@ public struct UnlockData: Sendable {
             // producers also write base64 — try hex first, then base64
             // as a fallback.
             let stripped = text.filter { !$0.isWhitespace }
-            if stripped.count == 64,
+            // UTF-8 bytes, not graphemes: `decodeHexKeyFile` is handed
+            // `Data(stripped.utf8)` and needs 64 *bytes*. 64 non-ASCII
+            // characters — a text key file in any non-Latin script — count as
+            // 64 graphemes but many more bytes, and used to reach the callee's
+            // `precondition` and abort even a Release build.
+            if stripped.utf8.count == 64,
                let hex = decodeHexKeyFile(Data(stripped.utf8))
             {
                 decoded = hex
@@ -359,10 +364,15 @@ public struct UnlockData: Sendable {
         return out
     }
 
-    /// Decode a 64-byte ASCII hex string into 32 bytes. Returns nil if any
-    /// byte is not an ASCII hex digit.
+    /// Decode a 64-byte ASCII hex string into 32 bytes. Returns nil if the
+    /// input is not exactly 64 bytes, or if any byte is not an ASCII hex digit.
+    ///
+    /// A length mismatch is a `nil`, not a `precondition`: the only caller
+    /// measures a string that came out of a user-supplied key file, so a wrong
+    /// length is input, not a broken invariant. The length check also keeps the
+    /// `data[i + 1]` read below in bounds.
     private static func decodeHexKeyFile(_ data: Data) -> Data? {
-        precondition(data.count == 64)
+        guard data.count == 64 else { return nil }
         var out = Data(capacity: 32)
         var i = data.startIndex
         while i < data.endIndex {
