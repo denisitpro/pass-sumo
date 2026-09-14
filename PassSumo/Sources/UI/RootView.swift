@@ -231,9 +231,10 @@ struct RootView: View {
                 .accessibilityIdentifier("root.unlock")
 
         case .unlocking:
-            // Argon2 key derivation is deliberately ~1s of real work (see `VaultStore.open`'s
-            // doc comment) — long enough that a blank window here would read as frozen, so this
-            // state is its own visible case rather than folded into `.locked`.
+            // Argon2 key derivation is ~0.9 s of real work for a database we created, and can be
+            // far longer for one another client tuned (see `VaultStore.open`'s doc comment) —
+            // long enough that a blank window here would read as frozen, so this state is its own
+            // visible case rather than folded into `.locked`.
             ProgressView("Unlocking…")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textSecondary)

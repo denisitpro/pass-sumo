@@ -88,8 +88,10 @@ final class VaultStore {
     }
 
     /// Decrypts `url` and, on success, moves to `.unlocked`. Argon2 key derivation is deliberately
-    /// slow (tuned for brute-force resistance, on the order of ~1s) — running it on the main actor
-    /// would freeze the whole UI for that second (a visible beachball on every unlock), so the
+    /// slow — ~0.9 s measured on an Apple Silicon desktop for a database pass-sumo created
+    /// (`KDBXKitCodec.productionKDF` records the tuple and the measurement), and whatever cost its
+    /// own header declares for a file another client wrote. Running that on the main actor would
+    /// freeze the whole UI for the duration (a visible beachball on every unlock), so the
     /// read + decode happen inside a `Task.detached`, and only the *result* hops back onto the
     /// main actor to update `state`. Never throws: every failure becomes `lastError` and the store
     /// stays in `.locked`.
