@@ -126,13 +126,17 @@ final class AppEnvironment {
         self.idleStore = idleStore
         self.idleAutoLock = AutoLockController(
             idleTimeout: settings.autoLockTimeout,
-            onLock: { [weak idleStore] in idleStore?.lock() }
+            // No `SessionLockPolicy` behind this one, unlike a real tab's: nothing is ever
+            // unlocked in the idle store, so there are no edits to save and no pasteboard secret
+            // that could have come from it.
+            onLock: { [weak idleStore] _ in idleStore?.lock() }
         )
         self.idleAutomaticBiometricUnlock = AutomaticBiometricUnlockPolicy()
         let sessionList = VaultSessionList(
             codec: codec,
             fileAccess: fileAccess,
-            autoLockTimeout: settings.autoLockTimeout
+            autoLockTimeout: settings.autoLockTimeout,
+            clipboard: clipboard
         )
         self.sessionList = sessionList
         // Built here from `sessionList` rather than taken as a parameter: a router pointed at a
@@ -418,7 +422,23 @@ extension VaultError {
     var displayMessage: String {
         switch self {
         case .wrongCredentials:
-            return "Wrong password. Try again."
+            // **Not "Wrong password".** KDBX stores no flag saying a key file is required: the
+            // composite key is `SHA-256(SHA-256(password) || normalized(keyFile))` (see KDBXKit's
+            // `UnlockData.makeKeyData`), so a database that needs a key file and one opened with a
+            // typo fail at the same HMAC check with the same error. Asserting "wrong password" is
+            // therefore naming a cause this error does not carry — the rule `KDBXErrorMapping`'s
+            // doc comment states — and it is the one that sends a key-file user hunting for a
+            // password that was never wrong (issue #175, audit M6). KeePassXC hedges identically
+            // ("Wrong key or database file is corrupt") for the same reason.
+            //
+            // The cost is a second clause in front of someone who merely mistyped. Accepted
+            // deliberately: a key-file user given the wrong diagnosis has no way out at all, while
+            // a typist reads one extra clause and retypes. The sentence says "can't use yet"
+            // rather than offering a picker because the app genuinely cannot consume a key file —
+            // every `VaultCredentials(keyFile:)` call site passes `nil`, and the picker is
+            // deferred by #175 to its own feature.
+            return "That didn't unlock the database. The password may be wrong — or the database "
+                + "also needs a key file, which PassSumo can't use yet."
         case .notAKDBXFile:
             return "This isn't a KDBX database file."
         case .unsupportedVersion(let version):
@@ -433,6 +453,19 @@ extension VaultError {
             return "This database uses a feature pass-sumo doesn't support yet: \(feature)"
         case .io(let detail):
             return "Couldn't read the file: \(detail)"
+        case .externallyModified:
+            // Says what happened and what is still true, in that order: the user's edits are not
+            // lost, they are just not written. Neither "overwrite" nor "reload" is named here —
+            // this string is also what a status readout would show, and the choice belongs to the
+            // dialog that actually offers the buttons.
+            return "This database was changed on disk by another app or Mac. "
+                + "Your unsaved changes are still here, but nothing was written."
+        case .iCloudNotDownloaded:
+            // Names iCloud, because the file looks perfectly present in Finder and the user has
+            // no other way to tell this apart from a broken database. Download has already been
+            // asked for by the time this is shown, so "try again" is advice that works.
+            return "This database is in iCloud and hasn't finished downloading. "
+                + "Wait a moment and try again."
         }
     }
 
@@ -457,7 +490,8 @@ extension VaultError {
     /// `nil` for every error whose whole content is already a sentence a person can act on.
     var diagnosticDetail: String? {
         switch self {
-        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io:
+        case .wrongCredentials, .notAKDBXFile, .unsupportedVersion, .unsupportedFeature, .io,
+             .externallyModified, .iCloudNotDownloaded:
             return nil
         case .corrupted(_, let diagnostic):
             return diagnostic

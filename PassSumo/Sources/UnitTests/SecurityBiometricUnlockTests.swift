@@ -141,6 +141,88 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(after: .invalidatedByBiometryChange))
     }
 
+    // MARK: - Stale stored secret (issue #175, audit M5)
+
+    /// Touch ID succeeded, the keychain handed the password over, the database rejected it: the
+    /// master password was changed somewhere else and the stored copy is now permanently wrong.
+    /// Left alone it auto-prompts, passes, and fails on every launch forever.
+    func testAWrongStoredPasswordClearsTheEnrollment() {
+        XCTAssertTrue(BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: .wrongCredentials))
+    }
+
+    /// The narrowness is the point. Every other `VaultError` is about the FILE, not the secret —
+    /// an evicted iCloud placeholder is `.io` and happens in normal use — and discarding a working
+    /// enrollment over one would force a re-enrol, which WRITES a database ID into the user's
+    /// file. `nil` is a successful open and must obviously clear nothing.
+    func testAFileLevelFailureNeverClearsAWorkingEnrollment() {
+        let fileErrors: [VaultError] = [
+            .io("the file is an iCloud placeholder"),
+            .notAKDBXFile,
+            .unsupportedVersion("2.0"),
+            .unsupportedFeature("Twofish"),
+            .corrupted("The database header is damaged.", diagnostic: nil)
+        ]
+        for error in fileErrors {
+            XCTAssertFalse(
+                BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: error),
+                "\(error) says nothing about the stored password and must not discard it"
+            )
+        }
+        XCTAssertFalse(BiometricUnlockRecovery.shouldClearEnrollment(afterOpenFailedWith: nil))
+    }
+
+    /// The sentence has to survive a reader who is already confused about why Touch ID "worked"
+    /// and the vault still did not open: the stored password is gone, type the current one, and
+    /// Touch ID is still available to set up again.
+    func testTheStaleSecretMessageSaysWhatHappenedAndHowToRecover() {
+        let message = BiometricUnlockRecovery.messageAfterStoredSecretRejected()
+        XCTAssertTrue(message.lowercased().contains("master password"))
+        XCTAssertTrue(message.lowercased().contains("touch id"))
+        XCTAssertTrue(message.lowercased().contains("discarded"))
+        // Not the store's own line: that one hedges about key files (see `VaultError`'s
+        // `displayMessage`), which is noise on a path that knows exactly what went wrong.
+        XCTAssertNotEqual(message, VaultError.wrongCredentials.displayMessage)
+    }
+
+    /// The recovery is only useful if the user can SEE it. Both messages are set on this path —
+    /// the store's `lastError` is `.wrongCredentials` (true of the secret that was just thrown
+    /// away) and the biometric one explains the discard — and the original
+    /// `lastError ?? biometricFailure` precedence showed the wrong half.
+    func testTheStaleSecretMessageWinsOverTheStoresOwnLine() {
+        let shown = BiometricUnlockRecovery.visibleUnlockMessage(
+            storeMessage: VaultError.wrongCredentials.displayMessage,
+            biometricMessage: BiometricUnlockRecovery.messageAfterStoredSecretRejected()
+        )
+        XCTAssertEqual(shown, BiometricUnlockRecovery.messageAfterStoredSecretRejected())
+    }
+
+    /// With no biometric failure pending — every typed unlock — the store's message is still what
+    /// shows, and a screen with nothing wrong shows no red line at all.
+    func testTheStoreMessageStillShowsWhenNoBiometricFailureIsPending() {
+        XCTAssertEqual(
+            BiometricUnlockRecovery.visibleUnlockMessage(
+                storeMessage: VaultError.wrongCredentials.displayMessage,
+                biometricMessage: nil
+            ),
+            VaultError.wrongCredentials.displayMessage
+        )
+        XCTAssertNil(BiometricUnlockRecovery.visibleUnlockMessage(storeMessage: nil, biometricMessage: nil))
+    }
+
+    /// Clearing an enrollment must be safe to run twice — the invalidated-item path and the
+    /// stale-secret path both reach it, and a second pass hits a keychain item that is already
+    /// gone. `delete` treats `errSecItemNotFound` as success, so the second call is a no-op rather
+    /// than an error thrown out of the middle of a recovery.
+    func testClearingAnEnrollmentTwiceIsNotAnError() throws {
+        let store = FakeSecretStore()
+        let unlock = BiometricUnlock(store: store)
+        try unlock.enable(masterPassword: SecureBytes(string: "stale"), for: vaultA)
+
+        XCTAssertNoThrow(try unlock.disable(for: vaultA))
+        XCTAssertNoThrow(try unlock.disable(for: vaultA))
+        XCTAssertFalse(unlock.isEnabled(for: vaultA))
+    }
+
     /// Cancelling the system sheet is a request to type, not a failure. A red
     /// "Touch ID was cancelled." line reads as the opposite.
     func testCancellingTouchIDShowsNoVisibleError() {
@@ -296,6 +378,88 @@ final class SecurityBiometricUnlockTests: XCTestCase {
         XCTAssertNil(query[kSecReturnData as String], "asking for data is what prompts")
         XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
         XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitOne as String)
+    }
+
+    // MARK: - Data protection keychain (issue #179, audit M10)
+
+    /// `SecItem.h`: on macOS `kSecAttrAccessible` — which is what `makeAccessControl`'s
+    /// `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` sets — applies to items in the data
+    /// protection keychain, i.e. when this key or `synchronizable` is set. The type set neither
+    /// and documented ThisDeviceOnly anyway. Asserted on the query rather than on a stored item,
+    /// because storing one always prompts for Touch ID (see the skip below).
+    func testEveryQueryNamesTheDataProtectionKeychain() {
+        let store = KeychainSecretStore()
+        XCTAssertEqual(store.baseQuery(for: vaultA)[kSecUseDataProtectionKeychain as String] as? Bool, true)
+        XCTAssertEqual(
+            store.existenceQuery(for: vaultA)[kSecUseDataProtectionKeychain as String] as? Bool,
+            true,
+            "the existence probe must look in the keychain the item is actually written to"
+        )
+        // Still never synchronisable: the data protection keychain is the store, iCloud Keychain
+        // is a separate opt-in, and ThisDeviceOnly is incompatible with it either way.
+        XCTAssertEqual(store.baseQuery(for: vaultA)[kSecAttrSynchronizable as String] as? Bool, false)
+    }
+
+    /// The fallback has to address the SAME item in the other store — one key's difference, no
+    /// more. A fallback that also differed in service or account would silently look for an item
+    /// nobody ever wrote, and the "Touch ID stopped working after an update" this exists to
+    /// prevent would happen anyway, with a fallback in place to prove it could not have.
+    func testTheLegacyQueryIsTheSameItemMinusTheDataProtectionKey() {
+        let store = KeychainSecretStore()
+        let base = store.baseQuery(for: vaultA)
+        let legacy = store.legacyQuery(for: vaultA)
+
+        XCTAssertNil(
+            legacy[kSecUseDataProtectionKeychain as String],
+            "absent, not false — this must be the query the pre-#179 build actually sent"
+        )
+        XCTAssertEqual(
+            Set(base.keys).subtracting(legacy.keys),
+            [kSecUseDataProtectionKeychain as String]
+        )
+        XCTAssertTrue(Set(legacy.keys).subtracting(base.keys).isEmpty)
+        XCTAssertEqual(legacy[kSecClass as String] as? String, kSecClassGenericPassword as String)
+        XCTAssertEqual(legacy[kSecAttrService as String] as? String, KeychainSecretStore.service)
+        XCTAssertEqual(legacy[kSecAttrAccount as String] as? String, vaultA.rawValue)
+        XCTAssertEqual(legacy[kSecAttrSynchronizable as String] as? Bool, false)
+    }
+
+    /// #138's guarantee must hold on BOTH probes. The legacy one is built from `existenceQuery`
+    /// rather than assembled again precisely so it cannot lapse here, and this is what pins that:
+    /// an `LAContext` alongside `kSecUseAuthenticationUIFail` is `errSecParam`, which reported "not
+    /// enrolled" while the item was still there.
+    func testTheLegacyExistenceProbeAlsoRefusesUIAndAttachesNoLAContext() {
+        let query = KeychainSecretStore().legacyExistenceQuery(for: vaultA)
+        XCTAssertNil(query[kSecUseDataProtectionKeychain as String])
+        XCTAssertEqual(
+            query[kSecUseAuthenticationUI as String] as? String,
+            kSecUseAuthenticationUIFail as String
+        )
+        XCTAssertNil(query[kSecUseAuthenticationContext as String])
+        XCTAssertNil(query[kSecReturnData as String], "asking for data is what prompts")
+        XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
+        XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitOne as String)
+    }
+
+    /// **The half of #179 that this Mac cannot prove.** A skip, not an omission, so it shows up in
+    /// the test report rather than as a gap someone has to remember.
+    ///
+    /// What needs a Touch ID Mac and `make test-signed`: that an item written with
+    /// `kSecUseDataProtectionKeychain` can be read back at all (the data protection keychain
+    /// requires the `keychain-access-groups` entitlement, which only a signed build carries — an
+    /// unsigned one gets `errSecMissingEntitlement`); that an enrollment made by a build from
+    /// before this change is still found through `legacyQuery` and is migrated across on the first
+    /// unlock; and that `delete` clears both stores, so turning Touch ID off in Settings really
+    /// removes the secret. None of it is reachable here: reading a `.biometryCurrentSet` item
+    /// always presents a system sheet nothing unattended can satisfy — see
+    /// `testRealKeychainIsNotExercisedByThisSuite`. The query shapes above are what CAN be checked
+    /// without hardware, and they are checked.
+    func testDataProtectionKeychainRoundTripNeedsTouchIDHardware() throws {
+        throw XCTSkip(
+            "Writing, reading back, migrating and deleting the real keychain item needs a Mac with "
+            + "Touch ID and a signed build (`make test-signed`). This machine has no sensor, and a "
+            + "`.biometryCurrentSet` read always prompts. See this test's comment for the exact claims."
+        )
     }
 
     /// The real store is verified by hand on a machine with Touch ID. This method is a skip

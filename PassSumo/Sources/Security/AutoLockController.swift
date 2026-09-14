@@ -106,7 +106,14 @@ final class AutoLockController {
 
     private let now: @Sendable () -> Date
     private let eventSource: any LockEventSource
-    private let onLock: () -> Void
+    /// What actually performs the lock, carrying the reason that caused it.
+    ///
+    /// **The reason is a parameter rather than something the callee reads back off
+    /// `lastLockReason` (issue #172).** The policy layer treats the two kinds of lock in opposite
+    /// ways — an automatic one has to save a dirty vault because there is nobody to ask, a
+    /// user-requested one arrives only after the user has already answered Save / Discard /
+    /// Cancel — so the distinction has to be impossible to lose at the call site.
+    private let onLock: (LockReason) -> Void
 
     private var lastActivity: Date
     private var timer: Timer?
@@ -131,7 +138,7 @@ final class AutoLockController {
         idleTimeout: TimeInterval = 300,
         eventSource: any LockEventSource = WorkspaceLockEventSource(),
         now: @escaping @Sendable () -> Date = Date.init,
-        onLock: @escaping () -> Void
+        onLock: @escaping (LockReason) -> Void
     ) {
         self.idleTimeout = idleTimeout
         self.eventSource = eventSource
@@ -181,7 +188,26 @@ final class AutoLockController {
         secondsUntilIdleLock = nil
         timer?.invalidate()
         timer = nil
-        onLock()
+        onLock(reason)
+    }
+
+    /// The `onLock` handler refused the lock this controller has just announced, and the vault is
+    /// still decrypted (issue #172: an automatic lock whose auto-save failed must not drop edits
+    /// that exist nowhere else).
+    ///
+    /// Needed because `lock(reason:)` flips `isLocked` and kills the timer *before* calling
+    /// `onLock` — it has to, or the three system events that describe one departure would each
+    /// start their own teardown. When the handler then declines, this controller's bookkeeping is
+    /// the only thing in the app claiming a lock that did not happen, and nothing else would ever
+    /// correct it: the store's state never changed, so the `VaultStore.state` mirror that normally
+    /// re-arms the clock (`VaultSession.handleStoreStateChange`) is never called.
+    ///
+    /// Delegating to `vaultDidUnlock()` rather than repeating its body is deliberate — "the vault
+    /// is unlocked, start counting" is exactly the state this has to restore, and that method is
+    /// already idempotent about the event subscription.
+    func lockDeclined() {
+        guard isLocked else { return }
+        vaultDidUnlock()
     }
 
     /// The user asked for it — "Lock Database" (⌘L) and the browser toolbar's Lock button.
@@ -198,13 +224,18 @@ final class AutoLockController {
     /// state (nothing today makes them disagree — `PassSumoApp` mirrors every `VaultStore.state`
     /// change into `vaultDidUnlock()`/`stop()` — but "the vault did not lock when I asked it to"
     /// is a security failure, not a cosmetic one, and it would be invisible). So a lock the user
-    /// asked for always reaches `onLock`, which is `VaultStore.lock()` and is itself idempotent:
-    /// it drops the credentials and the decrypted vault, and dropping them twice is not a second
-    /// teardown.
+    /// asked for always reaches `onLock`, which drops the credentials and the decrypted vault and
+    /// is itself idempotent: dropping them twice is not a second teardown.
+    ///
+    /// **`.userRequested` reaching `onLock` means the unsaved-changes question is already
+    /// settled** (issue #172). Every caller of this method is a UI affordance the user pressed —
+    /// ⌘L, the toolbar button, or the Discard/Save button of the prompt those two raise when the
+    /// vault is dirty — so the handler saves nothing here and drops the vault as asked. An
+    /// automatic lock is the one that has nobody to ask, and it arrives through `lock(reason:)`.
     func lockRequestedByUser() {
         if isLocked {
             lastLockReason = .userRequested
-            onLock()
+            onLock(.userRequested)
         } else {
             lock(reason: .userRequested)
         }

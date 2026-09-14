@@ -16,7 +16,7 @@ import XCTest
 ///   a file, and `keepassxc-cli` (which *reads* KDBX 4 perfectly well) is asked whether it opens
 ///   and what is in it.
 final class KDBXCodecTests: XCTestCase {
-    private let codec = KDBXKitCodec()
+    private let codec = TestKDF.codec()
 
     // Published test passwords. These files ship in the repo and contain no real secrets.
     private static let kpxcPassword = "correct horse battery staple"
@@ -28,11 +28,18 @@ final class KDBXCodecTests: XCTestCase {
 
     /// Fixtures reach the bundle through a folder reference (see `project.yml`), so the directory
     /// structure under `Fixtures/` is preserved and addressed with `subdirectory:`.
-    private func fixture(_ name: String, subdirectory: String = "Fixtures") throws -> Data {
+    ///
+    /// `pathExtension` is a parameter only because `kdbx3-keyfile` is two files — the database and
+    /// the `.key` that opens it; every other caller wants the default.
+    private func fixture(
+        _ name: String,
+        pathExtension: String = "kdbx",
+        subdirectory: String = "Fixtures"
+    ) throws -> Data {
         let bundle = Bundle(for: Self.self)
         let url = try XCTUnwrap(
-            bundle.url(forResource: name, withExtension: "kdbx", subdirectory: subdirectory),
-            "fixture \(subdirectory)/\(name).kdbx is not in the test bundle — check the "
+            bundle.url(forResource: name, withExtension: pathExtension, subdirectory: subdirectory),
+            "fixture \(subdirectory)/\(name).\(pathExtension) is not in the test bundle — check the "
                 + "PassSumoUnitTests `sources` folder reference in project.yml"
         )
         return try Data(contentsOf: url)
@@ -128,6 +135,79 @@ final class KDBXCodecTests: XCTestCase {
             let rendered = String(describing: vaultError)
             XCTAssertFalse(rendered.contains(wrongPassword))
             XCTAssertFalse(rendered.contains(Self.kpxcPassword))
+        }
+    }
+
+    // MARK: - Key files (issue #175, audit M6)
+
+    /// The evidence that the app CANNOT tell "needs a key file" from "wrong password", and the
+    /// reason the message stopped claiming the latter.
+    ///
+    /// `kdbx3-keyfile.kdbx` is `kdbx3-aeskdf-aes256.kdbx` with a key file added — same content,
+    /// same password. Opened with that correct password and no key file it fails, and it fails as
+    /// `.wrongCredentials`: KDBX carries no "a key file is required" flag, so the composite key
+    /// simply does not match and the HMAC check fails exactly as it would for a typo. There is no
+    /// other error for the codec to return and nothing in the file for it to look at — which is
+    /// why #175 is fixed at the wording and not by inventing a distinction.
+    ///
+    /// The second half is the actual regression guard: whatever the sentence becomes, it must not
+    /// tell this user their password is wrong, because it is not.
+    func testKeyFileDatabaseWithTheRightPasswordAloneIsNotCalledAWrongPassword() throws {
+        let data = try fixture("kdbx3-keyfile")
+
+        XCTAssertThrowsError(
+            try codec.decode(fileData: data, credentials: credentials(Self.kpxcPassword))
+        ) { error in
+            XCTAssertEqual(
+                error as? VaultError,
+                .wrongCredentials,
+                "a key-file database is indistinguishable from a wrong password at the codec"
+            )
+            let shown = VaultError.wrongCredentials.displayMessage
+            XCTAssertTrue(
+                shown.lowercased().contains("key file"),
+                "the only honest message names the key-file possibility; got: \(shown)"
+            )
+            XCTAssertFalse(
+                shown.lowercased().contains("wrong password"),
+                "the password used here is correct — asserting it is wrong is the #175 defect"
+            )
+        }
+    }
+
+    /// The other half of the same fixture: password + key file opens it. This is what makes the
+    /// test above a statement about the missing key file rather than about a broken fixture, and
+    /// it pins `VaultCredentials.keyFile` as working plumbing — the follow-up key-file picker has
+    /// only UI left to build, not a codec path.
+    ///
+    /// `kdbx3-keyfile.key` is 128 raw bytes from `keepassxc-cli`, so it takes KDBXKit's
+    /// "arbitrary binary file → SHA-256 of the contents" branch (`UnlockData.normalizeKeyFile`),
+    /// not the 32-byte, 64-hex or XML branches.
+    func testKeyFileDatabaseOpensWhenTheKeyFileIsSupplied() throws {
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-keyfile"),
+            credentials: credentials(
+                Self.kpxcPassword,
+                keyFile: try fixture("kdbx3-keyfile", pathExtension: "key")
+            )
+        )
+
+        // Same content as `kdbx3-aeskdf-aes256.kdbx` — the fixture was built by copying it and
+        // adding a key file (Fixtures/README.md), so the groups are the proof it really decrypted
+        // rather than merely failing differently.
+        XCTAssertEqual(Set(decoded.vault.groups.map(\.name)), ["Email", "Work", "Finance"])
+    }
+
+    /// The key file is not decoration: the right password with the WRONG key-file bytes must fail.
+    /// Without this, a codec that ignored `keyFile` entirely would still pass the test above.
+    func testKeyFileDatabaseRejectsTheWrongKeyFile() throws {
+        XCTAssertThrowsError(
+            try codec.decode(
+                fileData: try fixture("kdbx3-keyfile"),
+                credentials: credentials(Self.kpxcPassword, keyFile: Data(repeating: 0x5A, count: 128))
+            )
+        ) {
+            XCTAssertEqual($0 as? VaultError, .wrongCredentials)
         }
     }
 
@@ -586,6 +666,29 @@ final class KDBXCodecTests: XCTestCase {
         }
     }
 
+    /// Issue #178: the point of setting the KDF ourselves is that it stops tracking a library
+    /// default that is free to change. A test that only checked "some Argon2id" would not notice
+    /// that — so this pins the tuple, and fails loudly if anyone re-tunes it without deciding to.
+    ///
+    /// Asserted on `productionKDF()` rather than by creating a database, because the assertion is
+    /// about the parameters, and running them would cost the ~0.9 s they are chosen to cost.
+    func testNewDatabasesGetTheKDFParametersThisAppChoseRatherThanTheLibraryDefault() throws {
+        guard case let .argon2id(params, additional) = try KDBXKitCodec.productionKDF() else {
+            return XCTFail("new databases must use Argon2id")
+        }
+        XCTAssertEqual(params.version, .v1_3)
+        XCTAssertEqual(params.iterations, 120)
+        XCTAssertEqual(params.memory, 64 * 1024 * 1024, "64 MiB is the iOS AutoFill-safe ceiling — see productionKDF")
+        XCTAssertEqual(params.parallelism, 4)
+        XCTAssertEqual(params.salt.count, 32)
+        XCTAssertTrue(additional.isEmpty)
+
+        // A salt reused across databases would defeat the only thing a salt is for.
+        let second = try KDBXKitCodec.productionKDF()
+        guard case let .argon2id(secondParams, _) = second else { return XCTFail("expected Argon2id") }
+        XCTAssertNotEqual(params.salt, secondParams.salt, "each database must get its own salt")
+    }
+
     // MARK: - Stable database identity
 
     /// The Keychain/Touch ID layer needs an identifier that survives saves, moves and iCloud
@@ -636,7 +739,14 @@ final class KDBXCodecTests: XCTestCase {
 
         let password = "interop-test-password"
         let creds = credentials(password)
-        var created = try codec.makeEmpty(name: "Interop Vault", credentials: creds)
+        // The ONE test that must pay the real KDF. Everything else in this class uses
+        // `TestKDF.codec()` so `make test` is not dominated by key derivation — but the whole claim
+        // here is that a file we wrote opens in an independent implementation, and a file written
+        // with the cheap test KDF proves that about the test KDF, not about what users get. Argon2id
+        // at t=120 is exactly the parameter another client has to agree to perform (issue #178), so
+        // this one builds the production codec and spends the ~0.9 s.
+        let productionCodec = KDBXKitCodec()
+        var created = try productionCodec.makeEmpty(name: "Interop Vault", credentials: creds)
 
         let group = VaultGroup(id: UUID(), parentID: nil, name: "Work")
         created.vault.groups = [group]
@@ -654,7 +764,7 @@ final class KDBXCodecTests: XCTestCase {
             ),
         ]
 
-        let saved = try codec.encode(created.vault, credentials: creds, origin: created)
+        let saved = try productionCodec.encode(created.vault, credentials: creds, origin: created)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("passsumo-interop-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

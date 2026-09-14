@@ -449,7 +449,15 @@ enum KDBXEntryStrings {
         // wrote from being rewritten as something else just because the value was edited. New
         // fields still default to protected, but now in the edit sheet's draft rather than here,
         // so the default is overridable instead of forced.
-        let reserved = KDBXStandardField.allKeys.union(KDBXTOTPConvention.reservedKeys)
+        // `VaultEntry.reservedCustomFieldNames` names the same eight keys `KDBXStandardField
+        // .allKeys` and `KDBXTOTPConvention.reservedKeys` do — reusing that Model-side constant
+        // here (issue #174) leaves exactly one place enumerating them, instead of this union
+        // needing to be kept in step with a copy the model layer holds independently. By the time
+        // save validation landed (`EntryEditView.save()`), `entry.customFields` provably cannot
+        // contain one of these anyway (see that constant's doc comment) — this `where` clause is
+        // now a belt-and-suspenders guard, not the only thing standing between a reserved name and
+        // a silently dropped field the way it was before this issue.
+        let reserved = VaultEntry.reservedCustomFieldNames
         for (key, field) in entry.customFields where !reserved.contains(key) {
             result.setValue(field.value, forKey: key, protection: .chosen(field.isProtected))
         }

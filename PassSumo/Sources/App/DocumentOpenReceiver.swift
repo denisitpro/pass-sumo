@@ -26,6 +26,7 @@ import AppKit
 final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     private var handler: ((URL) -> Void)?
     private var pending: [URL] = []
+    private var terminateHandler: (() -> NSApplication.TerminateReply)?
 
     /// **Issue #16's ⌘T caveat.** macOS turns on automatic window tabbing for every resizable
     /// window by default, which is what installs a system-supplied Window ▸ "New Tab" item bound
@@ -34,6 +35,19 @@ final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
     /// NSWindow tabbing, so this stays off.
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
+    /// **⌘Q used to skip the unsaved-changes question that closing a tab already asks** (issue
+    /// #172, audit finding H2). This delegate method is the only place AppKit offers to answer it:
+    /// SwiftUI has no scene-level "about to terminate" hook, and `willTerminate` is too late —
+    /// by then the decision is made and the process is going.
+    ///
+    /// No buffering, unlike `onOpen` above: a terminate request that somehow arrives before the
+    /// window's `.task` has wired the handler has nothing to prompt with anyway, and `nil` here
+    /// means `.terminateNow`, which is exactly what the app did before this existed. The one thing
+    /// this must never do is invent a `.terminateLater` nobody will answer.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminateHandler?() ?? .terminateNow
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -51,6 +65,13 @@ final class DocumentOpenReceiver: NSObject, NSApplicationDelegate {
         let buffered = pending
         pending = []
         buffered.forEach(handler)
+    }
+
+    /// Registers the one consumer for ⌘Q, from the same `.task` that wires `onOpen`. Split from
+    /// it because the two answer different questions and a caller may legitimately want one
+    /// without the other (a test wires only this).
+    func onShouldTerminate(_ handler: @escaping () -> NSApplication.TerminateReply) {
+        terminateHandler = handler
     }
 
     private func deliver(_ url: URL) {

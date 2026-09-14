@@ -83,9 +83,12 @@ committed. `make help` lists every target; the ones that matter day to day:
   helper executable that saves a database through the real `VaultStore`/codec/file-access stack,
   `SIGKILL`s it at controlled points (during the KDF, during the backup copy, inside the atomic
   write), and reopens whatever is on disk. Also covers KDBX 4.1 header conformance, inner
-  random-stream key regeneration, and hostile input. Deliberately NOT part of `make test` — not
-  mainly for its ~28 s, but because it kills subprocesses and depends on `keepassxc-cli` and
-  `sandbox-exec`. Run it on any change to the save path, the codec, or `SandboxedVaultFileAccess`.
+  random-stream key regeneration, and hostile input. Deliberately NOT part of `make test` — for its
+  ~3 min (28 s of work; the rest is the Argon2id t=120 KDF of issue #178, several derivations
+  per test and ~8x slower again in the Debug build the suite uses — the tests that can use a cheap
+  KDF already do), and because it kills subprocesses and depends on `keepassxc-cli` and
+  `sandbox-exec`. Run it on any change to the save
+  path, the codec, or `SandboxedVaultFileAccess`.
   What it does and does not prove — in particular the unsigned/no-sandbox caveat — is documented in
   `PassSumo/Sources/DurabilityTests/README.md`, which also records the two real defects it found.
 - `make durability-signed` — the same suite with signing, so the real-App-Sandbox-container test

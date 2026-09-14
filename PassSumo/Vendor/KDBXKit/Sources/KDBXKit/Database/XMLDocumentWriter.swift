@@ -54,7 +54,24 @@ struct XMLDocumentWriter {
     }
 
     private func encode(_ value: Date) -> String {
-        value.secondsSinceDotNetEpoch
+        // Clamp rather than throw. A date outside the KDBX-representable range
+        // can only come from a file that already carried one — the reader is
+        // deliberately permissive about what it accepts (issue #30) — and
+        // refusing to write it would leave a vault that opens fine but can
+        // never be saved again, which is the harm pass-sumo issue #176 is
+        // about, not a fix for it. The substitute is `0001-01-01` or
+        // `9999-12-31`: a value every KDBX reader can parse, and obviously a
+        // sentinel rather than a plausible date. Not silent — see the log.
+        let seconds: Int64
+        if let representable = value.secondsSinceDotNetEpoch {
+            seconds = representable
+        } else {
+            seconds = value.clampedSecondsSinceDotNetEpoch
+            KDBXLog.writer.notice(
+                "Timestamp \(value) is outside the range a KDBX date can hold; wrote \(seconds)s since 0001-01-01 instead"
+            )
+        }
+        return seconds
             .toDataLittleEndian()
             .base64EncodedString()
     }

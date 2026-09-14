@@ -1,5 +1,6 @@
 import Foundation
 import KDBXKit
+import Security
 
 // MARK: - Round-trip state
 
@@ -24,8 +25,8 @@ struct KDBXOrigin: VaultCodecState {
 /// tool may still be reading, which is why the repo requires a backup before the first save to an
 /// existing database.
 ///
-/// Stateless and therefore trivially `Sendable`; `VaultStore` runs `decode`/`encode` off the main
-/// actor because Argon2 takes roughly a second by design.
+/// Stateless apart from its KDF policy, and therefore trivially `Sendable`; `VaultStore` runs
+/// `decode`/`encode` off the main actor because Argon2 takes roughly a second by design.
 struct KDBXKitCodec: VaultCodec {
     /// `Meta/CustomData` key under which the vault's stable identity lives. See
     /// `databaseID(of:)`.
@@ -35,7 +36,23 @@ struct KDBXKitCodec: VaultCodec {
     /// request) can tell which app produced the file.
     private static let generator = "PassSumo"
 
-    init() {}
+    /// How a database **we** create gets its key-derivation parameters.
+    ///
+    /// A closure rather than a stored `KDFParameters` because the salt has to be fresh per
+    /// database: a stored value would hand the same salt to every vault this codec ever creates,
+    /// which is the one thing a salt exists to prevent.
+    ///
+    /// Injected, with the production tuple as the default, for the reason the rest of this app
+    /// injects its collaborators: the cost that makes ``productionKDF`` worth having is exactly
+    /// what makes it unaffordable in a test suite. A unit suite that creates a few dozen databases
+    /// would spend a minute proving nothing about the KDF — and a dev loop that slow is what
+    /// eventually tempts someone to weaken the real tuple for the wrong reason. Defaulting to
+    /// production means nothing can get the cheap one without asking for it by name.
+    let newDatabaseKDF: @Sendable () throws -> KDFParameters
+
+    init(newDatabaseKDF: @escaping @Sendable () throws -> KDFParameters = KDBXKitCodec.productionKDF) {
+        self.newDatabaseKDF = newDatabaseKDF
+    }
 
     // MARK: Decode
 
@@ -103,8 +120,12 @@ struct KDBXKitCodec: VaultCodec {
         // but it means a save with no origin CANNOT preserve anything — it has nothing to preserve
         // from. `VaultStore` always passes what `decode` returned; anything else is a caller bug,
         // and the empty base keeps that bug from also being a crash.
-        let base = (origin?.opaque as? KDBXOrigin)?.content
-            ?? KDBXContent.makeEmpty(databaseName: vault.name, generator: Self.generator)
+        let base = try (origin?.opaque as? KDBXOrigin)?.content
+            ?? KDBXContent.makeEmpty(
+                databaseName: vault.name,
+                kdf: newDatabaseKDF(),
+                generator: Self.generator
+            )
 
         let content = KDBXContentMerge.apply(vault, to: base)
         return try Self.serialize(content, credentials: credentials)
@@ -118,7 +139,11 @@ struct KDBXKitCodec: VaultCodec {
         // they think their vault already exists.
         _ = try Self.unlockData(for: credentials)
 
-        let content = KDBXContent.makeEmpty(databaseName: name, generator: Self.generator)
+        let content = KDBXContent.makeEmpty(
+            databaseName: name,
+            kdf: try newDatabaseKDF(),
+            generator: Self.generator
+        )
         return DecodedVault(
             vault: KDBXVaultProjection.vault(from: content),
             opaque: KDBXOrigin(content: content)
@@ -126,6 +151,90 @@ struct KDBXKitCodec: VaultCodec {
     }
 
     // MARK: Shared
+
+    /// The key-derivation parameters for a database **we** create: Argon2id v1.3,
+    /// t = 120 passes, m = 64 MiB, p = 4 lanes, with a fresh 32-byte random salt per database.
+    ///
+    /// Written out here rather than left to `KDFParameters.argon2idDefault()`. The library's
+    /// default is a portable, hardware-neutral value it is explicitly free to re-tune, so
+    /// inheriting it means the strength of every vault we create is a number nobody in this repo
+    /// chose and nobody would notice changing. That is not hypothetical: the default is RFC 9106
+    /// §4's memory-constrained option (t=3, m=64 MiB, p=4), which measured **20 ms** here, while
+    /// three comments in this app described the KDF as "~1 s" of deliberate work — off by a factor
+    /// of forty, and unnoticed until the 2026-09-13 audit (issue #178).
+    ///
+    /// **Measured, not assumed:** median **856 ms** (min 841, max 912 over 9 runs, machine
+    /// otherwise idle) on an Apple Silicon Mac mini — a Release build of a standalone executable
+    /// calling `UnlockData.computeUnlockKey`, which is the same derivation a real unlock and a real
+    /// save perform. The same binary measured the old default at 20 ms on the same run. Under load
+    /// the same tuple medians ~935 ms with a much wider spread, and KDF time is hardware-dependent
+    /// besides, so read this as the order of magnitude the tuple was chosen for rather than a
+    /// wall-clock guarantee.
+    ///
+    /// **The 856 ms is Release only.** Argon2 is C, and an unoptimised build of it measures ~8.7 s
+    /// for this tuple — ~10x the shipped cost. Both test suites build Debug, and it shows: holding
+    /// everything else fixed, `make durability` runs in 28 s at `iterations: 3` and 438 s at
+    /// `iterations: 120`, a delta that divides out to ~7 s per derivation. A "the KDF feels slow"
+    /// report from a Debug build is therefore not a measurement of what users get. `TestKDF` keeps
+    /// the unit suite off this path, and the durability tests that are not about key derivation
+    /// create their fixtures with a cheap KDF — which is what matters, because a save pays the KDF
+    /// recorded in the file's header, not one chosen by whoever is saving. That takes the suite from
+    /// 438 s to 186 s; the rest is the tests that must keep the real derivation.
+    ///
+    /// `t = 120` sits well inside `KDFParameterLimits.default` (max 1000 iterations, max 1 GiB
+    /// memory), which is what our own reader checks a file's declared parameters against before
+    /// running the KDF — a production tuple our own limit check would reject would be a
+    /// self-inflicted unopenable file.
+    ///
+    /// **Why the second is bought with `t` and not with `m`.** More memory is the better lever in
+    /// the abstract — it is what defeats the wide parallelism a GPU or ASIC guessing rig is built
+    /// on, where extra passes only cost an attacker time it already has. It is not the better lever
+    /// *here*, because these parameters live in the file and every client that opens the vault has
+    /// to allocate them too. On iOS the AutoFill Credential Provider extension runs under a hard
+    /// memory cap far below the host app's, so a header declaring a large Argon2 memory cost is
+    /// what makes a database unlock in KeePassium's or Strongbox's main app and fail inside the
+    /// same vendor's AutoFill extension — a file *we* wrote refusing to open on a client the repo
+    /// promises compatibility with (CLAUDE.md: "databases must open in KeePassium/Strongbox and
+    /// vice versa"), and unfixable for the user without re-keying the database. 64 MiB is the
+    /// interoperable ceiling, which is also why KeePassXC's own default stays there and buys its
+    /// ~1 s with iterations. So `m` is pinned, not tuned — and **never lowered**: dropping it is a
+    /// straight cut in brute-force cost per guess, not a performance tweak.
+    ///
+    /// Applies to **new** databases only. A file we open keeps whatever KDF it arrived with; a save
+    /// is not the moment to re-tune somebody else's database for them.
+    static func productionKDF() throws -> KDFParameters {
+        .argon2id(
+            .init(
+                version: .v1_3,
+                salt: try newKDFSalt(),
+                iterations: 120,
+                memory: 64 * 1024 * 1024,
+                parallelism: 4
+            ),
+            additional: [:]
+        )
+    }
+
+    /// A fresh 32-byte Argon2 salt.
+    ///
+    /// `SecRandomCopyBytes` directly rather than `CSPRNG` (`Sources/Security`) — not a second
+    /// opinion about randomness, a target boundary: `Sources/KDBX` is compiled into the durability
+    /// helper too, which builds `Sources/Model` + `Sources/KDBX` and no more (see `project.yml`).
+    /// `Sources/DurabilityHelper` reaches for the same call for the same reason. The rationale for
+    /// preferring `SecRandomCopyBytes` over the stdlib generator is written out once, in `CSPRNG`.
+    private static func newKDFSalt() throws -> Data {
+        var salt = Data(count: 32)
+        let status: Int32 = salt.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, raw.count, base)
+        }
+        // No fallback to a weaker source: a predictable salt lets one precomputed Argon2 run cover
+        // every vault created on this machine, which is the whole point of having a salt.
+        guard status == errSecSuccess else {
+            throw VaultError.io("Could not generate a key-derivation salt (SecRandomCopyBytes \(status))")
+        }
+        return salt
+    }
 
     private static func unlockData(for credentials: VaultCredentials) throws -> UnlockData {
         guard let keyFile = credentials.keyFile else {

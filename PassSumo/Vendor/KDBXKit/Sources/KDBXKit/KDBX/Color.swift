@@ -28,8 +28,14 @@ public extension KDBX {
             if stringValue.isEmpty {
                 self = .default
             } else {
+                // No `assertionFailure` here: `<Color>` is file content, and
+                // file content is never a programmer error. Aborting a Debug
+                // build on a malformed element contradicts the library's own
+                // "typed error, never a trap on input" contract, and fuzzing or
+                // a test opening a hostile fixture would take the whole process
+                // down with it. `nil` is the malformed answer; the caller
+                // already treats it as "no color".
                 guard stringValue.hasPrefix("#"), stringValue.count == 7 else {
-                    assertionFailure("Invalid color input: \(stringValue)")
                     return nil
                 }
                 let hexString = String(stringValue.dropFirst())

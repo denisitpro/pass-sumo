@@ -239,6 +239,32 @@ extension VaultEntry {
     static let defaultIconID: UInt32 = 0
 }
 
+extension VaultEntry {
+    /// Names a `customFields` key must not use (issue #174, audit finding M4).
+    ///
+    /// Eight literals, not an import of the KDBX types that also know them: this file's own header
+    /// comment forbids codec-specific concepts crossing into `Sources/Model`, so this is the
+    /// canonical set and `KDBXEntryStrings.apply` (`Sources/KDBX/KDBXContentMerge.swift`) reads
+    /// it from here rather than building its own union of `KDBXStandardField.allKeys` and
+    /// `KDBXTOTPConvention.reservedKeys` — one place enumerates these eight strings, and the
+    /// dependency runs the allowed direction (codec depends on model, never the reverse).
+    ///
+    /// Five are the standard fields this struct already models by dedicated property (`title`,
+    /// `username`, `password`, `url`, `notes` — spelled the way KDBX's `Entry/String` keys spell
+    /// them: `UserName` and `URL`, not `Username` or `Url`); three are the TOTP storage
+    /// conventions `otpAuthURL` occupies (`otp`, or the older split `TOTP Seed` / `TOTP Settings`
+    /// pair). `KDBXVaultProjection.vaultEntry` excludes exactly this set when it builds
+    /// `customFields` from a decoded file, so a `VaultEntry` reaching the edit form can never
+    /// already contain one of these keys — a save-time refusal on a name from this set can only
+    /// ever be catching something the user just typed, never something another client wrote.
+    /// Before this issue, `KDBXContentMerge`'s own copy of the same set was used only to SKIP
+    /// writing such a field back out, silently — the value the user typed just vanished on save.
+    static let reservedCustomFieldNames: Set<String> = [
+        "Title", "UserName", "Password", "URL", "Notes",
+        "otp", "TOTP Seed", "TOTP Settings",
+    ]
+}
+
 // MARK: - Attachments
 
 /// Content address of one attachment payload: the SHA-256 of its bytes.
@@ -537,6 +563,18 @@ enum VaultError: Error, Equatable {
     case corrupted(String, diagnostic: String?)
     case unsupportedFeature(String)
     case io(String)
+    /// The file on disk is not the one this process decoded — another client wrote it while we
+    /// held it open (issue #173). Its own case, and not an `.io` sentence, because it is the one
+    /// failure the user can answer three different ways (overwrite, reload, leave it alone) and
+    /// `RootView` has to recognise it to offer them. Nothing was written when this is reported,
+    /// and the in-memory edits stay dirty.
+    case externallyModified
+    /// The file is an iCloud Drive item macOS has not downloaded yet — the bytes are in the
+    /// cloud and only a placeholder is on disk (issue #177). Its own case, and not the `.io`
+    /// failure `Data(contentsOf:)` produces, because the user's next move is to wait rather than
+    /// to go looking for a damaged database. iCloud Drive is this app's sanctioned sync path, so
+    /// this is an ordinary state, not an exotic one.
+    case iCloudNotDownloaded
 }
 
 /// Why `VaultStore.upsert` refused an entry (issue #148).

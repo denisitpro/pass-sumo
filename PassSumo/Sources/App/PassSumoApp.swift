@@ -84,7 +84,10 @@ struct PassSumoApp: App {
                 // adaptor builds it before this scene's `environment` exists. The receiver buffers
                 // a URL that arrives before this runs (a cold launch by double-click does exactly
                 // that), so nothing is lost in the gap — see its doc comment.
-                .task { openReceiver.onOpen { requestOpen($0) } }
+                .task {
+                    openReceiver.onOpen { requestOpen($0) }
+                    openReceiver.onShouldTerminate { requestTerminate() }
+                }
         }
         .windowToolbarStyle(.unified)
         .commands {
@@ -96,6 +99,27 @@ struct PassSumoApp: App {
                 // Same pin as the main window (issue #57) — a Settings window left on the system
                 // appearance would be the one dark surface in an otherwise light app.
                 .preferredColorScheme(contentColorScheme)
+        }
+    }
+
+    /// Answers AppKit's "may I quit" with the tab list's answer (issue #172).
+    ///
+    /// `.terminateLater` parks the request: the process keeps running until something calls
+    /// `NSApp.reply(toApplicationShouldTerminate:)`, and `RootView`'s quit prompt is what does,
+    /// exactly once, on every one of its branches. Nothing here touches the prompt or the reply —
+    /// the decision this makes is `VaultSessionList.requestQuit()`'s, which is assertable with no
+    /// `NSApplication` in the picture at all.
+    @MainActor
+    private func requestTerminate() -> NSApplication.TerminateReply {
+        switch environment.sessionList.requestQuit() {
+        case .quitNow:
+            return .terminateNow
+        case .confirmUnsavedChanges:
+            return .terminateLater
+        case .alreadyAsking:
+            // A second ⌘Q while the first is still on screen. Cancelling THIS request leaves the
+            // first one parked with its prompt; letting it through would strand one of the two.
+            return .terminateCancel
         }
     }
 

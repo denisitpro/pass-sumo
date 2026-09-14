@@ -21,6 +21,12 @@ import XCTest
 /// So: these tests establish what the kernel does when only the file is writable. They do NOT
 /// establish that a powerbox-issued extension for a user-picked file has exactly the same scope —
 /// see README.md, "What this suite does not prove".
+/// Fixtures here are created with `cheapKDF: true`. Nothing in this file is about key derivation —
+/// these tests are about `rename(2)` semantics, Seatbelt file-only grants, and an unwritable
+/// directory — and a save pays the KDF recorded in the file's header, so a production tuple here
+/// would buy ~50 s of Argon2 per run and no coverage. The mid-KDF `SIGKILL` lives in
+/// `TornWriteTests.testKillDuringKeyDerivationLeavesTheDatabaseByteIdentical`, which keeps the real
+/// derivation for exactly that reason.
 final class AtomicWriteTests: DurabilityTestCase {
     private static let sandboxExec = "/usr/bin/sandbox-exec"
 
@@ -34,7 +40,7 @@ final class AtomicWriteTests: DurabilityTestCase {
     /// filesystem is atomic, which is why a reader can never see a half-written vault.
     func testAtomicWriteReplacesTheFileByRenameRatherThanInPlace() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1")
+        let database = try createDatabase(in: directory, title: "v1", cheapKDF: true)
 
         let outcome = try runHelper(database: database, mode: "probe-atomic-write")
         XCTAssertTrue(
@@ -162,7 +168,7 @@ final class AtomicWriteTests: DurabilityTestCase {
     /// preserved the version it could not replace".
     func testSaveFailsCleanlyWhenTheDirectoryIsUnwritable() throws {
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1")
+        let database = try createDatabase(in: directory, title: "v1", cheapKDF: true)
         let before = try Data(contentsOf: database)
 
         let fileAccess = try makeFileAccess()
@@ -290,7 +296,7 @@ final class AtomicWriteTests: DurabilityTestCase {
             throw XCTSkip("\(Self.sandboxExec) is not available on this system")
         }
         let directory = try makeScratchDirectory()
-        let database = try createDatabase(in: directory, title: "v1")
+        let database = try createDatabase(in: directory, title: "v1", cheapKDF: true)
 
         // Seatbelt matches on RESOLVED paths: the test host's temporary directory is reached
         // through /var -> /private/var, and a profile written with the unresolved path silently

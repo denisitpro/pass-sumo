@@ -20,13 +20,18 @@ struct VaultBrowserView: View {
     let store: VaultStore
     let clipboard: ClipboardService
     let generator: PasswordGenerator
-    /// Read for `noteActivity()`, and told when the toolbar's Lock button is pressed — this view
-    /// still never locks anything itself, it reports the request and the controller performs the
-    /// lock through its own `onLock` (see `lockRequestedByUser()`). `StatusBar` stopped reading its
-    /// countdown when that readout was removed (issue #101); this is a constructor parameter rather
-    /// than an environment read for the same reason as before — an environment lookup that silently
-    /// resolves to nothing would let the activity-reporting and the Lock button go quietly inert.
+    /// Read for `noteActivity()`, and handed to the entry-edit sheet so typing in it counts as
+    /// activity too (issue #172). This view still never locks anything itself. `StatusBar` stopped
+    /// reading its countdown when that readout was removed (issue #101); this is a constructor
+    /// parameter rather than an environment read because an environment lookup that silently
+    /// resolves to nothing would let the activity-reporting go quietly inert.
     let autoLock: AutoLockController
+    /// What the toolbar's Lock button reports the user's request to. A closure, and not
+    /// `autoLock.lockRequestedByUser()` inline, because the request now has to pass the
+    /// unsaved-changes prompt first, and only `RootView` can see the tab list that raises it
+    /// (issue #172). Required rather than defaulted for the same reason `autoLock` is a parameter:
+    /// a Lock button wired to nothing is a button that silently does not lock.
+    let onLockRequested: () -> Void
     /// Read for the generator's saved recipe (`settings.generatorRecipe`, issue #106) — a
     /// constructor parameter for the same reason as `autoLock` above rather than fished out of
     /// `appEnvironment`, so a missing/misconfigured environment can't silently fall the generator
@@ -47,7 +52,12 @@ struct VaultBrowserView: View {
     /// selected", which ⌘-clicking the selected row produces. It starts at `.allEntries` so the
     /// screen opens on the unfiltered list with that row visibly picked; see `GroupSelection` for
     /// why "All Entries" is a case of its own rather than the `nil` it used to be (issue #85).
-    @State private var selectedGroup: GroupSelection? = .allEntries
+    ///
+    /// Internal rather than private so a unit test can point the sidebar's current selection at a
+    /// recycle-bin group without rendering, then call `makeBlankEntry()` and check where the new
+    /// entry lands — same seam `notingActivity`/`generatePasswordNow` are internal for in
+    /// `EntryEditView` (issue #174).
+    @State var selectedGroup: GroupSelection? = .allEntries
     @State private var selectedEntryID: UUID?
     /// **Issue #34: nothing in this file may clear this as a side effect of opening an entry.**
     /// `openForEdit(_:)` only ever assigns `editingEntry`; selecting a row only ever assigns
@@ -107,13 +117,15 @@ struct VaultBrowserView: View {
         clipboard: ClipboardService,
         generator: PasswordGenerator,
         autoLock: AutoLockController,
-        settings: AppSettings
+        settings: AppSettings,
+        onLockRequested: @escaping () -> Void
     ) {
         self.store = store
         self.clipboard = clipboard
         self.generator = generator
         self.autoLock = autoLock
         self.settings = settings
+        self.onLockRequested = onLockRequested
     }
 
     /// Factored out of `body`'s `.sheet(isPresented: $showingGenerator)` closure purely so the
@@ -393,11 +405,10 @@ struct VaultBrowserView: View {
             // binds ⌘L (Strongbox, issue #16).
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    // The controller, not `store.lock()` — see `AutoLockController.lockRequestedByUser()`.
-                    // This is the one thing this view does through `autoLock` besides reading its
-                    // countdown, and it is not "this view locks the vault": it reports that the
-                    // user asked, and the controller's `onLock` is still what performs it.
-                    autoLock.lockRequestedByUser()
+                    // Still not "this view locks the vault": it reports that the user asked, and
+                    // the owner decides — which since issue #172 means asking about unsaved edits
+                    // before the controller is told anything.
+                    onLockRequested()
                 } label: {
                     Label("Lock", systemImage: "lock")
                 }
@@ -413,7 +424,7 @@ struct VaultBrowserView: View {
                 .accessibilityIdentifier("browser.newEntry")
 
                 Button {
-                    handle(.create(parentID: newGroupParentID))
+                    handle(.create(parentID: newItemParentID))
                 } label: {
                     Label("New Group", systemImage: "folder.badge.plus")
                 }
@@ -517,6 +528,9 @@ struct VaultBrowserView: View {
                     // whatever was most recently saved in Settings, not a value snapshotted once
                     // when `VaultBrowserView` itself was constructed (issue #106).
                     generatorRecipe: settings.generatorRecipe,
+                    // Issue #172: composing an entry is not idleness. The sheet reports its own
+                    // typing, because this view cannot see a keystroke inside it.
+                    autoLock: autoLock,
                     onSave: { saved in selectedEntryID = saved.id },
                     onDismiss: { editingEntry = nil },
                     onRecipeChanged: { settings.generatorRecipe = $0 }
@@ -624,6 +638,13 @@ struct VaultBrowserView: View {
                     databasePath: store.currentURL?.path ?? "",
                     isDirty: store.isDirty,
                     secondsUntilClipboardClear: clipboard.secondsRemaining > 0 ? clipboard.secondsRemaining : nil,
+                    // Issue #203: before this, a failed ⌘S — and the failed-auto-save path issue
+                    // #172 added — told the user nothing at all beyond the dirty indicator that was
+                    // already there. `store.lastError` is read live, so this covers both the same
+                    // way: an explicit save and `SessionLockPolicy.saveThenLock()`'s automatic one
+                    // both funnel through `VaultStore.save()`, which is the only place `lastError` is
+                    // set or cleared.
+                    saveError: store.lastError?.displayMessage,
                     // A failed pre-save backup no longer blocks the save (issue #26), so this is the
                     // one place the user learns it happened. Persistent rather than a transient alert:
                     // the condition persists — an unwritable container fails every save — and an alert
@@ -707,9 +728,9 @@ struct VaultBrowserView: View {
         case .newEntry:
             startNewEntry()
         case .newGroup:
-            // Same call the toolbar's "New Group" button makes (see `newGroupParentID`'s own doc
+            // Same call the toolbar's "New Group" button makes (see `newItemParentID`'s own doc
             // comment for where the folder lands).
-            handle(.create(parentID: newGroupParentID))
+            handle(.create(parentID: newItemParentID))
         case .editEntry(let id):
             openForEdit(id)
         case .deleteEntry(let id):
@@ -850,11 +871,18 @@ struct VaultBrowserView: View {
         newGroupRequest = nil
     }
 
-    /// Where a new folder created from the toolbar goes: under whatever the sidebar is pointed at —
-    /// the same "it appears where you are already looking" rule `makeBlankEntry()` follows — except
-    /// inside the recycle bin, where a brand-new folder would be born deleted. That falls back to
-    /// the top level.
-    private var newGroupParentID: UUID? {
+    /// Where a new folder OR entry created from the toolbar/menu goes: under whatever the sidebar
+    /// is pointed at — the "it appears where you are already looking" rule — except inside the
+    /// recycle bin (the bin group itself or any group nested under it), where a brand-new item
+    /// would be born already deleted. That falls back to the top level.
+    ///
+    /// Shared by `handle(.create)`'s two call sites and by `makeBlankEntry()` (issue #174 — the
+    /// entry path used to skip this check entirely and hand `groupSelection.containingGroupID`
+    /// straight to the new entry, so opening the bin and hitting "New Entry" filed a live entry
+    /// as already-deleted with no warning). `VaultStore.addGroup` carries the same refusal one
+    /// layer down for any other caller, so a new group can never land in the bin even if a future
+    /// call site forgets to read this property first.
+    private var newItemParentID: UUID? {
         guard let id = groupSelection.containingGroupID,
               !vault.recycleBinGroupIDs.contains(id)
         else { return nil }
@@ -896,9 +924,11 @@ struct VaultBrowserView: View {
 
     /// A brand-new entry starts inside whatever group is currently selected — the natural
     /// "New Entry" expectation is that it lands where you're already looking, not always at the
-    /// vault's top level regardless of context. `id`/`created`/`modified` are placeholders:
-    /// `VaultStore.upsert` treats this as an insert (no existing entry with that `id`) and stamps
-    /// `modified` itself.
+    /// vault's top level regardless of context — UNLESS that group is the recycle bin or a
+    /// descendant of it, in which case it falls back to the top level via `newItemParentID`
+    /// (issue #174: a live entry must never be born already deleted). `id`/`created`/`modified`
+    /// are placeholders: `VaultStore.upsert` treats this as an insert (no existing entry with that
+    /// `id`) and stamps `modified` itself.
     ///
     /// The password is pre-filled from the saved generator recipe (issue #147). Editing an
     /// existing entry never comes through here — `openForEdit` copies the stored entry as-is —
@@ -914,7 +944,7 @@ struct VaultBrowserView: View {
         let password = (try? generator.generate(settings.generatorRecipe)) ?? ""
         return VaultEntry(
             id: UUID(),
-            groupID: groupSelection.containingGroupID,
+            groupID: newItemParentID,
             title: "",
             username: appEnvironment?.settings.defaultUsername ?? "",
             password: password,
@@ -945,7 +975,10 @@ struct VaultBrowserView: View {
         store: store,
         clipboard: ClipboardService(),
         generator: PasswordGenerator(),
-        autoLock: AutoLockController(onLock: { [weak store] in store?.lock() }),
-        settings: AppSettings()
+        autoLock: AutoLockController(onLock: { [weak store] _ in store?.lock() }),
+        settings: AppSettings(),
+        // No tab list in a preview, and nothing in one is ever dirty: lock straight through the
+        // controller, the way every caller did before issue #172.
+        onLockRequested: { [weak store] in store?.lock() }
     )
 }

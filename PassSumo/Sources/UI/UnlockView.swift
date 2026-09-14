@@ -17,6 +17,53 @@ enum BiometricUnlockRecovery {
         error == .invalidatedByBiometryChange
     }
 
+    /// The *other* way a stored secret becomes permanently useless: Touch ID succeeded, the
+    /// keychain handed back a password, and the database refused it. That is a master password
+    /// changed in another client (KeePassXC, Strongbox, another Mac) — the file moved on and the
+    /// keychain item did not. Nothing about this repairs itself, so leaving the item in place
+    /// means every launch auto-prompts, passes Touch ID, then reports a failed unlock — forever
+    /// (issue #175, audit M5).
+    ///
+    /// **Only `.wrongCredentials`.** Every other `VaultError` is a statement about the FILE, not
+    /// about the secret: `.io` is an unreadable path (a volume that went away, a permissions
+    /// failure), `.iCloudNotDownloaded` is a file still in the cloud, and
+    /// `.corrupted`/`.notAKDBXFile`/`.unsupportedVersion`/`.unsupportedFeature`
+    /// are the bytes. Discarding the enrollment on any of those would destroy a perfectly good
+    /// stored password because a file was momentarily unreachable — and re-enrolling is not free,
+    /// it WRITES a database ID into the user's file (see `enrollBiometrics`). `nil` — the open
+    /// succeeded — must obviously clear nothing.
+    static func shouldClearEnrollment(afterOpenFailedWith error: VaultError?) -> Bool {
+        error == .wrongCredentials
+    }
+
+    /// What to say once the stale secret has been thrown away. It carries three facts: the stored
+    /// password is gone (so "just try Touch ID again" is not a suggestion), what to do instead,
+    /// and that Touch ID can be set up again — without the last one this reads as Touch ID having
+    /// broken permanently.
+    ///
+    /// Deliberately NOT `VaultError.wrongCredentials.displayMessage`: that sentence hedges about a
+    /// key file (see its comment in `AppEnvironment`), which is noise here. This path knows
+    /// exactly what happened — the password we had stored is no longer the database's password.
+    static func messageAfterStoredSecretRejected() -> String {
+        "The saved master password no longer opens this database, so it was discarded. "
+            + "Enter the current master password, and tick “Remember with Touch ID” to save it again."
+    }
+
+    /// Which single red line the unlock screen shows when both a store error and a biometric
+    /// failure are pending.
+    ///
+    /// The biometric message wins. The one case where both are set is the recovery above: the
+    /// store's `lastError` is `.wrongCredentials` — true, but it describes the secret that has
+    /// just been *discarded* — while the biometric message is the half that says the enrollment is
+    /// gone and what to do now. A `lastError ?? biometricFailure` precedence hides exactly that
+    /// half, which would make the recovery invisible to the only person who needs it.
+    ///
+    /// Elsewhere the precedence is unobservable: `submit()` and `unlockWithBiometrics()` each
+    /// clear `biometricFailure` before anything can set `lastError`, so at most one is non-nil.
+    static func visibleUnlockMessage(storeMessage: String?, biometricMessage: String?) -> String? {
+        biometricMessage ?? storeMessage
+    }
+
     /// Cancelling is not a failure — the user is asking to type the master password instead — so
     /// `.userCancelled` produces no red line. Every other case keeps the sentence
     /// `BiometricUnlockError.userMessage` already owns.
@@ -257,7 +304,10 @@ struct UnlockView: View {
             // (which un-mounts it entirely).
             .onSubmit { Task { await submit() } }
 
-            if let message = environment.store.lastError?.displayMessage ?? biometricFailure {
+            if let message = BiometricUnlockRecovery.visibleUnlockMessage(
+                storeMessage: environment.store.lastError?.displayMessage,
+                biometricMessage: biometricFailure
+            ) {
                 Text(message)
                     .font(Typography.body)
                     .foregroundStyle(Palette.danger)
@@ -452,6 +502,19 @@ struct UnlockView: View {
             let secret = try environment.biometrics.unlock(resolved, reason: "Unlock \(url.lastPathComponent)")
             if let revealed = secret.revealedString() {
                 await environment.store.open(url: url, credentials: VaultCredentials(password: revealed, keyFile: nil))
+                // Touch ID said yes and the database said no: the stored password is stale (the
+                // master password was changed elsewhere), and nothing about that recovers on its
+                // own — see `shouldClearEnrollment(afterOpenFailedWith:)`. `store.open` clears
+                // `lastError` on entry and leaves it `nil` on success, so this reads the result of
+                // THIS open and cannot inherit a `.wrongCredentials` the user's own earlier typing
+                // left behind. Nothing else on this screen reaches here: the typed-password path
+                // is `submit()`, which never calls this function.
+                if BiometricUnlockRecovery.shouldClearEnrollment(
+                    afterOpenFailedWith: environment.store.lastError
+                ) {
+                    clearEnrollment(for: resolved)
+                    biometricFailure = BiometricUnlockRecovery.messageAfterStoredSecretRejected()
+                }
             } else {
                 biometricFailure = "The stored password isn't valid text. Enter it manually instead."
             }
@@ -465,8 +528,7 @@ struct UnlockView: View {
             // keep `isEnabled` (hence `canOfferBiometrics`/`canOfferEnrollment`) reporting "already
             // enrolled" forever.
             if BiometricUnlockRecovery.shouldClearEnrollment(after: error) {
-                try? environment.biometrics.disable(for: resolved)
-                environment.forgetBiometricsEnrollment(for: url)
+                clearEnrollment(for: resolved)
             }
         } catch {
             biometricFailure = error.localizedDescription
@@ -476,6 +538,24 @@ struct UnlockView: View {
         // rather than a dead screen.
         if case .unlocked = environment.store.state { return }
         passwordFieldFocused = true
+    }
+
+    /// Throws away an enrollment that can never work again — the two ways that happens are an
+    /// invalidated `.biometryCurrentSet` item and a stored password the database now rejects.
+    ///
+    /// Three steps, in this order, and none of them may throw its way out of a recovery: `disable`
+    /// is already `try?` (a keychain that refuses the delete must not leave the user stuck on an
+    /// error about the *cleanup* of an error), `forgetBiometricsEnrollment` cannot throw, and
+    /// `isEnrolled` is the `@State` mirror everything on this screen reads. Without that last
+    /// line the Touch ID button stays on screen offering an item that is gone, and
+    /// `canOfferEnrollment` keeps hiding the "Remember with Touch ID" checkbox — so the user is
+    /// told to re-enrol with no way to do it until the screen is rebuilt. Idempotent: deleting a
+    /// keychain item that is already absent is `errSecItemNotFound`, which `delete` treats as
+    /// success, and both of the other two are assignments.
+    private func clearEnrollment(for identifier: VaultKeyIdentifier) {
+        try? environment.biometrics.disable(for: identifier)
+        environment.forgetBiometricsEnrollment(for: url)
+        isEnrolled = false
     }
 }
 

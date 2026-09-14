@@ -814,6 +814,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -839,6 +840,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -862,6 +864,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {}
         )
@@ -884,6 +887,7 @@ final class BrowserLogicTests: XCTestCase {
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
             generatorRecipe: recipe,
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
             onSave: { _ in },
             onDismiss: {},
             onRecipeChanged: { persisted = $0 }
@@ -915,8 +919,9 @@ final class BrowserLogicTests: XCTestCase {
             // controller is an unused constructor dependency here, and registering for real
             // `NSWorkspace` notifications is exactly the side effect `SecurityAutoLockTests`'s own
             // doc comment warns a test must not risk.
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         let sheet = browser.makeGeneratorSheet()
@@ -967,8 +972,9 @@ final class BrowserLogicTests: XCTestCase {
             store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         let entry = browser.makeBlankEntry()
@@ -993,10 +999,48 @@ final class BrowserLogicTests: XCTestCase {
             store: VaultStore(codec: InMemoryVaultCodec(), fileAccess: InMemoryVaultFileAccess()),
             clipboard: ClipboardService(pasteboard: FakePasteboard()),
             generator: PasswordGenerator(),
-            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: {}),
-            settings: settings
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
         )
 
         XCTAssertEqual(browser.makeBlankEntry().password, "")
+    }
+
+    /// Issue #174 (audit M2): a brand-new entry started from inside the recycle bin — or a folder
+    /// nested inside it — must not be born already deleted. `makeBlankEntry()` used to hand
+    /// `groupSelection.containingGroupID` straight to the new entry with no check at all; it now
+    /// reads `newItemParentID`, the same bin-aware fallback the toolbar's "New Group" already used.
+    func testMakeBlankEntryFallsBackToTopLevelFromInsideTheRecycleBin() async throws {
+        var vault = Vault(
+            name: "Test",
+            groups: [VaultGroup(id: UUID(), parentID: nil, name: "Old Logins")],
+            entries: []
+        )
+        let nestedID = vault.groups[0].id
+        XCTAssertTrue(vault.moveToRecycleBin(groupID: nestedID), "fixture precondition: bin created")
+
+        let codec = InMemoryVaultCodec()
+        let fileAccess = InMemoryVaultFileAccess()
+        let credentials = VaultCredentials(password: "browser-logic-tests", keyFile: nil)
+        let url = URL(fileURLWithPath: "/browser-logic-tests/vault.kdbx")
+        _ = try fileAccess.write(try codec.encode(vault, credentials: credentials, origin: nil), to: url)
+        let store = VaultStore(codec: codec, fileAccess: fileAccess)
+        await store.open(url: url, credentials: credentials)
+
+        let (settings, cleanup) = makeScratchSettings()
+        defer { cleanup() }
+        let browser = VaultBrowserView(
+            store: store,
+            clipboard: ClipboardService(pasteboard: FakePasteboard()),
+            generator: PasswordGenerator(),
+            autoLock: AutoLockController(eventSource: FakeLockEventSource(), onLock: { _ in }),
+            settings: settings,
+            onLockRequested: {}
+        )
+        browser.selectedGroup = .group(nestedID)
+
+        let entry = browser.makeBlankEntry()
+        XCTAssertNil(entry.groupID, "a new entry opened from inside the bin must fall back to the top level")
     }
 }

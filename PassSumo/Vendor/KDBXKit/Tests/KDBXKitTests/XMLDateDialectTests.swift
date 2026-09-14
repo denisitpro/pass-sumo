@@ -77,7 +77,10 @@ struct XMLDateDialectTests {
     /// The same instant in the 4.x on-disk form (base64 little-endian
     /// Int64 seconds since 0001-01-01).
     private static let referenceAsDotNetTicksBase64: String =
-        Self.reference.secondsSinceDotNetEpoch.toDataLittleEndian().base64EncodedString()
+        // Force-unwrapped deliberately: 2020 is inside the representable range
+        // by many millennia, so a `nil` here would mean the range check itself
+        // is broken — which is exactly what the test should fail on.
+        Self.reference.secondsSinceDotNetEpoch!.toDataLittleEndian().base64EncodedString()
 
     // MARK: - ISO-8601 dialect
 

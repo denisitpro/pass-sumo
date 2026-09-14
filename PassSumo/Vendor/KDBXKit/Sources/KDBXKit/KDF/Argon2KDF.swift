@@ -17,6 +17,11 @@ enum Argon2KDF {
     /// instead.
     enum Error: Swift.Error, Sendable, Equatable {
         case argonFailure(code: Int32, variant: String)
+        /// A cost parameter read from the file does not fit the `UInt32` the C
+        /// API takes. Distinct from ``argonFailure`` on purpose: the C library
+        /// never ran, so quoting one of its error codes here would name a
+        /// verdict nothing reached.
+        case parameterOutOfRange(parameter: String, value: UInt64, variant: String)
     }
 
     /// Argon2id KDF. Returns `SecureBytes` so the derived key is held in
@@ -47,11 +52,25 @@ enum Argon2KDF {
             hashPtr.deallocate()
         }
 
+        // `params` is file-derived and `iterations` / `memory` are `UInt64`, so
+        // a plain `UInt32(...)` is a trap waiting on a crafted header. Today
+        // `KDFParameterLimits` caps both well inside `UInt32` before we get
+        // here — but those limits are `public var`s a host is invited to raise
+        // for its own device, so the safety is the caller's policy, not ours.
+        guard let iterations = UInt32(exactly: params.iterations) else {
+            throw .parameterOutOfRange(parameter: "iterations", value: params.iterations, variant: variant)
+        }
+        // argon2 expects memory cost in kibibytes.
+        let memoryKiB = params.memory / 1024
+        guard let memoryCost = UInt32(exactly: memoryKiB) else {
+            throw .parameterOutOfRange(parameter: "memory", value: params.memory, variant: variant)
+        }
+
         let result = password.withUnsafeBytes { passwordPtr in
             params.salt.withUnsafeBytes { saltPtr in
                 hash(
-                    UInt32(params.iterations),
-                    UInt32(params.memory / 1024), // argon2 expects memory cost in kibibytes
+                    iterations,
+                    memoryCost,
                     params.parallelism,
                     passwordPtr.baseAddress,
                     password.count,

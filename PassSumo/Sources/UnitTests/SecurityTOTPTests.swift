@@ -58,6 +58,20 @@ final class SecurityBase32Tests: XCTestCase {
         }
     }
 
+    /// Uppercasing is a full Unicode case mapping, so it can lengthen the string: "\u{00DF}" (ß)
+    /// becomes "SS" and "\u{FB01}" (ﬁ) becomes "FI". Building a `Character` from that used to abort
+    /// a Debug build on what is only bad input (audit finding L4, issue #176). Neither expansion is
+    /// in the base32 alphabet, so the honest answer is the same as for any other stray character.
+    func testRejectsCharactersThatUppercaseToMoreThanOneCharacter() {
+        for input in ["MZXW6YTB\u{00DF}I", "MZXW6YTB\u{FB01}I"] {
+            XCTAssertThrowsError(try Base32.decode(input), "should reject \(input)") { error in
+                guard case .invalidCharacter = error as? Base32.DecodeError else {
+                    return XCTFail("expected .invalidCharacter for \(input), got \(error)")
+                }
+            }
+        }
+    }
+
     /// A single trailing character carries 5 bits — not enough to finish a byte — and a group cut
     /// mid-stream leaves non-zero padding bits. Both are corruption.
     func testRejectsTruncatedInput() {

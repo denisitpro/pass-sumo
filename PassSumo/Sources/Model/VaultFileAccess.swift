@@ -1,10 +1,83 @@
 import Foundation
 
+/// What a vault file looked like at one moment, cheaply enough to re-take on every save (issue
+/// #173). Modification date AND size, because either alone is too easy to fool: a sync that
+/// rewrites a database of the same length leaves the size identical, and a filesystem or a
+/// restore-from-backup can hand back the timestamp it was given.
+///
+/// Deliberately NOT a content hash. Hashing the file means reading all of it — on the save path,
+/// under a security scope, for a file that lives on a network volume or in iCloud — every time,
+/// and the question being asked ("is this still the byte-for-byte file I decoded?") does not need
+/// certainty in the safe direction. A missed change is the same clobber we had before; a false
+/// alarm costs the user one dialog.
+struct FileFingerprint: Equatable, Sendable {
+    var modificationDate: Date
+    var size: Int
+}
+
+/// The one rule deciding whether a save is about to overwrite somebody else's work (issue #173).
+///
+/// A free function rather than an `if` inside `VaultStore.performSave`, because both of its
+/// "don't block the save" branches are judgement calls that deserve to be asserted directly
+/// rather than inferred from a store's end state:
+///
+/// - **`expected == nil` — we never knew.** The first save of a database created in this session
+///   (nothing was on disk to fingerprint), or a store whose fingerprint could not be taken. There
+///   is no baseline to compare against, so there is nothing to claim.
+/// - **`current == nil` — the file is gone.** Deleted or moved out from under us. Writing it back
+///   destroys nothing: there is no other copy at this path to lose. Refusing here would strand a
+///   user whose database was moved to the Trash with the app open, and the write itself is what
+///   reports a volume that genuinely went away.
+enum ExternalChangeCheck {
+    static func isConflict(expected: FileFingerprint?, current: FileFingerprint?) -> Bool {
+        guard let expected, let current else { return false }
+        return current != expected
+    }
+}
+
+/// Whether a file is an iCloud Drive item macOS has not brought down yet, and therefore cannot be
+/// read as a database (issue #177).
+///
+/// A free function taking the two answers rather than a method taking a `URL`, because the whole
+/// point of the issue is that this must be assertable without a live iCloud account: the branch is
+/// otherwise reachable only on a real ubiquitous file, which no `make test` run can produce.
+/// `SandboxedVaultFileAccess.read` reads the two resource values and hands them here; the tests
+/// hand the same pairs in directly.
+enum UbiquitousDownloadCheck {
+    /// `nil` means "go ahead and read".
+    ///
+    /// Two of the guards are deliberately permissive. A file that is not ubiquitous is an ordinary
+    /// local file and nothing here applies to it. A ubiquitous file whose downloading status could
+    /// not be read is not evidence of anything — the read itself is a better answer than a guess,
+    /// and macOS will often fault the bytes in on open anyway.
+    ///
+    /// Only `.notDownloaded` blocks. `.downloaded` (a local copy exists, though a newer one is in
+    /// the cloud) and `.current` are both readable, and refusing on `.downloaded` would lock the
+    /// user out of a database that is sitting right there.
+    static func blockingError(
+        isUbiquitous: Bool,
+        downloadingStatus: URLUbiquitousItemDownloadingStatus?
+    ) -> VaultError? {
+        guard isUbiquitous, downloadingStatus == .notDownloaded else { return nil }
+        return .iCloudNotDownloaded
+    }
+}
+
 /// File I/O behind a protocol so `VaultStore` never touches security-scoped bookmarks or the
 /// filesystem directly (Dependency Inversion — `VaultStore`'s tests and SwiftUI previews get
 /// `InMemoryVaultFileAccess` below instead: no sandbox, no temp directories, no real timing).
 protocol VaultFileAccess: Sendable {
     func read(from url: URL) throws -> Data
+
+    /// What the file at `url` looks like right now, or `nil` when there is nothing to describe —
+    /// the file does not exist yet, or its metadata could not be read.
+    ///
+    /// **Non-throwing on purpose.** Both callers (`VaultStore`'s pre-write check and its
+    /// post-write refresh) want the same thing from a failure: carry on. A thrown error on the
+    /// check would turn "we could not stat the file" into a save that cannot happen, and on the
+    /// refresh it would turn a write that DID land into a reported failure. `nil` says "unknown",
+    /// and `ExternalChangeCheck` treats unknown as "do not block".
+    func fingerprint(of url: URL) -> FileFingerprint?
 
     /// Atomic write, preceded by an attempt to back the existing file up.
     ///
@@ -79,11 +152,61 @@ final class SandboxedVaultFileAccess: VaultFileAccess {
 
     func read(from url: URL) throws -> Data {
         try withSecurityScope(url) {
+            // iCloud Drive is the sanctioned sync path here (no own cloud), so a database that is
+            // only a placeholder is an ordinary state and not an exotic one — issue #177. Without
+            // this, `Data(contentsOf:)` fails as a generic I/O error, and the user is told nothing
+            // about why a file they can see in Finder will not open.
+            //
+            // `removeAllCachedResourceValues()` on a local copy first, and it is load-bearing:
+            // `NSURL` caches resource values, so the retry the message asks for would otherwise
+            // re-read the same "not downloaded" answer forever, however long the download took.
+            // Probed on this machine (Darwin 25.6): rewriting a file and re-reading through the
+            // same `URL` value returned the stale size; through a cache-cleared copy, the new one.
+            var probe = url
+            probe.removeAllCachedResourceValues()
+            let values = try? probe.resourceValues(forKeys: [
+                .isUbiquitousItemKey,
+                .ubiquitousItemDownloadingStatusKey,
+            ])
+            if let blocking = UbiquitousDownloadCheck.blockingError(
+                isUbiquitous: values?.isUbiquitousItem ?? false,
+                downloadingStatus: values?.ubiquitousItemDownloadingStatus
+            ) {
+                // Asked for before the error is raised, so "try again" is advice that can actually
+                // come true rather than an instruction to go and find the file in Finder. `try?`:
+                // a download that cannot even be started changes nothing about what to tell the
+                // user, and swallowing it here keeps one cause mapped to one message. This needs
+                // no new entitlement — it works on the file the existing bookmark already grants.
+                try? fileManager.startDownloadingUbiquitousItem(at: url)
+                throw blocking
+            }
             do {
                 return try Data(contentsOf: url)
             } catch {
                 throw VaultError.io("failed to read \(url.lastPathComponent): \(error.localizedDescription)")
             }
+        }
+    }
+
+    /// **`FileManager.attributesOfItem(atPath:)`, deliberately, and NOT `url.resourceValues(…)`**
+    /// — which is the idiom the rest of this module uses (`VaultBackupStore`), and which is wrong
+    /// here. `NSURL` caches resource values, the Swift `URL` overlay forwards to it, and
+    /// `VaultStore` asks the same `URL` value twice per save: once before the write, once after it.
+    /// Probed on this machine (Darwin 25.6, APFS): write 100 bytes, read, rewrite 250 bytes, read
+    /// again — `resourceValues` reported size 100 BOTH times, `attributesOfItem` reported 100 then
+    /// 250. With the cached reading, this whole feature would be inert after the first save, since
+    /// every later fingerprint would be the first one and could never differ.
+    ///
+    /// The second probe answers the other half: three back-to-back atomic writes produced three
+    /// distinct modification dates (sub-microsecond apart), so a same-size rewrite by another
+    /// client is still caught by the date.
+    func fingerprint(of url: URL) -> FileFingerprint? {
+        withSecurityScope(url) {
+            guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+                  let date = attributes[.modificationDate] as? Date,
+                  let size = (attributes[.size] as? NSNumber)?.intValue
+            else { return nil }
+            return FileFingerprint(modificationDate: date, size: size)
         }
     }
 
@@ -166,6 +289,13 @@ final class InMemoryVaultFileAccess: VaultFileAccess, @unchecked Sendable {
     private let lock = NSLock()
     private var files: [URL: Data] = [:]
     private var bookmarks: [Data: URL] = [:]
+    private var fingerprints: [URL: FileFingerprint] = [:]
+
+    /// Stands in for the filesystem's clock. A counter and not `Date()`, for the same reason
+    /// `VaultStoreTests.TestClock` is one: two writes in a test land microseconds apart, and a
+    /// fake that handed out equal timestamps would make `ExternalChangeCheck` lean entirely on
+    /// size — so a test rewriting a same-length vault would pass while the real thing regressed.
+    private var writeCount: TimeInterval = 0
 
     init() {}
 
@@ -177,10 +307,21 @@ final class InMemoryVaultFileAccess: VaultFileAccess, @unchecked Sendable {
         return data
     }
 
+    /// `nil` for a URL never written here, mirroring the real one's "there is no such file".
+    func fingerprint(of url: URL) -> FileFingerprint? {
+        lock.lock(); defer { lock.unlock() }
+        return fingerprints[url]
+    }
+
     @discardableResult
     func write(_ data: Data, to url: URL) throws -> VaultBackupOutcome {
         lock.lock(); defer { lock.unlock() }
         files[url] = data
+        writeCount += 1
+        fingerprints[url] = FileFingerprint(
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000 + writeCount),
+            size: data.count
+        )
         // The fake keeps no backups — nothing in `Sources/UI`/previews depends on that, and the
         // real retention behavior is tested against `SandboxedVaultFileAccess` instead.
         // `.notNeeded` rather than `.failed`: this is not a backup that went wrong, it is a
