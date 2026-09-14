@@ -30,6 +30,29 @@ private struct CustomFieldDraft: Identifiable {
     var isProtected: Bool
 }
 
+/// Why a custom field draft's NAME cannot reach `VaultStore.upsert` as typed (issue #174, audit
+/// finding M4). Both cases catch something the model has no room to represent, not something
+/// `upsert` could refuse after the fact:
+///
+/// - `.reserved` — the name collides with one of `VaultEntry.reservedCustomFieldNames`. Before
+///   this issue, `KDBXContentMerge` simply skipped writing such a field, so whatever the user
+///   typed vanished on save with nothing on screen ever saying so.
+/// - `.duplicate` — two drafts share a name. `VaultEntry.customFields` is a
+///   `[String: VaultFieldValue]`, so folding two same-named drafts into it is not an error the
+///   dictionary can raise; the second one just silently overwrites the first.
+///
+/// Not private, and `EntryEditView.customFieldNameError(for:)` is a static function rather than an
+/// instance method, so a unit test can drive the `.duplicate` case directly: a real
+/// `EntryEditView` is always seeded from an `entry: VaultEntry`, whose `customFields` is that same
+/// dictionary, so two same-named drafts can never be reproduced by constructing one and calling
+/// `save()` — the dictionary cannot hold the input the bug needs. `.reserved` IS reachable
+/// end-to-end (`entry.customFields` can hold one reserved-looking key at a time), so it is also
+/// covered by a `save()`-level test; `.duplicate` is covered only at this function's level.
+enum CustomFieldNameError: Equatable {
+    case reserved(String)
+    case duplicate(String)
+}
+
 /// Edit form for a `VaultEntry` — also used for a brand-new one, distinguished only by `isNew`
 /// (the title bar and Save's semantics differ slightly; the fields are identical either way).
 ///
@@ -102,6 +125,14 @@ struct EntryEditView: View {
     /// Set when `VaultStore.upsert` refuses the title (empty or a live duplicate, issue #148)
     /// and shown under the title field. Cleared on the next keystroke and on a successful save.
     @State private var titleError: String?
+    /// Set when `save()` refuses the TOTP field before `upsert` is ever called (issue #174) —
+    /// neither empty, nor a URI/secret `TOTPGenerator(parsing:)` accepts. Shown under the TOTP
+    /// field; cleared on the next keystroke there and on a successful save.
+    @State private var totpError: String?
+    /// Set when `save()` refuses a custom-field name before `upsert` is ever called (issue #174)
+    /// — reserved, or a duplicate among this entry's own drafts. Shown under Custom Fields;
+    /// cleared when any name changes, when a field is added or removed, and on a successful save.
+    @State private var customFieldError: String?
     /// Parent-owned so opening the sheet puts the caret in Title rather than on the icon-picker
     /// button that happens to be first in `headerRow` (issue #151). `EditLineField`'s own
     /// `@FocusState` cannot be driven from here — same split as `MasterPasswordField`.
@@ -345,6 +376,13 @@ struct EntryEditView: View {
                 identifier: "edit.totp",
                 monospaced: true
             )
+            .onChange(of: otpAuthURLText) { _, _ in totpError = nil }
+            if let totpError {
+                Text(totpError)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+                    .accessibilityIdentifier("edit.totpError")
+            }
         }
     }
 
@@ -354,6 +392,7 @@ struct EntryEditView: View {
             ForEach($customFields) { $field in
                 HStack(spacing: Spacing.s4) {
                     TextField("Name", text: notingActivity($field.name))
+                        .onChange(of: field.name) { _, _ in customFieldError = nil }
                     TextField("Value", text: notingActivity($field.value))
                     // A quiet glyph, not a `Toggle` — same reasoning as `FieldRow`'s eye: a
                     // switch or a filled button-style toggle in every row would read as
@@ -373,6 +412,7 @@ struct EntryEditView: View {
                         : "Store as a secret")
                     Button(role: .destructive) {
                         customFields.removeAll { $0.id == field.id }
+                        customFieldError = nil
                     } label: {
                         Image(systemName: "minus.circle")
                     }
@@ -385,9 +425,16 @@ struct EntryEditView: View {
                 // hold recovery codes and security answers far more often than trivia, so the
                 // safe default is to conceal. Unlike before, the user can now turn it off.
                 customFields.append(CustomFieldDraft(name: "", value: "", isProtected: true))
+                customFieldError = nil
             }
             .buttonStyle(.tokenSecondary)
             .accessibilityIdentifier("edit.addField")
+            if let customFieldError {
+                Text(customFieldError)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+                    .accessibilityIdentifier("edit.customFieldError")
+            }
         }
     }
 
@@ -665,14 +712,46 @@ struct EntryEditView: View {
     /// A refused title (issue #148) stays on this sheet: the inline error is set, `onSave` /
     /// `onDismiss` are not called, and the vault is untouched. The return is the store's own
     /// refusal so a unit test can assert without rendering.
+    ///
+    /// **Two more refusals (issue #174) are checked BEFORE the title, and BEFORE `fields` is even
+    /// built** — an invalid TOTP string or a bad custom-field name are draft-shape problems the
+    /// model has no room to represent at all, unlike a duplicate title, which `VaultStore.upsert`
+    /// can only detect by comparing against the rest of the vault. Both return `nil` (there was no
+    /// store-side `EntryUpsertError` — the save never reached the store), set their own inline
+    /// message, and leave `onSave`/`onDismiss` uncalled, same contract as the title refusal below.
     @discardableResult
     func save() -> EntryUpsertError? {
         guard !wasLockedWhileEditing else { return nil }
 
+        // Checked in the order the fields appear on the form — TOTP first, custom fields after —
+        // so the message on screen always names the FIRST thing to fix, the same "earliest problem
+        // wins" rule the title error already follows relative to everything below it.
+        if !otpAuthURLText.isEmpty {
+            do {
+                _ = try TOTPGenerator(parsing: otpAuthURLText)
+            } catch let failure as TOTPError {
+                totpError = Self.message(for: failure)
+                return nil
+            } catch {
+                // `TOTPGenerator(parsing:)`'s only throw site (`makeConfig`) only ever throws
+                // `TOTPError` — this branch exists purely because `catch` must be exhaustive, the
+                // same reasoning `generatePasswordNow()`'s own fallback branch below documents.
+                totpError = "That doesn't look like a valid one-time code secret."
+                return nil
+            }
+        }
+        totpError = nil
+
+        if let nameError = Self.customFieldNameError(for: customFields.map(\.name)) {
+            customFieldError = Self.message(for: nameError)
+            return nil
+        }
+        customFieldError = nil
+
         var fields: [String: VaultFieldValue] = [:]
-        // Last-write-wins on a duplicate name rather than crashing: two drafts can legitimately
-        // share a name for a moment while the user is mid-rename, and `Dictionary(uniqueKeysWithValues:)`
-        // would trap on that instead of just resolving to one value.
+        // No duplicate names can reach here: `customFieldNameError(for:)` above already refused
+        // any repeat, so this is a plain fold now rather than the "last-write-wins" it used to be
+        // before that check existed.
         for field in customFields where !field.name.isEmpty {
             fields[field.name] = VaultFieldValue(value: field.value, isProtected: field.isProtected)
         }
@@ -707,6 +786,59 @@ struct EntryEditView: View {
         case .duplicateTitle:
             return "Another entry already uses this title."
         }
+    }
+
+    /// One sentence per `TOTPError` case rather than a single generic line: unlike `TOTPView`'s
+    /// display-time "Invalid one-time code" (which has no room for a sentence and no user
+    /// action to suggest), this message is what tells the user what to actually retype, so it
+    /// names the specific thing the parser rejected instead of guessing at a cause it wasn't
+    /// given — the same rule `KDBXErrorMapping` follows for `.corrupted`.
+    private static func message(for error: TOTPError) -> String {
+        switch error {
+        case .emptySecret:
+            return "Enter an otpauth://totp/… URI or a bare base32 secret, or leave this blank."
+        case .invalidSecret:
+            return "That doesn't look like a valid base32 secret."
+        case .unsupportedAlgorithm(let name):
+            return "“\(name)” is not a supported algorithm (SHA1, SHA256, or SHA512)."
+        case .unsupportedDigits(let digits):
+            return "\(digits)-digit codes are not supported (use 6, 7, or 8)."
+        case .invalidPeriod:
+            return "The time period must be a positive number of seconds."
+        case .notATOTPURL:
+            return "Only otpauth://totp/… URIs are supported here, not hotp."
+        }
+    }
+
+    private static func message(for error: CustomFieldNameError) -> String {
+        switch error {
+        case .reserved(let name):
+            return "“\(name)” is a reserved field name and cannot be used for a custom field."
+        case .duplicate(let name):
+            return "More than one custom field is named “\(name)”. Field names must be unique."
+        }
+    }
+
+    /// Checked in the order the drafts appear on the form; the first offender wins, same rule
+    /// `message(for: EntryUpsertError)`'s caller already follows for the title. Blank names are
+    /// skipped for both checks — `save()` already drops an unnamed "Add Field" row before it
+    /// reaches `VaultStore.upsert` (see the loop building `fields` there), so two blank rows, or
+    /// one blank row that happens to coincide with a reserved word by virtue of being empty,
+    /// refuse nothing.
+    ///
+    /// Static, and not `private`, so a unit test can drive the `.duplicate` case directly — see
+    /// `CustomFieldNameError`'s own doc comment for why `save()` end-to-end cannot reproduce it.
+    static func customFieldNameError(for names: [String]) -> CustomFieldNameError? {
+        var seen = Set<String>()
+        for name in names where !name.isEmpty {
+            if VaultEntry.reservedCustomFieldNames.contains(name) {
+                return .reserved(name)
+            }
+            guard seen.insert(name).inserted else {
+                return .duplicate(name)
+            }
+        }
+        return nil
     }
 
     /// Fills `password` from the current recipe without opening the sheet (issue #129).

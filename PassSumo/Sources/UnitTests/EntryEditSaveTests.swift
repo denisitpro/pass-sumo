@@ -196,4 +196,127 @@ final class EntryEditSaveTests: XCTestCase {
         }
         XCTAssertEqual(vault.entries.count, 1)
     }
+
+    // MARK: - Issue #174: TOTP validated before it can reach `upsert`
+
+    /// Garbage TOTP text used to be written through verbatim (audit M3) — full validation existed
+    /// but ran only at display time (`TOTPView`), so this surfaced later as "Invalid one-time
+    /// code" instead of being caught here, at the point the user typed it.
+    ///
+    /// `@` is outside the base32 alphabet in every case, so `Base32.decode` fails on the very
+    /// first character regardless of what follows — this does not depend on the rest of the
+    /// string being "totp-shaped" at all.
+    func testSaveRefusesAnInvalidTOTPAndDoesNotDismiss() async throws {
+        let original = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: original)
+
+        var invalid = original
+        invalid.otpAuthURL = "@@not-a-valid-secret@@"
+
+        var saved = false
+        var dismissed = false
+        let editor = makeEditor(
+            for: invalid,
+            in: store,
+            onSave: { _ in saved = true },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertNil(editor.save(), "no store-side EntryUpsertError — the save never reached the store")
+        XCTAssertFalse(saved)
+        XCTAssertFalse(dismissed)
+        guard case .unlocked(let vault) = store.state else {
+            return XCTFail("store is not unlocked: \(store.state)")
+        }
+        XCTAssertNil(vault.entries.first?.otpAuthURL, "the store's copy must be untouched")
+    }
+
+    /// The normal case: a full KeePassXC-style `otpauth://totp/...` URI must still save. Verifies
+    /// the fix does not overcorrect into refusing what already worked.
+    func testSaveAcceptsAValidOTPAuthURI() async throws {
+        let original = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: original)
+
+        var updated = original
+        updated.otpAuthURL = "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+
+        var handedBack: VaultEntry?
+        var dismissed = false
+        let editor = makeEditor(
+            for: updated,
+            in: store,
+            onSave: { handedBack = $0 },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertNil(editor.save())
+        XCTAssertTrue(dismissed)
+        XCTAssertEqual(handedBack?.otpAuthURL, updated.otpAuthURL)
+    }
+
+    /// The older, wrapper-less convention (issue #174's acceptance criteria call this out by
+    /// name): a bare base32 secret with no `otpauth://` scheme must still save, exactly the
+    /// fallback path `TOTPGenerator(parsing:)` already documents.
+    func testSaveAcceptsABareBase32TOTPSecret() async throws {
+        let original = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: original)
+
+        var updated = original
+        updated.otpAuthURL = "JBSWY3DPEHPK3PXP"
+
+        var handedBack: VaultEntry?
+        let editor = makeEditor(for: updated, in: store, onSave: { handedBack = $0 })
+
+        XCTAssertNil(editor.save())
+        XCTAssertEqual(handedBack?.otpAuthURL, "JBSWY3DPEHPK3PXP")
+    }
+
+    // MARK: - Issue #174: custom-field names validated before they can reach `upsert`
+
+    /// A reserved name (audit M4) is refused rather than silently dropped. Reachable end-to-end
+    /// because `VaultEntry.customFields` is a dictionary, so a single reserved key fits in it —
+    /// unlike the duplicate case below, which cannot be reproduced this way (see
+    /// `CustomFieldNameError`'s own doc comment).
+    func testSaveRefusesAReservedCustomFieldNameAndDoesNotDismiss() async throws {
+        let original = entry(iconID: 3)
+        let store = try await makeUnlockedStore(containing: original)
+
+        var invalid = original
+        invalid.customFields = ["Password": .plain("shadow-password")]
+
+        var saved = false
+        var dismissed = false
+        let editor = makeEditor(
+            for: invalid,
+            in: store,
+            onSave: { _ in saved = true },
+            onDismiss: { dismissed = true }
+        )
+
+        XCTAssertNil(editor.save())
+        XCTAssertFalse(saved)
+        XCTAssertFalse(dismissed)
+        guard case .unlocked(let vault) = store.state else {
+            return XCTFail("store is not unlocked: \(store.state)")
+        }
+        XCTAssertEqual(vault.entries.first?.customFields, [:], "the store's copy must be untouched")
+    }
+
+    /// `EntryEditView.customFieldNameError(for:)` driven directly, not through `save()`: a real
+    /// `EntryEditView` is always seeded from `entry.customFields`, a `[String: VaultFieldValue]`
+    /// dictionary that cannot hold two drafts sharing a name, so the `.duplicate` case can only be
+    /// reproduced by calling the pure check itself. This is the seam `CustomFieldNameError`'s doc
+    /// comment describes, not a production back door — the function is the same one `save()` calls.
+    func testCustomFieldNameErrorFlagsAReservedNameAndADuplicate() {
+        XCTAssertEqual(EntryEditView.customFieldNameError(for: ["Notes"]), .reserved("Notes"))
+        XCTAssertEqual(EntryEditView.customFieldNameError(for: ["otp"]), .reserved("otp"))
+        XCTAssertEqual(
+            EntryEditView.customFieldNameError(for: ["Recovery Code", "Recovery Code"]),
+            .duplicate("Recovery Code")
+        )
+        XCTAssertNil(
+            EntryEditView.customFieldNameError(for: ["", "", "Recovery Code"]),
+            "blank names (an unnamed \"Add Field\" row) never collide with each other or with a reserved word"
+        )
+    }
 }

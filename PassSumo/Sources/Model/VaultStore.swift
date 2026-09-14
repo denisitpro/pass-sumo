@@ -461,10 +461,20 @@ final class VaultStore {
     /// Creates a folder under `parentID` (`nil` = the vault's top level) and returns it, or `nil`
     /// when nothing was created.
     ///
-    /// `nil` covers three refusals: nothing is unlocked, the name is blank, or `parentID` names a
-    /// group this vault does not have. A blank name is refused rather than defaulted to something
-    /// — a folder called "" is indistinguishable from a bug in every client that opens the file
-    /// afterwards, and what to say about it is the caller's decision, not this type's.
+    /// `nil` covers four refusals: nothing is unlocked, the name is blank, `parentID` names a
+    /// group this vault does not have, or `parentID` is the recycle bin or a descendant of it
+    /// (issue #174). A blank name is refused rather than defaulted to something — a folder called
+    /// "" is indistinguishable from a bug in every client that opens the file afterwards, and what
+    /// to say about it is the caller's decision, not this type's.
+    ///
+    /// The bin check lives HERE, not only in the UI that currently offers a "New Group…" context
+    /// menu on the bin's own descendants (`GroupSidebar`'s non-bin branch has no reason to know
+    /// it is rendering inside the bin's subtree) — a folder born inside the bin is a live item
+    /// wearing a deleted one's clothes, and refusing it at the one place every caller funnels
+    /// through is what makes a future call site safe by construction instead of by remembering to
+    /// re-check. Unlike `makeBlankEntry()`'s fallback-to-top-level, this is a plain no-op: a folder
+    /// has no "it appears where you are already looking" expectation strong enough to justify
+    /// silently relocating it somewhere the user didn't ask for.
     ///
     /// `iconID` is the built-in KDBX index the folder is created wearing. The default is
     /// `VaultGroup.defaultIconID` (48, the folder), so existing call sites that only have a name
@@ -481,6 +491,7 @@ final class VaultStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let parentID, !vault.groups.contains(where: { $0.id == parentID }) { return nil }
+        if let parentID, vault.recycleBinGroupIDs.contains(parentID) { return nil }
 
         let group = VaultGroup(id: UUID(), parentID: parentID, name: trimmed, iconID: iconID)
         vault.groups.append(group)

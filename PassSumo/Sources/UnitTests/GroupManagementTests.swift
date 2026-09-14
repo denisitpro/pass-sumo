@@ -293,6 +293,24 @@ final class GroupManagementTests: XCTestCase {
         XCTAssertFalse(store.isDirty)
     }
 
+    /// Issue #174 (audit M2): a brand-new folder must never be born already deleted. Checked
+    /// against both the bin group itself and a group already nested inside it — `acme` here,
+    /// which `moveToRecycleBin(groupID:)` reparents without touching `work`/`clients` above it.
+    func testStoreAddGroupRefusesARecycleBinParent() async throws {
+        var tree = makeTree()
+        XCTAssertTrue(tree.vault.moveToRecycleBin(groupID: tree.acme))
+        let binID = try XCTUnwrap(tree.vault.recycleBin.groupID)
+        let store = await makeStore(tree.vault)
+
+        XCTAssertNil(store.addGroup(named: "New Folder", parentID: binID), "the bin itself")
+        XCTAssertNil(store.addGroup(named: "New Folder", parentID: tree.acme), "and anything already inside it")
+        XCTAssertFalse(store.isDirty)
+        XCTAssertEqual(
+            try unlockedVault(of: store).groups.count, 4,
+            "work, clients, acme, and the bin — nothing new was created"
+        )
+    }
+
     func testStoreAddGroupIsANoOpAgainstALockedStore() async throws {
         let store = await makeStore(makeVault())
         store.lock()
