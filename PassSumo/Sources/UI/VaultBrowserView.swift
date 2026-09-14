@@ -52,7 +52,12 @@ struct VaultBrowserView: View {
     /// selected", which ⌘-clicking the selected row produces. It starts at `.allEntries` so the
     /// screen opens on the unfiltered list with that row visibly picked; see `GroupSelection` for
     /// why "All Entries" is a case of its own rather than the `nil` it used to be (issue #85).
-    @State private var selectedGroup: GroupSelection? = .allEntries
+    ///
+    /// Internal rather than private so a unit test can point the sidebar's current selection at a
+    /// recycle-bin group without rendering, then call `makeBlankEntry()` and check where the new
+    /// entry lands — same seam `notingActivity`/`generatePasswordNow` are internal for in
+    /// `EntryEditView` (issue #174).
+    @State var selectedGroup: GroupSelection? = .allEntries
     @State private var selectedEntryID: UUID?
     /// **Issue #34: nothing in this file may clear this as a side effect of opening an entry.**
     /// `openForEdit(_:)` only ever assigns `editingEntry`; selecting a row only ever assigns
@@ -419,7 +424,7 @@ struct VaultBrowserView: View {
                 .accessibilityIdentifier("browser.newEntry")
 
                 Button {
-                    handle(.create(parentID: newGroupParentID))
+                    handle(.create(parentID: newItemParentID))
                 } label: {
                     Label("New Group", systemImage: "folder.badge.plus")
                 }
@@ -716,9 +721,9 @@ struct VaultBrowserView: View {
         case .newEntry:
             startNewEntry()
         case .newGroup:
-            // Same call the toolbar's "New Group" button makes (see `newGroupParentID`'s own doc
+            // Same call the toolbar's "New Group" button makes (see `newItemParentID`'s own doc
             // comment for where the folder lands).
-            handle(.create(parentID: newGroupParentID))
+            handle(.create(parentID: newItemParentID))
         case .editEntry(let id):
             openForEdit(id)
         case .deleteEntry(let id):
@@ -859,11 +864,18 @@ struct VaultBrowserView: View {
         newGroupRequest = nil
     }
 
-    /// Where a new folder created from the toolbar goes: under whatever the sidebar is pointed at —
-    /// the same "it appears where you are already looking" rule `makeBlankEntry()` follows — except
-    /// inside the recycle bin, where a brand-new folder would be born deleted. That falls back to
-    /// the top level.
-    private var newGroupParentID: UUID? {
+    /// Where a new folder OR entry created from the toolbar/menu goes: under whatever the sidebar
+    /// is pointed at — the "it appears where you are already looking" rule — except inside the
+    /// recycle bin (the bin group itself or any group nested under it), where a brand-new item
+    /// would be born already deleted. That falls back to the top level.
+    ///
+    /// Shared by `handle(.create)`'s two call sites and by `makeBlankEntry()` (issue #174 — the
+    /// entry path used to skip this check entirely and hand `groupSelection.containingGroupID`
+    /// straight to the new entry, so opening the bin and hitting "New Entry" filed a live entry
+    /// as already-deleted with no warning). `VaultStore.addGroup` carries the same refusal one
+    /// layer down for any other caller, so a new group can never land in the bin even if a future
+    /// call site forgets to read this property first.
+    private var newItemParentID: UUID? {
         guard let id = groupSelection.containingGroupID,
               !vault.recycleBinGroupIDs.contains(id)
         else { return nil }
@@ -905,9 +917,11 @@ struct VaultBrowserView: View {
 
     /// A brand-new entry starts inside whatever group is currently selected — the natural
     /// "New Entry" expectation is that it lands where you're already looking, not always at the
-    /// vault's top level regardless of context. `id`/`created`/`modified` are placeholders:
-    /// `VaultStore.upsert` treats this as an insert (no existing entry with that `id`) and stamps
-    /// `modified` itself.
+    /// vault's top level regardless of context — UNLESS that group is the recycle bin or a
+    /// descendant of it, in which case it falls back to the top level via `newItemParentID`
+    /// (issue #174: a live entry must never be born already deleted). `id`/`created`/`modified`
+    /// are placeholders: `VaultStore.upsert` treats this as an insert (no existing entry with that
+    /// `id`) and stamps `modified` itself.
     ///
     /// The password is pre-filled from the saved generator recipe (issue #147). Editing an
     /// existing entry never comes through here — `openForEdit` copies the stored entry as-is —
@@ -923,7 +937,7 @@ struct VaultBrowserView: View {
         let password = (try? generator.generate(settings.generatorRecipe)) ?? ""
         return VaultEntry(
             id: UUID(),
-            groupID: groupSelection.containingGroupID,
+            groupID: newItemParentID,
             title: "",
             username: appEnvironment?.settings.defaultUsername ?? "",
             password: password,

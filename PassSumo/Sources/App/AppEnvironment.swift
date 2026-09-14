@@ -422,7 +422,23 @@ extension VaultError {
     var displayMessage: String {
         switch self {
         case .wrongCredentials:
-            return "Wrong password. Try again."
+            // **Not "Wrong password".** KDBX stores no flag saying a key file is required: the
+            // composite key is `SHA-256(SHA-256(password) || normalized(keyFile))` (see KDBXKit's
+            // `UnlockData.makeKeyData`), so a database that needs a key file and one opened with a
+            // typo fail at the same HMAC check with the same error. Asserting "wrong password" is
+            // therefore naming a cause this error does not carry — the rule `KDBXErrorMapping`'s
+            // doc comment states — and it is the one that sends a key-file user hunting for a
+            // password that was never wrong (issue #175, audit M6). KeePassXC hedges identically
+            // ("Wrong key or database file is corrupt") for the same reason.
+            //
+            // The cost is a second clause in front of someone who merely mistyped. Accepted
+            // deliberately: a key-file user given the wrong diagnosis has no way out at all, while
+            // a typist reads one extra clause and retypes. The sentence says "can't use yet"
+            // rather than offering a picker because the app genuinely cannot consume a key file —
+            // every `VaultCredentials(keyFile:)` call site passes `nil`, and the picker is
+            // deferred by #175 to its own feature.
+            return "That didn't unlock the database. The password may be wrong — or the database "
+                + "also needs a key file, which PassSumo can't use yet."
         case .notAKDBXFile:
             return "This isn't a KDBX database file."
         case .unsupportedVersion(let version):

@@ -28,11 +28,18 @@ final class KDBXCodecTests: XCTestCase {
 
     /// Fixtures reach the bundle through a folder reference (see `project.yml`), so the directory
     /// structure under `Fixtures/` is preserved and addressed with `subdirectory:`.
-    private func fixture(_ name: String, subdirectory: String = "Fixtures") throws -> Data {
+    ///
+    /// `pathExtension` is a parameter only because `kdbx3-keyfile` is two files — the database and
+    /// the `.key` that opens it; every other caller wants the default.
+    private func fixture(
+        _ name: String,
+        pathExtension: String = "kdbx",
+        subdirectory: String = "Fixtures"
+    ) throws -> Data {
         let bundle = Bundle(for: Self.self)
         let url = try XCTUnwrap(
-            bundle.url(forResource: name, withExtension: "kdbx", subdirectory: subdirectory),
-            "fixture \(subdirectory)/\(name).kdbx is not in the test bundle — check the "
+            bundle.url(forResource: name, withExtension: pathExtension, subdirectory: subdirectory),
+            "fixture \(subdirectory)/\(name).\(pathExtension) is not in the test bundle — check the "
                 + "PassSumoUnitTests `sources` folder reference in project.yml"
         )
         return try Data(contentsOf: url)
@@ -128,6 +135,79 @@ final class KDBXCodecTests: XCTestCase {
             let rendered = String(describing: vaultError)
             XCTAssertFalse(rendered.contains(wrongPassword))
             XCTAssertFalse(rendered.contains(Self.kpxcPassword))
+        }
+    }
+
+    // MARK: - Key files (issue #175, audit M6)
+
+    /// The evidence that the app CANNOT tell "needs a key file" from "wrong password", and the
+    /// reason the message stopped claiming the latter.
+    ///
+    /// `kdbx3-keyfile.kdbx` is `kdbx3-aeskdf-aes256.kdbx` with a key file added — same content,
+    /// same password. Opened with that correct password and no key file it fails, and it fails as
+    /// `.wrongCredentials`: KDBX carries no "a key file is required" flag, so the composite key
+    /// simply does not match and the HMAC check fails exactly as it would for a typo. There is no
+    /// other error for the codec to return and nothing in the file for it to look at — which is
+    /// why #175 is fixed at the wording and not by inventing a distinction.
+    ///
+    /// The second half is the actual regression guard: whatever the sentence becomes, it must not
+    /// tell this user their password is wrong, because it is not.
+    func testKeyFileDatabaseWithTheRightPasswordAloneIsNotCalledAWrongPassword() throws {
+        let data = try fixture("kdbx3-keyfile")
+
+        XCTAssertThrowsError(
+            try codec.decode(fileData: data, credentials: credentials(Self.kpxcPassword))
+        ) { error in
+            XCTAssertEqual(
+                error as? VaultError,
+                .wrongCredentials,
+                "a key-file database is indistinguishable from a wrong password at the codec"
+            )
+            let shown = VaultError.wrongCredentials.displayMessage
+            XCTAssertTrue(
+                shown.lowercased().contains("key file"),
+                "the only honest message names the key-file possibility; got: \(shown)"
+            )
+            XCTAssertFalse(
+                shown.lowercased().contains("wrong password"),
+                "the password used here is correct — asserting it is wrong is the #175 defect"
+            )
+        }
+    }
+
+    /// The other half of the same fixture: password + key file opens it. This is what makes the
+    /// test above a statement about the missing key file rather than about a broken fixture, and
+    /// it pins `VaultCredentials.keyFile` as working plumbing — the follow-up key-file picker has
+    /// only UI left to build, not a codec path.
+    ///
+    /// `kdbx3-keyfile.key` is 128 raw bytes from `keepassxc-cli`, so it takes KDBXKit's
+    /// "arbitrary binary file → SHA-256 of the contents" branch (`UnlockData.normalizeKeyFile`),
+    /// not the 32-byte, 64-hex or XML branches.
+    func testKeyFileDatabaseOpensWhenTheKeyFileIsSupplied() throws {
+        let decoded = try codec.decode(
+            fileData: try fixture("kdbx3-keyfile"),
+            credentials: credentials(
+                Self.kpxcPassword,
+                keyFile: try fixture("kdbx3-keyfile", pathExtension: "key")
+            )
+        )
+
+        // Same content as `kdbx3-aeskdf-aes256.kdbx` — the fixture was built by copying it and
+        // adding a key file (Fixtures/README.md), so the groups are the proof it really decrypted
+        // rather than merely failing differently.
+        XCTAssertEqual(Set(decoded.vault.groups.map(\.name)), ["Email", "Work", "Finance"])
+    }
+
+    /// The key file is not decoration: the right password with the WRONG key-file bytes must fail.
+    /// Without this, a codec that ignored `keyFile` entirely would still pass the test above.
+    func testKeyFileDatabaseRejectsTheWrongKeyFile() throws {
+        XCTAssertThrowsError(
+            try codec.decode(
+                fileData: try fixture("kdbx3-keyfile"),
+                credentials: credentials(Self.kpxcPassword, keyFile: Data(repeating: 0x5A, count: 128))
+            )
+        ) {
+            XCTAssertEqual($0 as? VaultError, .wrongCredentials)
         }
     }
 
