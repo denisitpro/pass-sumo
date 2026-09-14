@@ -25,8 +25,9 @@ enum BiometricUnlockRecovery {
     /// (issue #175, audit M5).
     ///
     /// **Only `.wrongCredentials`.** Every other `VaultError` is a statement about the FILE, not
-    /// about the secret: `.io` is an unreadable path (an evicted iCloud placeholder is the
-    /// everyday one), and `.corrupted`/`.notAKDBXFile`/`.unsupportedVersion`/`.unsupportedFeature`
+    /// about the secret: `.io` is an unreadable path (a volume that went away, a permissions
+    /// failure), `.iCloudNotDownloaded` is a file still in the cloud, and
+    /// `.corrupted`/`.notAKDBXFile`/`.unsupportedVersion`/`.unsupportedFeature`
     /// are the bytes. Discarding the enrollment on any of those would destroy a perfectly good
     /// stored password because a file was momentarily unreachable — and re-enrolling is not free,
     /// it WRITES a database ID into the user's file (see `enrollBiometrics`). `nil` — the open
